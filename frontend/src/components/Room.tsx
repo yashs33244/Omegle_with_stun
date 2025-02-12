@@ -1,33 +1,27 @@
-import { useEffect, useRef, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import React, { useEffect, useRef, useState } from "react";
 import { Socket, io } from "socket.io-client";
+import { RoomProps } from "../types";
 
 const URL = "http://localhost:3000";
 
-// Define STUN servers
-const iceServers = {
+const iceServers: RTCConfiguration = {
   iceServers: [
-    { urls: "stun:stun.l.google.com:19302" }, // Google STUN server
-    { urls: "stun:stun1.l.google.com:19302" }, // Google STUN server
-    { urls: "stun:stun2.l.google.com:19302" }, // Google STUN server
-    { urls: "stun:stun3.l.google.com:19302" }, // Google STUN server
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+    { urls: "stun:stun2.l.google.com:19302" },
+    { urls: "stun:stun3.l.google.com:19302" },
   ],
 };
 
-export const Room = ({
+export const Room: React.FC<RoomProps> = ({
   name,
   localAudioTrack,
   localVideoTrack,
-}: {
-  name: string;
-  localAudioTrack: MediaStreamTrack | null;
-  localVideoTrack: MediaStreamTrack | null;
 }) => {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const [lobby, setLobby] = useState(true);
-  const [socket, setSocket] = useState<null | Socket>(null);
-  const [sendingPc, setSendingPc] = useState<null | RTCPeerConnection>(null);
-  const [receivingPc, setReceivingPc] = useState<null | RTCPeerConnection>(
+  const [lobby, setLobby] = useState<boolean>(true);
+  const [socket, setSocket] = useState<Socket | null>(null);
+  const [sendingPc, setSendingPc] = useState<RTCPeerConnection | null>(null);
+  const [receivingPc, setReceivingPc] = useState<RTCPeerConnection | null>(
     null
   );
   const [remoteVideoTrack, setRemoteVideoTrack] =
@@ -36,17 +30,18 @@ export const Room = ({
     useState<MediaStreamTrack | null>(null);
   const [remoteMediaStream, setRemoteMediaStream] =
     useState<MediaStream | null>(null);
-  const remoteVideoRef = useRef<HTMLVideoElement>();
-  const localVideoRef = useRef<HTMLVideoElement>();
+  const remoteVideoRef = useRef<HTMLVideoElement>(null);
+  const localVideoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
-    const socket = io(URL);
-    socket.on("send-offer", async ({ roomId }) => {
+    const socket: Socket = io(URL);
+
+    socket.on("send-offer", async ({ roomId }: { roomId: string }) => {
       console.log("sending offer");
       setLobby(false);
-      const pc = new RTCPeerConnection(iceServers); // Use STUN servers here
-
+      const pc = new RTCPeerConnection(iceServers);
       setSendingPc(pc);
+
       if (localVideoTrack) {
         console.error("added track");
         console.log(localVideoTrack);
@@ -72,8 +67,7 @@ export const Room = ({
       pc.onnegotiationneeded = async () => {
         console.log("on negotiation needed, sending offer");
         const sdp = await pc.createOffer();
-        //@ts-ignore
-        pc.setLocalDescription(sdp);
+        await pc.setLocalDescription(sdp);
         socket.emit("offer", {
           sdp,
           roomId,
@@ -84,23 +78,17 @@ export const Room = ({
     socket.on("offer", async ({ roomId, sdp: remoteSdp }) => {
       console.log("received offer");
       setLobby(false);
-      const pc = new RTCPeerConnection(iceServers); // Use STUN servers here
-      pc.setRemoteDescription(remoteSdp);
+      const pc = new RTCPeerConnection(iceServers);
+      await pc.setRemoteDescription(remoteSdp);
       const sdp = await pc.createAnswer();
-      //@ts-ignore
-      pc.setLocalDescription(sdp);
+      await pc.setLocalDescription(sdp);
+
       const stream = new MediaStream();
       if (remoteVideoRef.current) {
         remoteVideoRef.current.srcObject = stream;
       }
-
       setRemoteMediaStream(stream);
-      // trickle ice
       setReceivingPc(pc);
-      window.pcr = pc;
-      pc.ontrack = (e) => {
-        alert("ontrack");
-      };
 
       pc.onicecandidate = async (e) => {
         if (!e.candidate) {
@@ -120,30 +108,38 @@ export const Room = ({
         roomId,
         sdp: sdp,
       });
+
       setTimeout(() => {
-        const track1 = pc.getTransceivers()[0].receiver.track;
-        const track2 = pc.getTransceivers()[1].receiver.track;
-        console.log(track1);
-        if (track1.kind === "video") {
-          setRemoteAudioTrack(track2);
-          setRemoteVideoTrack(track1);
-        } else {
-          setRemoteAudioTrack(track1);
-          setRemoteVideoTrack(track2);
+        const tracks = pc.getTransceivers();
+        if (tracks.length >= 2) {
+          const track1 = tracks[0].receiver.track;
+          const track2 = tracks[1].receiver.track;
+          console.log(track1);
+          if (track1.kind === "video") {
+            setRemoteAudioTrack(track2);
+            setRemoteVideoTrack(track1);
+          } else {
+            setRemoteAudioTrack(track1);
+            setRemoteVideoTrack(track2);
+          }
+          if (remoteVideoRef.current) {
+            const stream = remoteVideoRef.current.srcObject;
+            if (stream instanceof MediaStream) {
+              stream.addTrack(track1);
+              stream.addTrack(track2);
+            }
+            remoteVideoRef.current.play().catch(console.error);
+          }
         }
-        //@ts-ignore
-        remoteVideoRef.current.srcObject.addTrack(track1);
-        //@ts-ignore
-        remoteVideoRef.current.srcObject.addTrack(track2);
-        //@ts-ignore
-        remoteVideoRef.current.play();
       }, 5000);
     });
 
-    socket.on("answer", ({ roomId, sdp: remoteSdp }) => {
+    socket.on("answer", ({ sdp: remoteSdp }) => {
       setLobby(false);
       setSendingPc((pc) => {
-        pc?.setRemoteDescription(remoteSdp);
+        if (pc) {
+          pc.setRemoteDescription(remoteSdp).catch(console.error);
+        }
         return pc;
       });
       console.log("loop closed");
@@ -156,47 +152,68 @@ export const Room = ({
     socket.on("add-ice-candidate", ({ candidate, type }) => {
       console.log("add ice candidate from remote");
       console.log({ candidate, type });
-      if (type == "sender") {
+      if (type === "sender") {
         setReceivingPc((pc) => {
           if (!pc) {
             console.error("receiving pc not found");
           } else {
             console.error(pc.ontrack);
           }
-          pc?.addIceCandidate(candidate);
+          pc?.addIceCandidate(candidate).catch(console.error);
           return pc;
         });
       } else {
         setSendingPc((pc) => {
           if (!pc) {
             console.error("sending pc not found");
-          } else {
-            // console.error(pc.ontrack);
           }
-          pc?.addIceCandidate(candidate);
+          pc?.addIceCandidate(candidate).catch(console.error);
           return pc;
         });
       }
     });
 
     setSocket(socket);
-  }, [name]);
+
+    return () => {
+      socket.disconnect();
+      sendingPc?.close();
+      receivingPc?.close();
+    };
+  }, [localAudioTrack, localVideoTrack]);
 
   useEffect(() => {
-    if (localVideoRef.current) {
-      if (localVideoTrack) {
-        localVideoRef.current.srcObject = new MediaStream([localVideoTrack]);
-        localVideoRef.current.play();
-      }
+    if (localVideoRef.current && localVideoTrack) {
+      localVideoRef.current.srcObject = new MediaStream([localVideoTrack]);
+      localVideoRef.current.play().catch(console.error);
     }
-  }, [localVideoRef]);
+  }, [localVideoRef, localVideoTrack]);
 
   return (
-    <div>
-      Hi {name}
-      <video autoPlay width={400} height={400} ref={localVideoRef} />
-      {lobby ? "Waiting to connect you to someone" : null}
-      <video autoPlay width={400} height={400} ref={remoteVideoRef} />
+    <div className="flex flex-col items-center gap-4">
+      <h2 className="text-xl">Hi {name}</h2>
+      {lobby && <p>Waiting to connect you to someone...</p>}
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <h3>Local Video</h3>
+          <video
+            ref={localVideoRef}
+            autoPlay
+            playsInline
+            muted
+            className="w-full h-full object-cover"
+          />
+        </div>
+        <div>
+          <h3>Remote Video</h3>
+          <video
+            ref={remoteVideoRef}
+            autoPlay
+            playsInline
+            className="w-full h-full object-cover"
+          />
+        </div>
+      </div>
     </div>
   );
 };

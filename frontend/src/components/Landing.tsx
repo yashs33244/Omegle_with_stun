@@ -1,52 +1,46 @@
-import { useEffect, useRef, useState } from "react"
-import { Link } from "react-router-dom";
+import React, { useState } from "react";
+import { useMediaStream } from "../hooks/useMediaStream";
 import { Room } from "./Room";
 
-export const Landing = () => {
-    const [name, setName] = useState("");
-    const [localAudioTrack, setLocalAudioTrack] = useState<MediaStreamTrack | null>(null);
-    const [localVideoTrack, setlocalVideoTrack] = useState<MediaStreamTrack | null>(null);
-    const videoRef = useRef<HTMLVideoElement>(null);
+export const Landing: React.FC = () => {
+  const [name, setName] = useState<string>("");
+  const [joined, setJoined] = useState<boolean>(false);
+  const { localAudioTrack, localVideoTrack, videoRef } = useMediaStream();
 
-    const [joined, setJoined] = useState(false);
+  if (!joined) {
+    return (
+      <div className="flex flex-col items-center gap-4">
+        <input
+          type="text"
+          placeholder="Enter your name"
+          value={name}
+          onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+            setName(e.target.value)
+          }
+          className="px-4 py-2 border rounded"
+        />
+        <button
+          onClick={() => setJoined(true)}
+          className="px-4 py-2 bg-blue-500 text-white rounded"
+        >
+          Join
+        </button>
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className="w-full h-64 object-cover"
+        />
+      </div>
+    );
+  }
 
-    const getCam = async () => {
-        const stream = await window.navigator.mediaDevices.getUserMedia({
-            video: true,
-            audio: true
-        })
-        // MediaStream
-        const audioTrack = stream.getAudioTracks()[0]
-        const videoTrack = stream.getVideoTracks()[0]
-        setLocalAudioTrack(audioTrack);
-        setlocalVideoTrack(videoTrack);
-        if (!videoRef.current) {
-            return;
-        }
-        videoRef.current.srcObject = new MediaStream([videoTrack])
-        videoRef.current.play();
-        // MediaStream
-    }
-
-    useEffect(() => {
-        if (videoRef && videoRef.current) {
-            getCam()
-        }
-    }, [videoRef]);
-
-    if (!joined) {
-            
-    return <div>
-            <video autoPlay ref={videoRef}></video>
-            <input type="text" onChange={(e) => {
-                setName(e.target.value);
-            }}>
-            </input>
-            <button onClick={() => {
-                setJoined(true);
-            }}>Join</button>
-        </div>
-    }
-
-    return <Room name={name} localAudioTrack={localAudioTrack} localVideoTrack={localVideoTrack} />
-}
+  return (
+    <Room
+      name={name}
+      localAudioTrack={localAudioTrack}
+      localVideoTrack={localVideoTrack}
+    />
+  );
+};
