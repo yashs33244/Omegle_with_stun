@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   frontend:
-    
+    image: yashs3324/omegle:latest
     build:
       context: .
       dockerfile: Dockerfile
