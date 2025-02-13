@@ -1,26 +1,23 @@
-# Use the official Node.js image as a base
-FROM node:20
+FROM node:20-alpine
 
-# Set the working directory
+# Set working directory
 WORKDIR /app
 
-# Copy package.json and package-lock.json
+# Copy package files
 COPY package*.json ./
+COPY bun.lockb ./
 
 # Install dependencies
-RUN npm install
+RUN npm ci
 
-# Copy the rest of the application code
+# Copy project files
 COPY . .
 
-# Build the application
+# Build the app
 RUN npm run build
 
-# Install serve to serve the build folder
-RUN npm install -g serve
-
-# Expose the port the app runs on
+# Expose port
 EXPOSE 5173
 
-# Command to run the application
-CMD ["serve", "-s", "build"]
+# Start the app using vite preview
+CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "5173"]

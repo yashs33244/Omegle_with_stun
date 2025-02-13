@@ -78,16 +78,4 @@ npm cache clean --force
 
 The error `_.waitForRequestsIdle is not a function` often indicates a problem with the Tailwind CSS plugin for Vite. Making sure all packages are at their latest compatible versions should resolve this issue.
 
-server {
-    listen 80;
-    server_name iiitu.yashprojects.online;
-
-    location / {
-        proxy_pass http://localhost:3001;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection 'upgrade';
-        proxy_set_header Host $host;
-        proxy_cache_bypass $http_upgrade;
-    }
-	}
+do
