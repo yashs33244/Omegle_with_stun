@@ -5,7 +5,7 @@ import { Loader, Video } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { UserRound } from "lucide-react";
 
-const URL = "http://omegleapi.yashprojects.online/";
+const URL = "https://omegleapi.yashprojects.online/";
 
 const iceServers: RTCConfiguration = {
   iceServers: [
