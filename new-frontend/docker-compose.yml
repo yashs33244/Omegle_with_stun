@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  frontend:
+    image: yashs3324/omegle:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    environment:
+      - NODE_ENV=production
+    
