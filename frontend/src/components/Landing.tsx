@@ -16,7 +16,7 @@ export const Landing = () => {
           <div className="flex items-center justify-center mb-6 space-x-2">
             <PawPrint className="w-8 h-8 text-purple-500" />
             <h1 className="text-3xl font-bold bg-gradient-to-r from-purple-600 to-blue-500 bg-clip-text text-transparent">
-              PurrChat
+              Find Your Match
             </h1>
           </div>
 
