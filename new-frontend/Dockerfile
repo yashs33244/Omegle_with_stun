@@ -1,4 +1,4 @@
-FROM node:20-alpine
+npx -y shadcn-ui-mcp-serverFROM node:20-alpine
 
 # Set working directory
 WORKDIR /app
