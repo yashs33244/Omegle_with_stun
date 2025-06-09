@@ -34,7 +34,7 @@ io.on('connection', (socket: Socket) => {
   });
 });
 
-server.listen(3001, () => {
-    console.log('Server listening on port 3001');
-    console.log('Frontend should connect to: http://localhost:3001');
+server.listen(3004, () => {
+    console.log('Server listening on port 3004');
+    console.log('Frontend should connect to: http://localhost:3004');
 });

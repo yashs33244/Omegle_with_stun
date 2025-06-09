@@ -11,7 +11,8 @@ const ICE_SERVERS: RTCConfiguration = {
   ],
 };
 
-const SOCKET_URL = 'http://localhost:3000';
+const SOCKET_URL = 'https://chizzybe.yashprojects.online/';
+// const SOCKET_URL = 'http://localhost:3000';
 
 interface UseWebRTCProps {
   localAudioTrack: MediaStreamTrack | null;

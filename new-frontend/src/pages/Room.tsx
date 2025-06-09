@@ -28,8 +28,8 @@ import { Button } from "@/components/retroui/Button";
 import { Input } from "@/components/retroui/Input";
 import { getCountryByCode } from "../lib/data";
 
-// const URL = "https://omegleapi.yashprojects.online/";
-const URL = "http://localhost:3001";
+const URL = "https://chizzybe.yashprojects.online/";
+// const URL = "http://localhost:3004";
 
 const iceServers: RTCConfiguration = {
   iceServers: [
