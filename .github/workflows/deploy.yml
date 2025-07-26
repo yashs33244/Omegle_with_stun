@@ -88,7 +88,7 @@ jobs:
           cat > .env << EOF
           NODE_ENV=production
           BACKEND_PORT=3004
-          FRONTEND_PORT=3000
+          FRONTEND_PORT=5173
           REACT_APP_API_URL=${{ secrets.REACT_APP_API_URL }}
           EOF
           
