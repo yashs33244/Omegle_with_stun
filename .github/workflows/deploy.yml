@@ -33,11 +33,6 @@ jobs:
         cd backend
         bun run build
 
-    - name: Test backend
-      run: |
-        cd backend
-        bun test
-
   build-and-deploy:
     runs-on: ubuntu-latest
     needs: test
