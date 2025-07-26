@@ -11,7 +11,7 @@ services:
     environment:
       - NODE_ENV=${NODE_ENV:-production}
       - PORT=${BACKEND_PORT:-3004}
-      - CORS_ORIGIN=${FRONTEND_URL:-http://localhost:3000}
+      - CORS_ORIGIN=${FRONTEND_URL:-https://chizzy.itsyash.space}
     networks:
       - app-network
     restart: unless-stopped

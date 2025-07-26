@@ -36,7 +36,7 @@ import { ConnectionIndicator } from "../components/ConnectionIndicator";
 import { formatConnectionTime } from "../lib/utils";
 
 
-  const URL = process.env.REACT_APP_API_URL || "http://localhost:3004";
+  const URL = process.env.REACT_APP_API_URL || "https://chizzyapi.itsyash.space";
 
 
 const iceServers: RTCConfiguration = {
