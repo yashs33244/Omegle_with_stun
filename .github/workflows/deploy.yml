@@ -82,7 +82,28 @@ jobs:
         username: ${{ secrets.EC2_USER }}
         key: ${{ secrets.EC2_SSH_KEY }}
         script: |
-          cd ${{ secrets.PROJECT_PATH || 'Omegle_with_stun' }}/
+          # Set project path with fallback
+          PROJECT_PATH="${{ secrets.PROJECT_PATH }}"
+          if [ -z "$PROJECT_PATH" ]; then
+            PROJECT_PATH="Omegle_with_stun"
+          fi
+          
+          # Navigate to project directory
+          echo "Navigating to project directory: $PROJECT_PATH"
+          if [ ! -d "$PROJECT_PATH" ]; then
+            echo "Project directory $PROJECT_PATH does not exist!"
+            exit 1
+          fi
+          cd "$PROJECT_PATH"
+          
+          # Verify we're in the right directory
+          if [ ! -f "docker-compose.yml" ]; then
+            echo "docker-compose.yml not found in current directory: $(pwd)"
+            exit 1
+          fi
+          
+          echo "Current directory: $(pwd)"
+          echo "Files in directory: $(ls -la)"
           
           # Create .env file with secrets
           cat > .env << EOF
@@ -90,29 +111,78 @@ jobs:
           BACKEND_PORT=3004
           FRONTEND_PORT=5173
           REACT_APP_API_URL=${{ secrets.REACT_APP_API_URL }}
+          FRONTEND_URL=http://localhost:5173
           EOF
           
+          echo "Environment file created:"
+          cat .env
+          
           # Pull latest images
-          # docker compose pull
+          echo "Pulling latest images..."
+          docker compose pull
           
-          # Zero-downtime deployment using docker-rollout
-          # Install docker-rollout if not exists
-          if ! command -v docker-rollout &> /dev/null; then
-            echo "Installing docker-rollout..."
-            mkdir -p ~/.docker/cli-plugins
-            curl -L https://github.com/wowu/docker-rollout/releases/latest/download/docker-rollout-linux-amd64 -o ~/.docker/cli-plugins/docker-rollout
-            chmod +x ~/.docker/cli-plugins/docker-rollout
-          fi
+          # Stop existing containers gracefully
+          echo "Stopping existing containers..."
+          docker compose down --timeout 30
           
-          # Perform zero-downtime deployment
-          docker rollout -f docker-compose.yml backend frontend
+          # Start new containers
+          echo "Starting new containers..."
+          docker compose up -d
+          
+          # Wait for services to start
+          echo "Waiting for services to start..."
+          sleep 15
+          
+          # Check container status
+          echo "Container status:"
+          docker compose ps
+          
+          # Check container logs for any errors
+          echo "Recent backend logs:"
+          docker compose logs backend --tail=20
+          echo "Recent frontend logs:"
+          docker compose logs frontend --tail=20
           
           # Clean up old images
+          echo "Cleaning up old images..."
           docker system prune -f --volumes
           docker image prune -a -f
           
-          # Verify deployment
+          # Verify deployment with retries
           echo "Verifying deployment..."
-          sleep 10
-          curl -f http://localhost:3004/health || echo "Backend health check failed"
-          curl -f http://localhost:5173/health || echo "Frontend health check failed"
+          BACKEND_HEALTHY=false
+          FRONTEND_HEALTHY=false
+          
+          # Check backend health (retry up to 6 times with 10 second intervals)
+          for i in {1..6}; do
+            echo "Backend health check attempt $i..."
+            if curl -f http://localhost:3004/health; then
+              echo "Backend is healthy!"
+              BACKEND_HEALTHY=true
+              break
+            fi
+            sleep 10
+          done
+          
+          # Check frontend health (retry up to 6 times with 10 second intervals)
+          for i in {1..6}; do
+            echo "Frontend health check attempt $i..."
+            if curl -f http://localhost:5173; then
+              echo "Frontend is healthy!"
+              FRONTEND_HEALTHY=true
+              break
+            fi
+            sleep 10
+          done
+          
+          # Report final status
+          if [ "$BACKEND_HEALTHY" = true ] && [ "$FRONTEND_HEALTHY" = true ]; then
+            echo "✅ Deployment successful! Both services are healthy."
+          else
+            echo "❌ Deployment completed but some services may not be healthy:"
+            echo "Backend healthy: $BACKEND_HEALTHY"
+            echo "Frontend healthy: $FRONTEND_HEALTHY"
+            echo "Container status:"
+            docker compose ps
+            exit 1
+          fi
