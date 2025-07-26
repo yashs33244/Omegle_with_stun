@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { Socket, io } from "socket.io-client";
 import { RoomProps, ChatMessage } from "../types";
 import { useAudioLevelDetection } from "../hooks/useAudioLevelDetection";
+import { useIsMobile } from "../hooks/use-mobile";
 
 interface PartnerInfo {
   name: string;
@@ -22,14 +23,20 @@ import {
   Send,
   X,
   Check,
+  Settings,
+  Shield,
+  Signal,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/retroui/Card";
 import { Button } from "@/components/retroui/Button";
 import { Input } from "@/components/retroui/Input";
 import { getCountryByCode } from "../lib/data";
+import { ChatSettings } from "../components/ChatSettings";
+import { ConnectionIndicator } from "../components/ConnectionIndicator";
+import { formatConnectionTime } from "../lib/utils";
 
-const URL = "https://chizzybe.yashprojects.online/";
-// const URL = "http://localhost:3004";
+// const URL = "https://chizzybe.yashprojects.online/";
+  const URL = "http://localhost:3004";
 
 const iceServers: RTCConfiguration = {
   iceServers: [
@@ -82,6 +89,13 @@ export const Room: React.FC<RoomProps> = ({
   const [countdown, setCountdown] = useState<number>(5);
   const [showTimer, setShowTimer] = useState<boolean>(false);
   const [remoteVideoLoading, setRemoteVideoLoading] = useState<boolean>(false);
+  const [showSettings, setShowSettings] = useState<boolean>(false);
+  const [genderFilter, setGenderFilter] = useState<string>('all');
+  const [preferredLanguage, setPreferredLanguage] = useState<string>('en');
+  const [connectionQuality, setConnectionQuality] = useState<'EXCELLENT' | 'GOOD' | 'FAIR' | 'POOR'>('GOOD');
+  const [textOnlyMode, setTextOnlyMode] = useState<boolean>(false);
+  const [isTyping, setIsTyping] = useState<boolean>(false);
+  const [partnerIsTyping, setPartnerIsTyping] = useState<boolean>(false);
 
   const remoteVideoRef = useRef<HTMLVideoElement>(null);
   const localVideoRef = useRef<HTMLVideoElement>(null);
@@ -89,6 +103,9 @@ export const Room: React.FC<RoomProps> = ({
   const chatMessagesRef = useRef<HTMLDivElement>(null);
 
   const countryData = getCountryByCode(country);
+
+  // Add mobile detection
+  const isMobile = useIsMobile();
 
   // Audio level detection for speaking borders
   const { isSpeaking: localIsSpeaking } =
@@ -202,6 +219,29 @@ export const Room: React.FC<RoomProps> = ({
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter") {
       sendMessage();
+      setIsTyping(false);
+    }
+  };
+
+  const handleTyping = (value: string) => {
+    setCurrentMessage(value);
+    
+    if (value.trim() && !isTyping) {
+      setIsTyping(true);
+      socket?.emit("typing", { typing: true });
+    } else if (!value.trim() && isTyping) {
+      setIsTyping(false);
+      socket?.emit("typing", { typing: false });
+    }
+  };
+
+  const toggleTextOnlyMode = () => {
+    setTextOnlyMode(!textOnlyMode);
+    if (!textOnlyMode) {
+      // Hide video elements when switching to text-only
+      addSystemMessage("Switched to text-only mode. Video is now hidden.");
+    } else {
+      addSystemMessage("Switched to video mode. Video is now visible.");
     }
   };
 
@@ -223,6 +263,28 @@ export const Room: React.FC<RoomProps> = ({
     if (socket) {
       socket.emit("skip-user");
       console.log("Skipped user");
+    }
+  };
+
+  const handleReport = (reason: string, description?: string) => {
+    if (socket) {
+      socket.emit("report-user", { reason, description });
+      console.log("Reported user:", reason);
+      addSystemMessage("User reported. Thank you for helping keep our community safe.");
+    }
+  };
+
+  const handleGenderFilterChange = (gender: string) => {
+    setGenderFilter(gender);
+    if (socket) {
+      socket.emit("update-preferences", { genderFilter: gender, language: preferredLanguage });
+    }
+  };
+
+  const handleLanguageChange = (language: string) => {
+    setPreferredLanguage(language);
+    if (socket) {
+      socket.emit("update-preferences", { genderFilter, language });
     }
   };
 
@@ -483,6 +545,11 @@ export const Room: React.FC<RoomProps> = ({
       setRemoteUserInfo(userInfo);
     });
 
+    // Typing indicator handlers
+    socket.on("typing", ({ typing }) => {
+      setPartnerIsTyping(typing);
+    });
+
     // Handle user disconnection
     socket.on("user-disconnected", ({ message }) => {
       console.log("Other user disconnected:", message);
@@ -537,16 +604,16 @@ export const Room: React.FC<RoomProps> = ({
   }, [localVideoRef, localVideoTrack]);
 
   const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = seconds % 60;
-    return `${mins}:${secs.toString().padStart(2, "0")}`;
+    return formatConnectionTime(seconds);
   };
 
   return (
     <div className="min-h-screen bg-gray-900 flex flex-col">
       {/* Header with coins and connection info */}
-      <div className="flex items-center justify-between p-4 bg-black bg-opacity-80 backdrop-blur-sm border-b border-gray-700">
-        <div className="flex items-center gap-4">
+      <div className={`flex items-center justify-between ${
+        isMobile ? "p-2" : "p-4"
+      } bg-black bg-opacity-80 backdrop-blur-sm border-b border-gray-700`}>
+        <div className={`flex items-center ${isMobile ? "gap-2" : "gap-4"}`}>
           <button
             onClick={() => {
               if (socket) {
@@ -556,35 +623,56 @@ export const Room: React.FC<RoomProps> = ({
             }}
             className="text-yellow-400 hover:text-yellow-300 transition-colors"
           >
-            <h1 className="text-2xl font-bold">Chizzy</h1>
+            <h1 className={`${isMobile ? "text-lg" : "text-2xl"} font-bold`}>Chizzy</h1>
           </button>
-          <div className="coin-counter flex items-center gap-2 bg-yellow-500 bg-opacity-20 px-3 py-1 rounded-full border border-yellow-500">
-            <Coins className="w-5 h-5 text-yellow-400" />
-            <span className="font-bold text-yellow-400">{coins}</span>
+          <div className={`coin-counter flex items-center gap-2 bg-yellow-500 bg-opacity-20 ${
+            isMobile ? "px-2 py-1" : "px-3 py-1"
+          } rounded-full border border-yellow-500`}>
+            <Coins className={`${isMobile ? "w-4 h-4" : "w-5 h-5"} text-yellow-400`} />
+            <span className={`font-bold text-yellow-400 ${isMobile ? "text-sm" : ""}`}>{coins}</span>
           </div>
           {isFriend && (
-            <div className="flex items-center gap-2 bg-pink-500 bg-opacity-20 px-3 py-1 rounded-full border border-pink-500">
-              <Heart className="w-5 h-5 text-pink-400" />
-              <span className="font-bold text-pink-400">Friends</span>
+            <div className={`flex items-center gap-2 bg-pink-500 bg-opacity-20 ${
+              isMobile ? "px-2 py-1" : "px-3 py-1"
+            } rounded-full border border-pink-500`}>
+              <Heart className={`${isMobile ? "w-4 h-4" : "w-5 h-5"} text-pink-400`} />
+              <span className={`font-bold text-pink-400 ${isMobile ? "text-sm" : ""}`}>Friends</span>
             </div>
           )}
         </div>
 
-        <div className="flex items-center gap-4">
-          {matchState === "connected" && (
-            <div className="text-white text-sm">
-              Connected: {formatTime(connectionTime)}
+        <div className={`flex items-center ${isMobile ? "gap-1" : "gap-4"}`}>
+          {matchState === "connected" && !isMobile && (
+            <div className="flex items-center gap-2 text-white text-sm">
+              <ConnectionIndicator quality={connectionQuality} />
+              <span>Connected: {formatTime(connectionTime)}</span>
             </div>
           )}
+          {matchState === "connected" && isMobile && (
+            <ConnectionIndicator quality={connectionQuality} />
+          )}
+          <Button
+            onClick={() => setShowSettings(true)}
+            variant="outline"
+            size={isMobile ? "sm" : "sm"}
+            className={`flex items-center ${
+              isMobile ? "gap-1 px-2" : "gap-2"
+            } bg-gray-800 border-gray-600 text-white hover:bg-gray-700`}
+          >
+            <Settings className="w-4 h-4" />
+            {!isMobile && "Settings"}
+          </Button>
           {matchState === "connected" && (
             <Button
               onClick={handleSkipUser}
               variant="outline"
-              size="sm"
-              className="flex items-center gap-2 bg-orange-600 border-orange-500 text-white hover:bg-orange-500"
+              size={isMobile ? "sm" : "sm"}
+              className={`flex items-center ${
+                isMobile ? "gap-1 px-2" : "gap-2"
+              } bg-orange-600 border-orange-500 text-white hover:bg-orange-500`}
             >
               <SkipForward className="w-4 h-4" />
-              Skip
+              {!isMobile && "Skip"}
             </Button>
           )}
           <Button
@@ -595,11 +683,13 @@ export const Room: React.FC<RoomProps> = ({
               onBackToHome();
             }}
             variant="outline"
-            size="sm"
-            className="flex items-center gap-2 bg-gray-800 border-gray-600 text-white hover:bg-gray-700"
+            size={isMobile ? "sm" : "sm"}
+            className={`flex items-center ${
+              isMobile ? "gap-1 px-2" : "gap-2"
+            } bg-gray-800 border-gray-600 text-white hover:bg-gray-700`}
           >
             <Home className="w-4 h-4" />
-            Home
+            {!isMobile && "Home"}
           </Button>
         </div>
       </div>
@@ -608,13 +698,22 @@ export const Room: React.FC<RoomProps> = ({
       <div className="flex-1 flex">
         <div
           className={`flex-1 grid ${
-            showChat ? "lg:grid-cols-2" : "grid-cols-2"
-          } gap-4 p-4`}
+            textOnlyMode
+              ? "grid-cols-1 gap-4 p-4"
+              : isMobile 
+                ? showChat 
+                  ? "grid-cols-1 gap-2 p-2" 
+                  : "grid-cols-1 gap-2 p-2"
+                : showChat 
+                  ? "lg:grid-cols-2 gap-4 p-4" 
+                  : "grid-cols-2 gap-4 p-4"
+          }`}
         >
           {/* Local Video */}
-          <div
-            className={`retro-video-card ${localIsSpeaking ? "speaking" : ""}`}
-          >
+          {!textOnlyMode && (
+            <div
+              className={`retro-video-card ${localIsSpeaking ? "speaking" : ""}`}
+            >
             <video
               ref={localVideoRef}
               autoPlay
@@ -662,19 +761,54 @@ export const Room: React.FC<RoomProps> = ({
                 </Button>
               </div>
             )}
-          </div>
+            </div>
+          )}
 
-          {/* Remote Video */}
+          {/* Remote Video / Text Chat Area */}
           <div
-            className={`retro-video-card ${
-              remoteIsSpeaking ? "speaking" : ""
-            } ${
-              matchState === "match-found" && showTimer
-                ? "timer-border-beam"
-                : ""
+            className={`${
+              textOnlyMode 
+                ? "bg-gray-800 rounded-lg p-6 border border-gray-700 h-full flex flex-col"
+                : `retro-video-card ${
+                    remoteIsSpeaking ? "speaking" : ""
+                  } ${
+                    matchState === "match-found" && showTimer
+                      ? "timer-border-beam"
+                      : ""
+                  }`
             }`}
           >
-            {matchState === "connected" ? (
+            {textOnlyMode ? (
+              // Text-only mode interface
+              <div className="flex-1 flex flex-col justify-center items-center text-center space-y-4">
+                <MessageCircle className="w-16 h-16 text-yellow-400" />
+                <div className="text-white space-y-2">
+                  <h3 className="text-xl font-bold">Text Chat Mode</h3>
+                  <p className="text-gray-300">
+                    You're chatting with{" "}
+                    {partnerInfo?.name || remoteUserInfo?.name || "a stranger"}
+                  </p>
+                  {partnerIsTyping && (
+                    <div className="flex items-center justify-center gap-2 text-yellow-400">
+                      <div className="flex space-x-1">
+                        <div className="w-2 h-2 bg-yellow-400 rounded-full animate-bounce"></div>
+                        <div className="w-2 h-2 bg-yellow-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                        <div className="w-2 h-2 bg-yellow-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                      </div>
+                      <span className="text-sm">Partner is typing...</span>
+                    </div>
+                  )}
+                </div>
+                <Button
+                  onClick={toggleTextOnlyMode}
+                  variant="outline"
+                  className="bg-yellow-500 text-black hover:bg-yellow-400"
+                >
+                  <Video className="w-4 h-4 mr-2" />
+                  Switch to Video
+                </Button>
+              </div>
+            ) : matchState === "connected" ? (
               <>
                 <video
                   ref={remoteVideoRef}
@@ -829,7 +963,7 @@ export const Room: React.FC<RoomProps> = ({
               </div>
             )}
 
-            {matchState === "connected" && (
+            {matchState === "connected" && !textOnlyMode && (
               <div className="absolute bottom-4 left-4 bg-black bg-opacity-80 backdrop-blur-sm text-white px-4 py-2 rounded-full flex items-center gap-2">
                 <UserRound className="w-4 h-4" />
                 <span className="text-sm font-medium">
@@ -849,16 +983,61 @@ export const Room: React.FC<RoomProps> = ({
                   )}
               </div>
             )}
+
+            {/* Text-only mode toggle button */}
+            {matchState === "connected" && !textOnlyMode && (
+              <div className="absolute top-4 left-4">
+                <Button
+                  onClick={toggleTextOnlyMode}
+                  variant="outline"
+                  size="sm"
+                  className="bg-black bg-opacity-60 text-white border-white hover:bg-gray-800"
+                >
+                  <MessageCircle className="w-4 h-4 mr-2" />
+                  Text Only
+                </Button>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Chat Panel */}
-        {showChat && matchState === "connected" && (
-          <div className="w-80 bg-gray-800 border-l border-gray-700 flex flex-col">
+        {/* Chat Panel - Always show in text-only mode */}
+        {(showChat || textOnlyMode) && matchState === "connected" && (
+                      <div className={`${
+              textOnlyMode
+                ? "flex-1 bg-gray-800 border-l border-gray-700"
+                : isMobile 
+                  ? "fixed inset-0 z-50 bg-gray-800 border-gray-700" 
+                  : "w-80 bg-gray-800 border-l border-gray-700"
+            } flex flex-col`}>
             {/* Chat Header */}
-            <div className="p-4 border-b border-gray-700">
-              <h3 className="font-medium text-white">Chat</h3>
-            </div>
+                          <div className="p-4 border-b border-gray-700 flex items-center justify-between">
+                <h3 className="font-medium text-white">
+                  {textOnlyMode ? "Text Chat" : "Chat"}
+                </h3>
+                <div className="flex items-center gap-2">
+                  {partnerIsTyping && !textOnlyMode && (
+                    <span className="text-xs text-yellow-400 flex items-center gap-1">
+                      <div className="flex space-x-1">
+                        <div className="w-1 h-1 bg-yellow-400 rounded-full animate-bounce"></div>
+                        <div className="w-1 h-1 bg-yellow-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }}></div>
+                        <div className="w-1 h-1 bg-yellow-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                      </div>
+                      typing...
+                    </span>
+                  )}
+                  {(isMobile && !textOnlyMode) && (
+                    <Button
+                      onClick={() => setShowChat(false)}
+                      variant="outline"
+                      size="sm"
+                      className="bg-gray-700 border-gray-600 text-white hover:bg-gray-600"
+                    >
+                      <X className="w-4 h-4" />
+                    </Button>
+                  )}
+                </div>
+              </div>
 
             {/* Messages */}
             <div
@@ -900,7 +1079,7 @@ export const Room: React.FC<RoomProps> = ({
                   type="text"
                   placeholder="Type a message..."
                   value={currentMessage}
-                  onChange={(e) => setCurrentMessage(e.target.value)}
+                  onChange={(e) => handleTyping(e.target.value)}
                   onKeyPress={handleKeyPress}
                   className="flex-1 bg-gray-700 border-gray-600 text-white placeholder-gray-400 focus:border-yellow-500"
                 />
@@ -916,6 +1095,18 @@ export const Room: React.FC<RoomProps> = ({
             </div>
           </div>
         )}
+
+        {/* Settings Panel */}
+        <ChatSettings
+          isOpen={showSettings}
+          onClose={() => setShowSettings(false)}
+          onGenderFilterChange={handleGenderFilterChange}
+          onLanguageChange={handleLanguageChange}
+          onReport={handleReport}
+          currentGenderFilter={genderFilter}
+          currentLanguage={preferredLanguage}
+          canReport={matchState === "connected"}
+        />
       </div>
     </div>
   );
