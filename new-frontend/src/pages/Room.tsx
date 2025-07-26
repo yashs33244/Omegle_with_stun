@@ -35,8 +35,9 @@ import { ChatSettings } from "../components/ChatSettings";
 import { ConnectionIndicator } from "../components/ConnectionIndicator";
 import { formatConnectionTime } from "../lib/utils";
 
-// const URL = "https://chizzybe.yashprojects.online/";
-  const URL = "http://localhost:3004";
+
+  const URL = process.env.REACT_APP_API_URL || "http://localhost:3004";
+
 
 const iceServers: RTCConfiguration = {
   iceServers: [

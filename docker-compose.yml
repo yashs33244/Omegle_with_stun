@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  backend:
+    image: yashs3324/omegle-backend:latest
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "3004:3004"
+    environment:
+      - NODE_ENV=${NODE_ENV:-production}
+      - PORT=${BACKEND_PORT:-3004}
+      - CORS_ORIGIN=${FRONTEND_URL:-http://localhost:3000}
+    networks:
+      - app-network
+    restart: unless-stopped
+
+  frontend:
+    image: yashs3324/omegle-frontend:latest
+    build:
+      context: ./new-frontend
+      dockerfile: Dockerfile
+      args:
+        - REACT_APP_API_URL=${REACT_APP_API_URL:-https://chizzyapi.itsyash.space}
+        - REACT_APP_ENVIRONMENT=${NODE_ENV:-production}
+    ports:
+      - "5173:5173"
+    environment:
+      - REACT_APP_API_URL=${REACT_APP_API_URL:-https://chizzyapi.itsyash.space}
+      - REACT_APP_ENVIRONMENT=${NODE_ENV:-production}
+    depends_on:
+      backend:
+        condition: service_started
+    networks:
+      - app-network
+    restart: unless-stopped
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  app-data: 
