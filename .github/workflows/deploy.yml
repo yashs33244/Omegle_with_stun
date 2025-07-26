@@ -93,7 +93,7 @@ jobs:
           EOF
           
           # Pull latest images
-          docker compose pull
+          # docker compose pull
           
           # Zero-downtime deployment using docker-rollout
           # Install docker-rollout if not exists
