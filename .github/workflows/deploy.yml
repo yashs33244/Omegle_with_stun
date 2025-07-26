@@ -153,3 +153,5 @@ jobs:
           BACKEND_HEALTHY=false
           FRONTEND_HEALTHY=false
     
+
+          
