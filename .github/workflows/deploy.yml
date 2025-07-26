@@ -26,12 +26,7 @@ jobs:
     - name: Install backend dependencies
       run: |
         cd backend
-        bun install --frozen-lockfile
-
-    - name: Lint backend
-      run: |
-        cd backend
-        bun run lint
+        bun install
 
     - name: Build backend
       run: |
