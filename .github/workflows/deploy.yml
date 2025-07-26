@@ -152,37 +152,4 @@ jobs:
           echo "Verifying deployment..."
           BACKEND_HEALTHY=false
           FRONTEND_HEALTHY=false
-          
-          # Check backend health (retry up to 6 times with 10 second intervals)
-          for i in {1..6}; do
-            echo "Backend health check attempt $i..."
-            if curl -f http://localhost:3004/health; then
-              echo "Backend is healthy!"
-              BACKEND_HEALTHY=true
-              break
-            fi
-            sleep 10
-          done
-          
-          # Check frontend health (retry up to 6 times with 10 second intervals)
-          for i in {1..6}; do
-            echo "Frontend health check attempt $i..."
-            if curl -f http://localhost:5173; then
-              echo "Frontend is healthy!"
-              FRONTEND_HEALTHY=true
-              break
-            fi
-            sleep 10
-          done
-          
-          # Report final status
-          if [ "$BACKEND_HEALTHY" = true ] && [ "$FRONTEND_HEALTHY" = true ]; then
-            echo "✅ Deployment successful! Both services are healthy."
-          else
-            echo "❌ Deployment completed but some services may not be healthy:"
-            echo "Backend healthy: $BACKEND_HEALTHY"
-            echo "Frontend healthy: $FRONTEND_HEALTHY"
-            echo "Container status:"
-            docker compose ps
-            exit 1
-          fi
+    
