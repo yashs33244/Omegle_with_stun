@@ -253,6 +253,16 @@ describe("ending a match", () => {
     expect(await arrives(ca, "match:found", 300)).toBe(false);
   });
 
+  test("a skip naming a room the sender already left does not end the current room", async () => {
+    ts = await startServer();
+    const { ca, cb, roomId } = await activePair(ts);
+    ca.emit("call:skip", { roomId: "00000000-0000-4000-8000-000000000000" });
+    expect(await arrives(cb, "match:ended", 300)).toBe(false);
+    const endB = next(cb, "match:ended");
+    ca.emit("call:skip", { roomId });
+    expect(await endB).toEqual({ roomId, reason: "partner-skipped" });
+  });
+
   test("skipping the same device again after the block lapses doubles the block", async () => {
     ts = await startServer();
     const { ca, cb, a, b } = await activePair(ts);

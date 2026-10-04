@@ -313,10 +313,12 @@ export class MatchService {
   }
 
   /** call:skip ends the caller's pending or active room. */
-  async skip(socketId: string): Promise<void> {
+  /** With roomId, a skip for a room the sender already left is ignored (late or repeated clicks). */
+  async skip(socketId: string, roomId?: string): Promise<void> {
     await this.store.withLock(async () => {
       const session = await this.store.getSession(socketId);
       if (!session?.roomId) return;
+      if (roomId && roomId !== session.roomId) return;
       const found = await this.memberRoomLocked(socketId, session.roomId);
       if (!found) return;
       const { room, index } = found;
