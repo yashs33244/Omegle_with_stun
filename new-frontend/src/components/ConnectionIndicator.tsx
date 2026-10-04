@@ -16,7 +16,7 @@ export const ConnectionIndicator: React.FC<ConnectionIndicatorProps> = ({
   const qualityInfo = CONNECTION_QUALITY[quality];
 
   const renderBars = () => {
-    const bars = [];
+    const bars: React.ReactElement[] = [];
     for (let i = 1; i <= 4; i++) {
       bars.push(
         <div

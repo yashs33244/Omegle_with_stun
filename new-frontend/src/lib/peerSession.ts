@@ -122,7 +122,8 @@ export class PeerSession {
     return this.chain;
   }
 
-  private async handleDescription(desc: NonNullable<RtcSignal["description"]>): Promise<void> {
+  private async handleDescription(signal: NonNullable<RtcSignal["description"]>): Promise<void> {
+    const desc: RTCSessionDescriptionInit = { type: signal.type, sdp: signal.sdp };
     if (desc.type === "offer") {
       // Only the non-initiator answers; an offer to the initiator would be glare.
       if (this.opts.initiator || this.pc.signalingState !== "stable") return;

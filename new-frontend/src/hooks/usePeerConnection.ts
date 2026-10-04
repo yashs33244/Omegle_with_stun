@@ -24,6 +24,8 @@ export interface PeerConnectionOptions {
 
 export interface PeerConnectionState {
   remoteStream: MediaStream | null;
+  /** First audio track of the remote stream, for the speaking indicator. */
+  remoteAudioTrack: MediaStreamTrack | null;
   connectionState: RTCPeerConnectionState | "idle";
   quality: ConnectionQuality;
 }
@@ -36,6 +38,8 @@ export interface PeerConnectionState {
 export function usePeerConnection(opts: PeerConnectionOptions): PeerConnectionState {
   const { roomId, initiator, sendSignal, subscribeSignals } = opts;
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  // ontrack reuses one MediaStream per call; this re-renders when tracks are added to it.
+  const [remoteAudioTrack, setRemoteAudioTrack] = useState<MediaStreamTrack | null>(null);
   const [connectionState, setConnectionState] = useState<PeerConnectionState["connectionState"]>("idle");
   const [quality, setQuality] = useState<ConnectionQuality>("GOOD");
 
@@ -54,7 +58,10 @@ export function usePeerConnection(opts: PeerConnectionOptions): PeerConnectionSt
       iceServers: iceServersRef.current,
       localStream: localStreamRef.current,
       sendSignal,
-      onRemoteStream: (stream) => setRemoteStream(stream),
+      onRemoteStream: (stream) => {
+        setRemoteStream(stream);
+        setRemoteAudioTrack(stream.getAudioTracks()[0] ?? null);
+      },
       onConnectionStateChange: (state) => setConnectionState(state),
     });
     setConnectionState(session.pc.connectionState);
@@ -85,9 +92,10 @@ export function usePeerConnection(opts: PeerConnectionOptions): PeerConnectionSt
       unsubscribe();
       session.close();
       setRemoteStream(null);
+      setRemoteAudioTrack(null);
       setConnectionState("idle");
     };
   }, [roomId, initiator, sendSignal, subscribeSignals]);
 
-  return { remoteStream, connectionState, quality };
+  return { remoteStream, remoteAudioTrack, connectionState, quality };
 }
