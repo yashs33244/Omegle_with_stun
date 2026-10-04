@@ -30,6 +30,9 @@ WORKDIR /app
 COPY package.json ./
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+# Evidence store (EVIDENCE_DIR in docker-compose.yml). A new named volume
+# mounted here copies this ownership, so the node user can write to it.
+RUN mkdir -p /data/evidence && chown node:node /data/evidence && chmod 700 /data/evidence
 USER node
 EXPOSE 3004
 STOPSIGNAL SIGTERM
