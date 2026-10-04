@@ -7,7 +7,7 @@
  *   photo:{socketId}           profile photo data URL
  *   device:{deviceId}          socketId of the device's live session
  *   waiting                    zset socketId -> waitingSince
- *   room:{roomId}              JSON Room (TTL as a safety net)
+ *   room:{roomId}              JSON Room (pending rooms carry a safety-net TTL)
  *   rooms:pending              zset roomId -> expiresAt
  *   rooms:active               set of active room ids (for stats)
  *   coins                      hash deviceId -> balance
@@ -57,8 +57,11 @@ export const REDIS_CLIENT_OPTIONS: RedisOptions = {
   maxRetriesPerRequest: 2,
 };
 
-/** Safety net only: rooms are deleted when they end. */
-const ROOM_TTL_MS = 24 * 60 * 60_000;
+/**
+ * Safety net for pending rooms, which the sweeper always ends. Active rooms
+ * have no TTL: a call may run for days, and they are deleted when they end.
+ */
+const PENDING_ROOM_GRACE_MS = 60 * 60_000;
 /** How long the reporters index for a device lives after its last report. */
 const REPORTS_AGAINST_TTL_MS = 30 * 24 * 60 * 60_000;
 
@@ -101,7 +104,9 @@ export class RedisStore implements MatchStore {
 
   /** Connects and resolves once Redis answers; rejects (and gives up) if it cannot connect. */
   static async connect(url: string, opts: RedisStoreOptions = {}): Promise<RedisStore> {
-    const redis = new Redis(url, { ...REDIS_CLIENT_OPTIONS, enableAutoPipelining: true });
+    // commandTimeout: a hung connection fails the operation instead of
+    // stalling every queued withLock() caller forever.
+    const redis = new Redis(url, { ...REDIS_CLIENT_OPTIONS, enableAutoPipelining: true, commandTimeout: 5_000 });
     redis.on("error", (err) => opts.logger?.warn({ err }, "redis store connection error"));
     try {
       await redis.connect();
@@ -259,11 +264,20 @@ export class RedisStore implements MatchStore {
   }
 
   async putRoom(room: Room): Promise<void> {
-    const batch = this.redis.multi().set(this.key("room", room.id), JSON.stringify(room), "PX", ROOM_TTL_MS);
+    const roomKey = this.key("room", room.id);
+    const batch = this.redis.multi();
     if (room.state === "pending") {
-      batch.zadd(this.key("rooms", "pending"), room.expiresAt, room.id).srem(this.key("rooms", "active"), room.id);
+      const ttl = Math.max(0, room.expiresAt - Date.now()) + PENDING_ROOM_GRACE_MS;
+      batch
+        .set(roomKey, JSON.stringify(room), "PX", ttl)
+        .zadd(this.key("rooms", "pending"), room.expiresAt, room.id)
+        .srem(this.key("rooms", "active"), room.id);
     } else {
-      batch.zrem(this.key("rooms", "pending"), room.id).sadd(this.key("rooms", "active"), room.id);
+      // A plain SET also clears the TTL the pending room had.
+      batch
+        .set(roomKey, JSON.stringify(room))
+        .zrem(this.key("rooms", "pending"), room.id)
+        .sadd(this.key("rooms", "active"), room.id);
     }
     await run(batch);
   }

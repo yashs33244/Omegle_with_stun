@@ -4,7 +4,9 @@
  */
 import { afterEach, describe, expect, mock, test } from "bun:test";
 import { randomUUID } from "node:crypto";
+import Redis from "ioredis";
 import type { Logger } from "../../src/logger";
+import type { Room } from "../../src/store/MatchStore";
 import { RedisStore, type RedisStoreOptions } from "../../src/store/RedisStore";
 
 const url = process.env.REDIS_URL;
@@ -70,5 +72,31 @@ describe.skipIf(!url)("RedisStore lock across clients", () => {
     await expect(third.withLock(async () => "x")).rejects.toThrow("timed out waiting for the match lock");
     await otherRun;
     await expect(third.withLock(async () => "free")).resolves.toBe("free");
+  });
+});
+
+describe.skipIf(!url)("RedisStore keys", () => {
+  test("pending rooms carry a safety TTL, active rooms none", async () => {
+    const prefix = `test:${randomUUID()}:`;
+    const store = await RedisStore.connect(url!, { prefix });
+    const raw = new Redis(url!);
+    try {
+      const room: Room = {
+        id: randomUUID(),
+        state: "pending",
+        members: ["a", "b"],
+        devices: ["da", "db"],
+        accepted: [false, false],
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 5_000,
+      };
+      await store.putRoom(room);
+      expect(await raw.pttl(`${prefix}room:${room.id}`)).toBeGreaterThan(5_000);
+      await store.putRoom({ ...room, state: "active", activeSince: Date.now() });
+      expect(await raw.pttl(`${prefix}room:${room.id}`)).toBe(-1);
+    } finally {
+      raw.disconnect();
+      await store.close();
+    }
   });
 });
