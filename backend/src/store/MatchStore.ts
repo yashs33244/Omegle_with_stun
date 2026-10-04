@@ -110,7 +110,7 @@ export interface MatchStore {
   /** Adds or re-scores socketId. */
   addWaiting(socketId: string, since: number): Promise<void>;
   removeWaiting(socketId: string): Promise<void>;
-  /** Oldest first (by `since`, ties in insertion order). */
+  /** Oldest first by `since`. Ties come back in a stable but unspecified order. */
   listWaiting(): Promise<string[]>;
 
   /* Rooms */
@@ -148,6 +148,16 @@ export interface MatchStore {
   /** Ban expiry (epoch ms) if the device is banned now, else null. */
   getBan(deviceId: string): Promise<number | null>;
   setBan(deviceId: string, until: number): Promise<void>;
+
+  /* Instances (several servers sharing one store) */
+  /** Marks the instance alive for ttlMs and remembers it until forgetInstance(). */
+  heartbeat(instanceId: string, ttlMs: number): Promise<void>;
+  /** Instances that sent a heartbeat once but whose last one has lapsed. */
+  listDeadInstances(): Promise<string[]>;
+  /** Socket ids of the stored sessions owned by instanceId (any order). */
+  listInstanceSessions(instanceId: string): Promise<string[]>;
+  /** Drops the instance: its heartbeat, its entry in the instance list and its session index. */
+  forgetInstance(instanceId: string): Promise<void>;
 
   stats(): Promise<StoreStats>;
 

@@ -27,6 +27,8 @@ export class MemoryStore implements MatchStore {
   private readonly reports: ReportRecord[] = [];
   private readonly reportsAgainst = new Map<string, Map<string, number>>();
   private readonly bans = new Map<string, number>();
+  /** instanceId -> heartbeat expiry (epoch ms). */
+  private readonly instances = new Map<string, number>();
   private blockWrites = 0;
   private lockTail: Promise<void> = Promise.resolve();
   private closed = false;
@@ -196,6 +198,23 @@ export class MemoryStore implements MatchStore {
 
   async setBan(deviceId: string, until: number): Promise<void> {
     this.bans.set(deviceId, until);
+  }
+
+  async heartbeat(instanceId: string, ttlMs: number): Promise<void> {
+    this.instances.set(instanceId, Date.now() + ttlMs);
+  }
+
+  async listDeadInstances(): Promise<string[]> {
+    const now = Date.now();
+    return [...this.instances].filter(([, expiry]) => expiry <= now).map(([id]) => id);
+  }
+
+  async listInstanceSessions(instanceId: string): Promise<string[]> {
+    return [...this.sessions.values()].filter((s) => s.instanceId === instanceId).map((s) => s.socketId);
+  }
+
+  async forgetInstance(instanceId: string): Promise<void> {
+    this.instances.delete(instanceId);
   }
 
   async stats(): Promise<StoreStats> {

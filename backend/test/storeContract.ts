@@ -237,6 +237,37 @@ export function runStoreContract(
       await expect(store.withLock(async () => "after")).resolves.toBe("after");
     });
 
+    test("instances: heartbeats lapse, sessions are indexed per instance, forget drops it", async () => {
+      const store = await make();
+      const sorted = (ids: string[]) => [...ids].sort();
+      await store.heartbeat("i1", 60_000);
+      await store.heartbeat("i2", 100);
+      const a = session({ instanceId: "i1" });
+      const b = session({ instanceId: "i2" });
+      const c = session({ instanceId: "i2" });
+      for (const s of [a, b, c]) await store.putSession(s);
+      await store.putSession({ ...b, state: "waiting", waitingSince: 3 });
+      expect(await store.listDeadInstances()).toEqual([]);
+      expect(sorted(await store.listInstanceSessions("i2"))).toEqual(sorted([b.socketId, c.socketId]));
+      expect(await store.listInstanceSessions("unknown")).toEqual([]);
+
+      await sleep(200);
+      expect(await store.listDeadInstances()).toEqual(["i2"]);
+      await store.deleteSession(b.socketId);
+      expect(await store.listInstanceSessions("i2")).toEqual([c.socketId]);
+      await store.deleteSession(c.socketId);
+      await store.forgetInstance("i2");
+      expect(await store.listDeadInstances()).toEqual([]);
+      expect(await store.listInstanceSessions("i1")).toEqual([a.socketId]);
+
+      // A lapsed instance that beats again is alive again.
+      await store.heartbeat("i1", 50);
+      await sleep(120);
+      expect(await store.listDeadInstances()).toEqual(["i1"]);
+      await store.heartbeat("i1", 60_000);
+      expect(await store.listDeadInstances()).toEqual([]);
+    });
+
     test("stats count sessions, waiting and rooms by state", async () => {
       const store = await make();
       await store.putSession(session());
