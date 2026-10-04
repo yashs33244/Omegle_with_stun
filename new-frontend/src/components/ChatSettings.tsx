@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Settings, Shield, Globe, Users, Flag, X } from 'lucide-react';
 import { Button } from './retroui/Button';
 import { Card, CardContent } from './retroui/Card';
@@ -104,6 +104,18 @@ export const ChatSettings: React.FC<ChatSettingsProps> = ({
       setReportFeedback({ tone: 'error', text: describeAckError(res) });
     }
   };
+
+  // Escape closes the report dialog first, then the settings panel.
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      if (showReportDialog) setShowReportDialog(false);
+      else onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [isOpen, showReportDialog, onClose]);
 
   if (!isOpen) return null;
 

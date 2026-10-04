@@ -72,7 +72,17 @@ const Select = React.forwardRef<HTMLDivElement, SelectProps>(
     };
 
     return (
-      <div ref={containerRef} className={cn("relative", className)}>
+      <div
+        ref={containerRef}
+        className={cn("relative", className)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape" && isOpen) {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsOpen(false);
+          }
+        }}
+      >
         <button
           type="button"
           id={id}
