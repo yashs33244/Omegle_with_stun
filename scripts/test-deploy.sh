@@ -56,8 +56,131 @@ test_env_keys_passed_by_workflow() {
   fi
 }
 
+tmp_root=$(mktemp -d)
+trap 'rm -rf "$tmp_root"' EXIT
+
+# Stub docker and curl. `docker compose up` fails while .env selects
+# $STUB_BAD_TAG; `docker compose pull` fails when $STUB_PULL_FAIL=1. Every
+# docker call is logged to $STUB_LOG.
+stub_bin="$tmp_root/bin"
+mkdir -p "$stub_bin"
+cat >"$stub_bin/docker" <<'EOF'
+#!/bin/sh
+echo "docker $*" >>"$STUB_LOG"
+[ "$1" = compose ] || exit 0
+case "$2" in
+  pull) [ "${STUB_PULL_FAIL:-0}" != 1 ] ;;
+  up) ! grep -qx "IMAGE_TAG=${STUB_BAD_TAG:-none}" .env ;;
+  port) echo "0.0.0.0:18080" ;;
+  *) exit 0 ;;
+esac
+EOF
+printf '#!/bin/sh\nexit 0\n' >"$stub_bin/curl"
+chmod +x "$stub_bin/docker" "$stub_bin/curl"
+
+# Creates a host project directory as the deploy workflow leaves it: the
+# running files (compose "old"), and .incoming/ with the compose file "new" and
+# this repo's deploy/. Prints its path.
+new_project() {
+  local dir
+  dir=$(mktemp -d "$tmp_root/project.XXXXXX")
+  echo "old" >"$dir/docker-compose.yml"
+  mkdir -p "$dir/deploy/nginx" "$dir/.incoming"
+  echo "old" >"$dir/deploy/nginx/gateway.conf"
+  echo "new" >"$dir/.incoming/docker-compose.yml"
+  cp -Rp "$root/deploy" "$dir/.incoming/deploy"
+  printf '%s' "$dir"
+}
+
+# Runs deploy.sh the way the workflow does (DEPLOY_WRITE_ENV=1) in a clean
+# environment, with any extra VAR=value arguments. Output goes to $dir/out.
+run_deploy() {
+  local dir=$1
+  shift
+  (
+    cd "$dir" &&
+      env -i PATH="$stub_bin:$PATH" HOME="$HOME" STUB_LOG="$dir/docker.log" HEALTH_ATTEMPTS=1 HEALTH_INTERVAL=0 \
+        DEPLOY_WRITE_ENV=1 BACKEND_IMAGE=example/backend FRONTEND_IMAGE=example/frontend \
+        "$@" bash .incoming/deploy/deploy.sh new-sha >"$dir/out" 2>&1
+  )
+}
+
+# Fails the current test with the deploy output when a condition is false.
+expect() {
+  local name=$1 dir=$2
+  shift 2
+  if "$@"; then return 0; fi
+  fail "$name: expected: $*"
+  sed 's/^/     | /' "$dir/out" >&2
+  return 1
+}
+
+file_is() { [ -f "$1" ] && [ "$(cat "$1")" = "$2" ]; }
+
+test_deploy_success() {
+  local name="a verified deploy keeps the old files in .previous/" dir
+  dir=$(new_project)
+  echo "old-sha" >"$dir/.deployed-tag"
+  run_deploy "$dir" || { expect "$name" "$dir" false; return; }
+  expect "$name" "$dir" file_is "$dir/.deployed-tag" "new-sha" &&
+    expect "$name" "$dir" file_is "$dir/docker-compose.yml" "new" &&
+    expect "$name" "$dir" file_is "$dir/.previous/docker-compose.yml" "old" &&
+    expect "$name" "$dir" grep -qx "IMAGE_TAG=new-sha" "$dir/.env" &&
+    pass "$name"
+}
+
+test_failed_deploy_rolls_back() {
+  local name="a failed deploy restores the old files and tag" dir
+  dir=$(new_project)
+  echo "old-sha" >"$dir/.deployed-tag"
+  if run_deploy "$dir" STUB_BAD_TAG=new-sha; then expect "$name" "$dir" false; return; fi
+  expect "$name" "$dir" file_is "$dir/.deployed-tag" "old-sha" &&
+    expect "$name" "$dir" file_is "$dir/docker-compose.yml" "old" &&
+    expect "$name" "$dir" grep -qx "IMAGE_TAG=old-sha" "$dir/.env" &&
+    pass "$name"
+}
+
+# The first deploy has no verified tag, so it cannot roll back by itself, but
+# the files it replaces must survive in .previous/ for a manual recovery.
+test_first_deploy_keeps_old_files() {
+  local name="a failed first deploy keeps the old compose file in .previous/" dir
+  dir=$(new_project)
+  if run_deploy "$dir" STUB_BAD_TAG=new-sha; then expect "$name" "$dir" false; return; fi
+  expect "$name" "$dir" file_is "$dir/.previous/docker-compose.yml" "old" &&
+    expect "$name" "$dir" file_is "$dir/.previous/deploy/nginx/gateway.conf" "old" &&
+    expect "$name" "$dir" grep -q "no previous verified tag" "$dir/out" &&
+    pass "$name"
+}
+
+test_first_deploy_pull_failure_restores_files() {
+  local name="a first deploy whose pull fails puts the old compose file back" dir
+  dir=$(new_project)
+  if run_deploy "$dir" STUB_PULL_FAIL=1; then expect "$name" "$dir" false; return; fi
+  expect "$name" "$dir" file_is "$dir/docker-compose.yml" "old" &&
+    pass "$name"
+}
+
+# A second failed first deploy must not overwrite the saved pre-deploy files
+# with the unverified ones the first attempt installed.
+test_repeated_first_deploy_keeps_original_files() {
+  local name="a repeated failed first deploy keeps the original files in .previous/" dir
+  dir=$(new_project)
+  run_deploy "$dir" STUB_BAD_TAG=new-sha
+  mkdir -p "$dir/.incoming"
+  echo "newer" >"$dir/.incoming/docker-compose.yml"
+  cp -Rp "$root/deploy" "$dir/.incoming/deploy"
+  if run_deploy "$dir" STUB_BAD_TAG=new-sha; then expect "$name" "$dir" false; return; fi
+  expect "$name" "$dir" file_is "$dir/.previous/docker-compose.yml" "old" &&
+    pass "$name"
+}
+
 test_env_keys_cover_compose
 test_env_keys_passed_by_workflow
+test_deploy_success
+test_failed_deploy_rolls_back
+test_first_deploy_keeps_old_files
+test_first_deploy_pull_failure_restores_files
+test_repeated_first_deploy_keeps_original_files
 
 if [ "$failures" -ne 0 ]; then
   printf '%d deploy test(s) failed\n' "$failures" >&2

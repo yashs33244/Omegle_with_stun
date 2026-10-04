@@ -14,7 +14,8 @@
 #
 # State kept next to .env:
 #   .deployed-tag  last tag that passed verification (the rollback target)
-#   .previous/     compose file and deploy/ that belong to that tag
+#   .previous/     compose file and deploy/ that belong to that tag (before the
+#                  first verified deploy: the files that deploy replaced)
 #
 # Only dangling images are pruned. Volumes are never pruned (Redis data).
 
@@ -84,8 +85,15 @@ install_incoming() {
   mkdir -p .previous.tmp
   if [ -f docker-compose.yml ]; then cp -p docker-compose.yml .previous.tmp/; fi
   if [ -d deploy ]; then cp -Rp deploy .previous.tmp/; fi
-  # Only replace the saved copy when the running files belong to a verified tag.
-  if [ -f .deployed-tag ]; then rm -rf .previous && mv .previous.tmp .previous; else rm -rf .previous.tmp; fi
+  # Replace the saved copy only when the running files belong to a verified
+  # tag. The first deploy (no verified tag yet) still saves the files it
+  # replaces, once, so they can be put back by hand; a retry after a failed
+  # first deploy keeps that copy instead of saving the unverified files.
+  if [ -f .deployed-tag ] || [ ! -d .previous ]; then
+    rm -rf .previous && mv .previous.tmp .previous
+  else
+    rm -rf .previous.tmp
+  fi
   cp -p .incoming/docker-compose.yml docker-compose.yml
   rm -rf deploy
   cp -Rp .incoming/deploy deploy

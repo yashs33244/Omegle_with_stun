@@ -125,14 +125,31 @@ from https://www.cloudflare.com/ips/ and should be refreshed now and then;
 Migrating from the old two-container setup needs nothing special: the compose
 project name is still the directory name, so the first deploy replaces the old
 `backend` and `frontend` containers. There is no previous verified tag on the
-first run, so that deploy cannot roll back automatically.
+first run, so that deploy cannot roll back automatically. It does save the old
+`docker-compose.yml` in `.previous/`. If the first deploy fails, put the old
+setup back by hand (its `yashs3324/omegle-*:latest` images are still on the
+host, and the old compose file needs nothing from `.env`):
+
+```sh
+cd ~/Omegle_with_stun
+cp .previous/docker-compose.yml .      # or restore it from the old git checkout
+docker compose up -d --remove-orphans
+```
+
+Then fix the problem and deploy again; the next deploy installs the new files
+as usual. Never re-run a Deploy workflow run from before this setup (one
+without the "Deploy, verify and roll back on failure" step): its old script
+rewrites `.env` without the image names, runs `docker compose down` on the
+whole new stack including Redis, and prunes the sha-tagged images rollback
+needs.
 
 ## What a deploy does on the host
 
 `deploy/deploy.sh <sha>` runs in `PROJECT_PATH`:
 
 1. Moves the copied `.incoming/docker-compose.yml` and `.incoming/deploy/` into
-   place, keeping the current ones in `.previous/`.
+   place, keeping the current ones in `.previous/` (when they belong to the
+   verified tag, or on the first deploy when there is no saved copy yet).
 2. Writes `.env` (mode 600) from the secrets without printing it, and sets
    `IMAGE_TAG=<sha>`.
 3. `docker compose pull`. If any image is missing it restores the previous
@@ -163,7 +180,9 @@ cat .deployed-tag                       # currently verified tag
 bash deploy/deploy.sh <older-sha>       # keeps .env secrets, only changes IMAGE_TAG
 ```
 
-Or re-run an older successful Deploy workflow run in GitHub Actions.
+Or re-run an older successful Deploy workflow run in GitHub Actions, but only
+one made with this setup (it has the "Deploy, verify and roll back on failure"
+step). Never re-run a run from before it; see First-time setup.
 
 ## Health checks
 
