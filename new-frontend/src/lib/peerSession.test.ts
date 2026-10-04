@@ -260,7 +260,8 @@ describe("PeerSession connectivity and track swaps", () => {
   it("only the initiator sends the ICE restart offer", async () => {
     const offerer = withTracks({ initiator: true });
     await offerer.session.restartIce();
-    expect(offerer.fake.calls).toEqual(["createOffer", "setLocal:offer"]);
+    // The shared fake records the iceRestart option, so this also checks the offer asks for fresh ICE.
+    expect(offerer.fake.calls).toEqual(["createOffer:iceRestart", "setLocal:offer"]);
     expect(offerer.sent).toHaveLength(1);
 
     const answerer = withTracks({ initiator: false });

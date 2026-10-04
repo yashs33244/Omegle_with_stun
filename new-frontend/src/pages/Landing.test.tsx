@@ -245,7 +245,7 @@ describe("Landing photo capture", () => {
     const jpeg = "data:image/jpeg;base64,QUJD";
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
       drawImage: vi.fn(),
-    } as unknown as CanvasRenderingContext2D);
+    } as never); // getContext has WebGPU overloads once TFJS types are loaded
     vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(jpeg);
 
     const { user, dialog, video } = await openCapture();
@@ -292,14 +292,14 @@ describe("Landing photo capture", () => {
 
 describe("Landing home settings", () => {
   it("names the language and country pickers by label and current value", async () => {
-    render(<Landing />);
+    render(<Landing />, { wrapper: MemoryRouter });
     expect(await screen.findByRole("button", { name: "Language English" })).toHaveTextContent("English");
     expect(screen.getByRole("button", { name: /^Country .*India$/ })).toHaveTextContent("India");
   });
 
   it("closes an open dropdown when Start is clicked", async () => {
     const user = userEvent.setup();
-    render(<Landing />);
+    render(<Landing />, { wrapper: MemoryRouter });
     const start = await screen.findByTestId("start-chat");
     await waitFor(() => expect(start).toBeEnabled());
 
