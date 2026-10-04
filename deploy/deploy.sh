@@ -39,15 +39,27 @@ WAIT_TIMEOUT="${WAIT_TIMEOUT:-180}"
 log() { printf '[deploy] %s\n' "$*"; }
 die() { printf '[deploy] ERROR: %s\n' "$*" >&2; exit 1; }
 
-write_env() {
-  local tmp key val
-  : "${BACKEND_IMAGE:?BACKEND_IMAGE is required}"
-  : "${FRONTEND_IMAGE:?FRONTEND_IMAGE is required}"
+# Checks what write_env (or set_release) will need. Runs before any file is
+# replaced, so a bad secret cannot leave unverified files installed (the next
+# deploy would save them in .previous/ as the rollback copy).
+validate_env() {
+  local key
+  if [ "${DEPLOY_WRITE_ENV:-0}" != "1" ]; then
+    [ -f .env ] || die ".env is missing; run the deploy workflow once to create it"
+    return 0
+  fi
+  [ -n "${BACKEND_IMAGE:-}" ] || die "BACKEND_IMAGE is required"
+  [ -n "${FRONTEND_IMAGE:-}" ] || die "FRONTEND_IMAGE is required"
   for key in "${ENV_KEYS[@]}"; do
     case "${!key-}" in
       *"'"* | *$'\n'*) die "$key must not contain a single quote or newline" ;;
     esac
   done
+}
+
+# Writes .env from the environment. Call validate_env first.
+write_env() {
+  local tmp key val
   tmp=$(mktemp "$PWD/.env.XXXXXX")
   chmod 600 "$tmp"
   {
@@ -162,6 +174,7 @@ main() {
   if [ -f .deployed-tag ]; then prev_tag=$(cat .deployed-tag); fi
   log "deploying $new_tag (previous verified tag: ${prev_tag:-none})"
 
+  validate_env
   install_incoming
   if [ "${DEPLOY_WRITE_ENV:-0}" = "1" ]; then write_env; fi
   set_release "$new_tag"

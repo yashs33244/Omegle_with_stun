@@ -116,6 +116,7 @@ expect() {
 }
 
 file_is() { [ -f "$1" ] && [ "$(cat "$1")" = "$2" ]; }
+not_pulled() { ! grep -q "compose pull" "$1/docker.log"; }
 
 test_deploy_success() {
   local name="a verified deploy keeps the old files in .previous/" dir
@@ -174,8 +175,50 @@ test_repeated_first_deploy_keeps_original_files() {
     pass "$name"
 }
 
+# A deploy that stops on a bad secret must not leave the new, unverified
+# files installed: the next deploy would save them as the rollback copy.
+test_invalid_env_changes_nothing() {
+  local name="a secret with a single quote fails before any file is replaced" dir
+  dir=$(new_project)
+  echo "old-sha" >"$dir/.deployed-tag"
+  mkdir -p "$dir/.previous"
+  echo "older" >"$dir/.previous/docker-compose.yml"
+  echo "IMAGE_TAG=old-sha" >"$dir/.env"
+  if run_deploy "$dir" "REDIS_PASSWORD=it's"; then expect "$name" "$dir" false; return; fi
+  expect "$name" "$dir" grep -q "REDIS_PASSWORD must not contain" "$dir/out" &&
+    expect "$name" "$dir" file_is "$dir/docker-compose.yml" "old" &&
+    expect "$name" "$dir" file_is "$dir/deploy/nginx/gateway.conf" "old" &&
+    expect "$name" "$dir" file_is "$dir/.previous/docker-compose.yml" "older" &&
+    expect "$name" "$dir" file_is "$dir/.env" "IMAGE_TAG=old-sha" &&
+    expect "$name" "$dir" not_pulled "$dir" &&
+    pass "$name"
+}
+
+test_missing_image_fails_before_install() {
+  local name="a missing image name fails before any file is replaced" dir
+  dir=$(new_project)
+  echo "old-sha" >"$dir/.deployed-tag"
+  if run_deploy "$dir" BACKEND_IMAGE=; then expect "$name" "$dir" false; return; fi
+  expect "$name" "$dir" grep -q "BACKEND_IMAGE is required" "$dir/out" &&
+    expect "$name" "$dir" file_is "$dir/docker-compose.yml" "old" &&
+    pass "$name"
+}
+
+test_manual_run_without_env_fails_before_install() {
+  local name="a manual run without .env fails before any file is replaced" dir
+  dir=$(new_project)
+  echo "old-sha" >"$dir/.deployed-tag"
+  if run_deploy "$dir" DEPLOY_WRITE_ENV=0; then expect "$name" "$dir" false; return; fi
+  expect "$name" "$dir" grep -q ".env is missing" "$dir/out" &&
+    expect "$name" "$dir" file_is "$dir/docker-compose.yml" "old" &&
+    pass "$name"
+}
+
 test_env_keys_cover_compose
 test_env_keys_passed_by_workflow
+test_manual_run_without_env_fails_before_install
+test_invalid_env_changes_nothing
+test_missing_image_fails_before_install
 test_deploy_success
 test_failed_deploy_rolls_back
 test_first_deploy_keeps_old_files
