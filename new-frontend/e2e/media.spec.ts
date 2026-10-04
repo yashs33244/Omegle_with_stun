@@ -97,11 +97,19 @@ test("Esc means Next during a call, but not while typing in the chat", async ({ 
   await expectWaiting(di.page, "partner-skipped");
 });
 
-test("Hide my IP is offered in the call when the server allows it", async ({ openStranger }) => {
+test("Hide my IP is offered in the call when the server allows it, and says so when it cannot apply", async ({
+  openStranger,
+}) => {
   const eve = await openStranger("Eve");
   const fay = await openStranger("Fay");
   await allowPrivateMode(eve.context);
+  // Fay asks for Hide my IP on the start screen; this e2e backend has no TURN relay to use.
+  await fay.page.goto("/");
+  await fay.page.getByTestId("hide-ip-toggle").click();
+  await expect(fay.page.getByTestId("hide-ip-toggle")).toHaveAttribute("aria-checked", "true");
   await startInstantCall(eve, fay);
+  await expect(fay.page.getByTestId("private-unavailable")).toBeVisible();
+  await expect(fay.page.getByTestId("private-badge")).toHaveCount(0);
 
   const toggle = eve.page.getByTestId("hide-ip-toggle");
   await expect(toggle).toBeVisible();
