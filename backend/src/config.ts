@@ -28,7 +28,7 @@ const envSchema = z
     REDIS_URL: z.string().url().optional(),
     TRUST_PROXY: bool.default("false"),
     MAX_CONNECTIONS_PER_IP: int(1).default(10),
-    MATCH_ACCEPT_TIMEOUT_MS: int(1000).default(5000),
+    MATCH_ACCEPT_TIMEOUT_MS: int(1000).default(30000),
     STUN_URLS: z.string().default("stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302"),
     TURN_URLS: z.string().optional(),
     TURN_SECRET: z.string().min(1).optional(),

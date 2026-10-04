@@ -9,7 +9,7 @@ describe("loadConfig", () => {
     expect(c.corsOrigins).toBe("*");
     expect(c.trustProxy).toBe(false);
     expect(c.maxConnectionsPerIp).toBe(10);
-    expect(c.matchAcceptTimeoutMs).toBe(5000);
+    expect(c.matchAcceptTimeoutMs).toBe(30000);
     expect(c.stunUrls).toEqual(["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]);
     expect(c.turnUrls).toEqual([]);
     expect(c.shutdownGraceMs).toBe(10000);
