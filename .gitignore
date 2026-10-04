@@ -1,0 +1,24 @@
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+
+# Secrets: never commit real env files, only the examples
+.env
+.env.*
+!.env.example
+
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Test artifacts
+playwright-report/
+test-results/
+blob-report/
+
+# Local planning notes
+.planning/
