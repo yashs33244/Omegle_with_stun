@@ -8,6 +8,7 @@ import type { PeerConnectionState } from "@/hooks/usePeerConnection";
 let signalingState: SignalingState;
 let peerState: PeerConnectionState;
 const skip = vi.fn();
+const reportConnected = vi.fn();
 
 vi.mock("@/hooks/useSignaling", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/hooks/useSignaling")>();
@@ -23,6 +24,7 @@ vi.mock("@/hooks/useSignaling", async (importOriginal) => {
       report: vi.fn(),
       updatePreferences: vi.fn(),
       sendSignal: vi.fn(),
+      reportConnected,
       subscribeSignals: vi.fn(() => () => {}),
       retry: vi.fn(),
     }),
@@ -44,7 +46,6 @@ function inCall(overrides: Partial<SignalingState> = {}): SignalingState {
     status: "in-call",
     roomId: ROOM,
     initiator: true,
-    callStartedAt: Date.now(),
     coins: 100,
     partner: { name: "Bo", country: "IN", language: "en", topics: ["music"] },
     ...overrides,
@@ -87,7 +88,13 @@ const micToggle = () => screen.getByTestId("mic-toggle");
 describe("Room text-only mode", () => {
   beforeEach(() => {
     signalingState = inCall();
-    peerState = { remoteStream: null, remoteAudioTrack: null, connectionState: "connected", quality: "GOOD" };
+    peerState = {
+      remoteStream: null,
+      remoteAudioTrack: null,
+      connectionState: "connected",
+      connectedAt: Date.now(),
+      quality: "GOOD",
+    };
   });
   afterEach(() => {
     vi.clearAllMocks();
@@ -142,7 +149,13 @@ describe("Room when the call connection fails", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     signalingState = inCall();
-    peerState = { remoteStream: null, remoteAudioTrack: null, connectionState: "failed", quality: "DISCONNECTED" };
+    peerState = {
+      remoteStream: null,
+      remoteAudioTrack: null,
+      connectionState: "failed",
+      connectedAt: null,
+      quality: "DISCONNECTED",
+    };
   });
   afterEach(() => {
     vi.useRealTimers();
@@ -184,5 +197,36 @@ describe("Room when the call connection fails", () => {
     rerender(<Harness micChanges={micChanges} cameraChanges={cameraChanges} />);
     act(() => vi.advanceTimersByTime(20_000));
     expect(skip).not.toHaveBeenCalled();
+  });
+});
+
+describe("Room call timer and connection report", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    signalingState = inCall();
+    peerState = {
+      remoteStream: null,
+      remoteAudioTrack: null,
+      connectionState: "connecting",
+      connectedAt: null,
+      quality: "GOOD",
+    };
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it("starts the timer and tells the server only once the media connects", () => {
+    const { micChanges, cameraChanges, rerender } = renderRoom();
+    act(() => vi.advanceTimersByTime(30_000));
+    expect(screen.getByText("Connected: 0:00")).toBeInTheDocument();
+    expect(reportConnected).not.toHaveBeenCalled();
+
+    peerState = { ...peerState, connectionState: "connected", connectedAt: Date.now() };
+    rerender(<Harness micChanges={micChanges} cameraChanges={cameraChanges} />);
+    expect(reportConnected).toHaveBeenCalledTimes(1);
+    act(() => vi.advanceTimersByTime(65_000));
+    expect(screen.getByText("Connected: 1:05")).toBeInTheDocument();
   });
 });

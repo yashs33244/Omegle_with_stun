@@ -191,6 +191,13 @@ export const Room: React.FC<RoomProps> = ({
     void signaling.sendChat(text);
   };
 
+  // The call (timer, and coins on the server) starts when the media connects, not at call:start.
+  const callConnectedAt = inCall ? peer.connectedAt : null;
+  const { reportConnected } = signaling;
+  useEffect(() => {
+    if (callConnectedAt !== null) reportConnected();
+  }, [callConnectedAt, reportConnected]);
+
   const connectionFailed = inCall && peer.connectionState === "failed";
   // Text chat still works without media, so a user in text-only mode is never skipped for it.
   const autoSkip = connectionFailed && !textOnlyMode;
@@ -216,7 +223,7 @@ export const Room: React.FC<RoomProps> = ({
         coinBump={state.coinBump}
         isFriend={state.isFriend}
         inCall={inCall}
-        callStartedAt={state.callStartedAt}
+        callStartedAt={callConnectedAt}
         quality={connectionFailed ? "DISCONNECTED" : peer.quality}
         reconnecting={state.reconnecting}
         onHome={onBackToHome}

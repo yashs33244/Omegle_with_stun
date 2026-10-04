@@ -27,6 +27,8 @@ export interface PeerConnectionState {
   /** First audio track of the remote stream, for the speaking indicator. */
   remoteAudioTrack: MediaStreamTrack | null;
   connectionState: RTCPeerConnectionState | "idle";
+  /** Local time the connection first reached "connected" in this call; null until then. */
+  connectedAt: number | null;
   quality: ConnectionQuality;
 }
 
@@ -41,6 +43,7 @@ export function usePeerConnection(opts: PeerConnectionOptions): PeerConnectionSt
   // ontrack reuses one MediaStream per call; this re-renders when tracks are added to it.
   const [remoteAudioTrack, setRemoteAudioTrack] = useState<MediaStreamTrack | null>(null);
   const [connectionState, setConnectionState] = useState<PeerConnectionState["connectionState"]>("idle");
+  const [connectedAt, setConnectedAt] = useState<number | null>(null);
   const [quality, setQuality] = useState<ConnectionQuality>("GOOD");
 
   // Read when the call starts; changing them mid-call does not rebuild the connection.
@@ -62,7 +65,10 @@ export function usePeerConnection(opts: PeerConnectionOptions): PeerConnectionSt
         setRemoteStream(stream);
         setRemoteAudioTrack(stream.getAudioTracks()[0] ?? null);
       },
-      onConnectionStateChange: (state) => setConnectionState(state),
+      onConnectionStateChange: (state) => {
+        setConnectionState(state);
+        if (state === "connected") setConnectedAt((at) => at ?? Date.now());
+      },
     });
     setConnectionState(session.pc.connectionState);
     setQuality("GOOD");
@@ -94,8 +100,9 @@ export function usePeerConnection(opts: PeerConnectionOptions): PeerConnectionSt
       setRemoteStream(null);
       setRemoteAudioTrack(null);
       setConnectionState("idle");
+      setConnectedAt(null);
     };
   }, [roomId, initiator, sendSignal, subscribeSignals]);
 
-  return { remoteStream, remoteAudioTrack, connectionState, quality };
+  return { remoteStream, remoteAudioTrack, connectionState, connectedAt, quality };
 }

@@ -56,6 +56,10 @@ export interface Room {
   expiresAt: number;
   /** Set when both accepted. */
   activeSince?: number;
+  /** Which members reported their peer connection connected (call:connected). */
+  connected?: [boolean, boolean];
+  /** Set when both members reported connected; coins and friends count from here. */
+  connectedSince?: number;
 }
 
 /** Block between two devices. Kept past `until` so repeated skips escalate. */

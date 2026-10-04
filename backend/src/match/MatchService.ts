@@ -65,7 +65,7 @@ interface LocalSocket {
   orphaned?: boolean;
   rewards?: {
     roomId: string;
-    activeSince: number;
+    connectedSince: number;
     partnerDevice: string;
     intervalsAwarded: number;
     friended: boolean;
@@ -291,6 +291,24 @@ export class MatchService {
     });
   }
 
+  /**
+   * call:connected. Rewards start once both members say their peer
+   * connection is up, so a call whose media never connects earns nothing.
+   */
+  async connected(socketId: string, roomId: string): Promise<void> {
+    await this.store.withLock(async () => {
+      const found = await this.memberRoomLocked(socketId, roomId);
+      if (!found || found.room.state !== "active") return;
+      const { room, index } = found;
+      const connected = room.connected ?? [false, false];
+      if (connected[index]) return;
+      connected[index] = true;
+      room.connected = connected;
+      if (connected[0] && connected[1]) room.connectedSince = this.now();
+      await this.store.putRoom(room);
+    });
+  }
+
   /** call:skip ends the caller's pending or active room. */
   async skip(socketId: string): Promise<void> {
     await this.store.withLock(async () => {
@@ -494,19 +512,20 @@ export class MatchService {
       }
       if (entry.rewards?.roomId !== session.roomId) {
         const room = await this.store.getRoom(session.roomId);
-        if (!room || room.state !== "active" || room.activeSince === undefined) continue;
+        // Nothing is earned until both peer connections are up (call:connected).
+        if (!room || room.state !== "active" || room.connectedSince === undefined) continue;
         const index = room.members.indexOf(socketId);
         if (index < 0) continue;
         entry.rewards = {
           roomId: room.id,
-          activeSince: room.activeSince,
+          connectedSince: room.connectedSince,
           partnerDevice: room.devices[1 - index]!,
           intervalsAwarded: 0,
           friended: false,
         };
       }
       const r = entry.rewards;
-      const elapsed = now - r.activeSince;
+      const elapsed = now - r.connectedSince;
       const due = Math.floor(elapsed / this.config.coinIntervalMs);
       if (due > r.intervalsAwarded) {
         const delta = (due - r.intervalsAwarded) * this.config.coinsPerInterval;
