@@ -116,7 +116,11 @@ export const WaitingPanel: React.FC<WaitingPanelProps> = ({
         <Loader className="w-16 h-16 text-yellow-400 animate-spin mx-auto" />
       )}
       <div className="text-white space-y-2">
-        {lastEndReason && <p className="text-sm text-yellow-300">{END_REASON_TEXT[lastEndReason]}</p>}
+        {lastEndReason && (
+          <p className="text-sm text-yellow-300" data-testid="end-reason" data-reason={lastEndReason}>
+            {END_REASON_TEXT[lastEndReason]}
+          </p>
+        )}
         <p className="text-xl font-medium">Looking for someone...</p>
         <p className="text-sm text-gray-300">Matching with users interested in: {formatTopics(topics)}</p>
       </div>
