@@ -63,4 +63,15 @@ describe("loadConfig", () => {
     expect(c.turnUrls).toEqual(["turn:t:3478", "turns:t:5349"]);
     expect(c.trustProxy).toBe(true);
   });
+
+  test("STUN and TURN URLs must use their scheme", () => {
+    const turn = (TURN_URLS: string) => loadConfig({ TURN_URLS, TURN_SECRET: "x" });
+    expect(() => turn("turn.example.com:3478")).toThrow(/TURN_URLS: invalid URL "turn.example.com:3478"/);
+    expect(() => turn("turn:a:3478 turn:b:3478")).toThrow(/TURN_URLS: invalid URL/);
+    expect(() => turn("stun:stun.example.com:3478")).toThrow(/TURN_URLS: invalid URL/);
+    expect(() => loadConfig({ STUN_URLS: "stun.example.com:19302" })).toThrow(/STUN_URLS: invalid URL/);
+    expect(() => loadConfig({ STUN_URLS: "turn:t:3478" })).toThrow(/STUN_URLS: invalid URL/);
+    expect(turn("turn:t:3478?transport=udp, turns:t:5349").turnUrls).toEqual(["turn:t:3478?transport=udp", "turns:t:5349"]);
+    expect(loadConfig({ STUN_URLS: "stun:s:3478,stuns:s:5349" }).stunUrls).toEqual(["stun:s:3478", "stuns:s:5349"]);
+  });
 });

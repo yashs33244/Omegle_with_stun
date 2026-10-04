@@ -65,6 +65,23 @@ const envSchema = z
         });
       }
     }
+    // Browsers throw from new RTCPeerConnection() on a bad ICE server URL, so
+    // one typo here would break every call; refuse to start instead.
+    const iceUrls = [
+      ["STUN_URLS", env.STUN_URLS, /^stuns?:\S+$/, "stun: or stuns:"],
+      ["TURN_URLS", env.TURN_URLS, /^turns?:\S+$/, "turn: or turns:"],
+    ] as const;
+    for (const [key, value, pattern, scheme] of iceUrls) {
+      for (const url of csv(value)) {
+        if (!pattern.test(url)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: `invalid URL "${url}" (expected ${scheme} followed by host[:port], comma separated)`,
+          });
+        }
+      }
+    }
     if ((env.TURN_SECRET || env.TURN_USERNAME) && csv(env.TURN_URLS).length === 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
