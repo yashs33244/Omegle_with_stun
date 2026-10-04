@@ -55,6 +55,7 @@ export const RestrictedScreen: React.FC<RestrictedScreenProps> = ({ restriction:
 
   // Pick up a newer appeal status, if the server has one.
   useEffect(() => {
+    if (!initial.id) return;
     let cancelled = false;
     api
       .getRestriction(initial.id, getDeviceId())
