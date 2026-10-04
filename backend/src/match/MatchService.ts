@@ -403,7 +403,8 @@ export class MatchService {
   /* ---------------------------------------------------------------- */
 
   /**
-   * Removes the sessions of dead instances, expires pending rooms, runs a
+   * Removes the sessions of dead instances and this instance's sessions
+   * whose socket is gone, expires pending rooms, runs a
    * match pass, then awards coins and friends to local sockets.
    */
   sweep(): Promise<void> {
@@ -421,6 +422,7 @@ export class MatchService {
         if (now - this.lastReapAt >= this.config.heartbeatIntervalMs) {
           this.lastReapAt = now;
           await this.reapDeadInstancesLocked();
+          await this.removeGhostSessionsLocked();
         }
         const expired = await this.store.listExpiredPendingRooms(now - this.config.matchAcceptGraceMs);
         for (const roomId of expired) {
@@ -466,6 +468,25 @@ export class MatchService {
       }
       await this.store.forgetInstance(instanceId);
       this.log.warn({ deadInstance: instanceId, sessions: socketIds.length }, "removed sessions of a dead instance");
+    }
+  }
+
+  /**
+   * Removes this instance's sessions whose socket is gone. disconnect() is
+   * normally what removes them, but if its cleanup fails (a Redis blip, a
+   * lock wait timeout) nothing retries it, and the leftover session would be
+   * matched with real users over and over. Safe against hello: a session is
+   * only created under the lock after hello saw its socket connected.
+   */
+  private async removeGhostSessionsLocked(): Promise<void> {
+    for (const socketId of await this.store.listInstanceSessions(this.config.instanceId)) {
+      if (this.emitter.isLocalConnected(socketId)) continue;
+      const session = await this.store.getSession(socketId);
+      this.local.delete(socketId);
+      this.wakeAt.delete(socketId);
+      if (!session) continue;
+      await this.removeSessionLocked(session, "partner-left");
+      this.log.warn({ socketId }, "removed a session whose socket is gone");
     }
   }
 

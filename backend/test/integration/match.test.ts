@@ -298,7 +298,8 @@ describe("ending a match", () => {
       await ts.store.putSession({
         socketId,
         deviceId: randomUUID(),
-        instanceId: ts.config.instanceId,
+        // Another instance's: the server removes its own sessions that have no socket.
+        instanceId: "other-instance",
         profile: p,
         preferences: prefs({ genderFilter: "female" }),
         state: "waiting",
