@@ -13,38 +13,8 @@ import {
   rtcConfiguration,
   scaleDownFor,
   videoBitrateKbps,
-  type Timers,
 } from "./connectivity";
-
-/** Deterministic timers: advance() runs whatever is due. */
-function fakeTimers() {
-  let now = 1_000;
-  let seq = 0;
-  const pending = new Map<number, { at: number; fn: () => void }>();
-  const timers: Timers = {
-    setTimeout: (fn, ms) => {
-      const id = ++seq;
-      pending.set(id, { at: now + ms, fn });
-      return id;
-    },
-    clearTimeout: (h) => {
-      pending.delete(h as number);
-    },
-    now: () => now,
-  };
-  const advance = (ms: number) => {
-    const target = now + ms;
-    for (;;) {
-      const due = [...pending.entries()].filter(([, t]) => t.at <= target).sort((a, b) => a[1].at - b[1].at)[0];
-      if (!due) break;
-      pending.delete(due[0]);
-      now = due[1].at;
-      due[1].fn();
-    }
-    now = target;
-  };
-  return { timers, advance, pendingCount: () => pending.size };
-}
+import { fakeTimers } from "@/test/fakeTimers";
 
 function monitor() {
   const t = fakeTimers();
