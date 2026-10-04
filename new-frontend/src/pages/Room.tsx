@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageCircle, Mic, MicOff, UserRound, Video, WifiOff } from "lucide-react";
 import { Button } from "@/components/retroui/Button";
 import { ChatSettings } from "@/components/ChatSettings";
@@ -7,6 +7,14 @@ import { MatchPrompt } from "@/components/room/MatchPrompt";
 import { RoomHeader } from "@/components/room/RoomHeader";
 import { VideoTile } from "@/components/room/VideoTile";
 import { WaitingPanel } from "@/components/room/WaitingPanel";
+import { NudgeToast } from "@/components/safety/NudgeToast";
+import { PostCallReport } from "@/components/safety/PostCallReport";
+import { ReportButton } from "@/components/safety/ReportButton";
+import { ReportSheet } from "@/components/safety/ReportSheet";
+import { SafetyCoachGate } from "@/components/safety/SafetyCoachCard";
+import { NUDGE_TEXT } from "@/components/safety/safetyText";
+import { useCallSafety } from "@/components/safety/useCallSafety";
+import { Watermark } from "@/components/safety/Watermark";
 import { useAudioLevelDetection } from "@/hooks/useAudioLevelDetection";
 import { useIsMobile } from "@/hooks/use-mobile";
 import { usePeerConnection } from "@/hooks/usePeerConnection";
@@ -64,7 +72,14 @@ const TextOnlyPanel: React.FC<{ partner: PublicProfile | null; partnerTyping: bo
   </div>
 );
 
-export const Room: React.FC<RoomProps> = ({
+/** The first visit shows the safety card before anything connects or queues. */
+export const Room: React.FC<RoomProps> = (props) => (
+  <SafetyCoachGate onBack={props.onBackToHome}>
+    <RoomSession {...props} />
+  </SafetyCoachGate>
+);
+
+const RoomSession: React.FC<RoomProps> = ({
   profile,
   preferences: initialPreferences,
   onPreferencesChange,
@@ -78,6 +93,10 @@ export const Room: React.FC<RoomProps> = ({
   const [preferences, setPreferences] = useState<Preferences>(initialPreferences);
   const signaling = useSignaling(profile, initialPreferences);
   const { state, updatePreferences } = signaling;
+  const remoteTileRef = useRef<HTMLDivElement>(null);
+  const safety = useCallSafety(signaling, () =>
+    remoteTileRef.current?.querySelector<HTMLVideoElement>('video[data-testid="remote-video"]') ?? null,
+  );
 
   const inCall = state.status === "in-call";
   const matchPhase = state.status === "match-found" || state.status === "starting-call";
@@ -132,7 +151,7 @@ export const Room: React.FC<RoomProps> = ({
   );
 
   const handleSend = (text: string) => {
-    void signaling.sendChat(text);
+    void signaling.sendChat(text).then(safety.noteChatAck);
   };
 
   const connectionFailed = inCall && peer.connectionState === "failed";
@@ -231,9 +250,10 @@ export const Room: React.FC<RoomProps> = ({
 
           {/* Remote Video / Text Chat Area */}
           <div
+            ref={remoteTileRef}
             className={
               textOnlyMode && inCall
-                ? "bg-gray-800 rounded-lg p-6 border border-gray-700 h-full flex flex-col"
+                ? "relative bg-gray-800 rounded-lg p-6 border border-gray-700 h-full flex flex-col"
                 : `retro-video-card ${remoteIsSpeaking && inCall ? "speaking" : ""} ${
                     matchPhase && beamSeconds > 0 ? "timer-border-beam" : ""
                   }`
@@ -248,6 +268,14 @@ export const Room: React.FC<RoomProps> = ({
                 testId="remote-video"
                 loadingLabel={connectionFailed ? undefined : "Connecting video..."}
               />
+            )}
+
+            {inCall && !textOnlyMode && state.roomId && <Watermark roomId={state.roomId} />}
+
+            {inCall && (
+              <div className="absolute top-4 right-4" style={{ zIndex: 6 }}>
+                <ReportButton onClick={() => safety.openReport("call")} />
+              </div>
             )}
 
             {inCall && textOnlyMode && (
@@ -305,6 +333,12 @@ export const Room: React.FC<RoomProps> = ({
               />
             )}
 
+            {matchPhase && state.partner && (
+              <div className="absolute top-4 left-4" style={{ zIndex: 6 }}>
+                <ReportButton testId="match-report-button" onClick={() => safety.openReport("match")} />
+              </div>
+            )}
+
             {!inCall && !matchPhase && (
               <WaitingPanel
                 status={state.status}
@@ -330,6 +364,8 @@ export const Room: React.FC<RoomProps> = ({
             onClose={() => setShowChat(false)}
             onSend={handleSend}
             onTyping={signaling.setTyping}
+            redactedIds={safety.redactedIds}
+            safetyNotice={safety.chatNudge ? NUDGE_TEXT[safety.chatNudge].body : null}
           />
         )}
 
@@ -338,10 +374,31 @@ export const Room: React.FC<RoomProps> = ({
           onClose={() => setShowSettings(false)}
           preferences={preferences}
           onUpdatePreferences={handleUpdatePreferences}
-          onReport={signaling.report}
-          canReport={inCall}
         />
       </div>
+
+      {safety.target && (
+        <ReportSheet
+          key={`${safety.target.context}-${safety.target.roomId}`}
+          target={safety.target}
+          onSubmit={safety.submitReport}
+          onClose={safety.closeReport}
+        />
+      )}
+      {safety.postCall && !safety.target && (
+        <PostCallReport
+          postCall={safety.postCall}
+          onReport={safety.openPostCallReport}
+          onDismiss={safety.dismissPostCall}
+        />
+      )}
+      {safety.nudge && (
+        <NudgeToast
+          nudge={safety.nudge}
+          onDismiss={safety.dismissNudge}
+          onReport={inCall && state.roomId === safety.nudge.roomId ? () => safety.openReport("call") : undefined}
+        />
+      )}
     </div>
   );
 };
