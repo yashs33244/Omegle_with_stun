@@ -6,6 +6,26 @@ import { useState, useEffect, useRef, useCallback } from 'react';
  * stale). Mute and camera-off flip track.enabled, so the peer connection keeps
  * its senders and the partner simply receives silence or black frames.
  */
+/** A message that matches the actual cause instead of always blaming permissions. */
+export function mediaErrorMessage(err: unknown): string {
+  const name = err instanceof DOMException || err instanceof Error ? err.name : '';
+  switch (name) {
+    case 'NotAllowedError':
+    case 'SecurityError':
+      return 'Camera and microphone access was blocked. Allow it in your browser settings and try again.';
+    case 'NotFoundError':
+    case 'OverconstrainedError':
+      return 'No camera or microphone was found. Connect one and try again.';
+    case 'NotReadableError':
+    case 'AbortError':
+      return 'Your camera or microphone is being used by another app. Close it and try again.';
+    case 'MediaDevicesUnavailable':
+      return 'This browser cannot access a camera here. Use a recent browser over https.';
+    default:
+      return 'Unable to access camera and microphone. Please check permissions.';
+  }
+}
+
 export const useMediaStream = () => {
   const [stream, setStream] = useState<MediaStream | null>(null);
   const [hasPermission, setHasPermission] = useState<boolean>(false);
@@ -35,6 +55,9 @@ export const useMediaStream = () => {
     setError(null);
 
     try {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new DOMException('mediaDevices is not available', 'MediaDevicesUnavailable');
+      }
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 1280 }, height: { ideal: 720 } },
         audio: true,
@@ -52,7 +75,7 @@ export const useMediaStream = () => {
     } catch (err) {
       if (request !== requestRef.current || !mountedRef.current) return;
       console.error('Error accessing media devices:', err);
-      setError('Unable to access camera and microphone. Please check permissions.');
+      setError(mediaErrorMessage(err));
       setHasPermission(false);
     } finally {
       if (request === requestRef.current && mountedRef.current) setIsLoading(false);
