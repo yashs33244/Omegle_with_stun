@@ -370,7 +370,7 @@ export const Room: React.FC<RoomProps> = ({
           <div
             className={
               textOnlyMode && inCall
-                ? "bg-gray-800 rounded-lg p-6 border border-gray-700 h-full flex flex-col"
+                ? "relative bg-gray-800 rounded-lg p-6 border border-gray-700 h-full flex flex-col"
                 : `retro-video-card ${remoteIsSpeaking && inCall ? "speaking" : ""} ${
                     matchPhase && beamSeconds > 0 ? "timer-border-beam" : ""
                   }`
