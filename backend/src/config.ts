@@ -175,7 +175,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     matchAcceptTimeoutMs: e.MATCH_ACCEPT_TIMEOUT_MS,
     matchAcceptGraceMs: 750,
     sweepIntervalMs: 500,
-    fullMatchPassIntervalMs: 2000,
+    fullMatchPassIntervalMs: 5_000,
     heartbeatIntervalMs: 5_000,
     instanceTtlMs: 15_000,
     coinIntervalMs: 60_000,
