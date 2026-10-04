@@ -141,6 +141,11 @@ project name is still the directory name, so the first deploy replaces the old
 `backend` and `frontend` containers. There is no previous verified tag on the
 first run, so that deploy cannot roll back automatically.
 
+That first deploy also changes the socket protocol. Tabs still open on the old
+site keep sending the old events, which the new server ignores, so those users
+stay on "searching" until they reload the page. Deploy at a quiet time. From
+the second deploy on, the new client reconnects and re-queues by itself.
+
 ## What a deploy does on the host
 
 `deploy/deploy.sh <sha>` runs in `PROJECT_PATH`:
