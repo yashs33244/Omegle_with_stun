@@ -63,6 +63,10 @@ jobs:
         run: bun test
         env:
           REDIS_URL: redis://localhost:6379
+      - name: Test every integration suite on the Redis store
+        run: bun run test:redis
+        env:
+          REDIS_URL: redis://localhost:6379
       - run: bun run build
       - name: Test the built server under Node
         run: bun run test:node
