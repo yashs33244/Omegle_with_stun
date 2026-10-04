@@ -87,10 +87,26 @@ interface AttachDeps {
   newRateLimiter?: () => SocketRateLimiter;
 }
 
-export function attachHandlers(io: AppServer, deps: AttachDeps): void {
+export interface Handlers {
+  /**
+   * Resolves once no handler or disconnect cleanup is running. Graceful close
+   * awaits it after io.close() so the store is never closed under a cleanup
+   * that holds the match lock.
+   */
+  idle(): Promise<void>;
+}
+
+export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
   const { config, service, logger, metrics } = deps;
   const newRateLimiter = deps.newRateLimiter ?? (() => new SocketRateLimiter());
   const perIp = new Map<string, number>();
+  const running = new Set<Promise<void>>();
+  /** `work` must already handle its own errors. */
+  const track = (work: Promise<void>) => {
+    running.add(work);
+    const done = () => running.delete(work);
+    work.then(done, done);
+  };
 
   io.use((socket, next) => {
     const ip = clientIp(socket, config.trustProxy);
@@ -172,7 +188,7 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): void {
             replied = true;
             ack?.(res);
           };
-          handler(data, reply).catch(onError);
+          track(handler(data, reply).catch(onError));
         } catch (err) {
           onError(err);
         }
@@ -195,12 +211,21 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): void {
     socket.on("disconnect", (reason) => {
       metrics.connectedSockets.dec();
       log.debug({ reason }, "disconnected");
-      service.disconnect(socket.id).catch((err: unknown) => {
-        metrics.handlerErrorsTotal.inc({ event: "disconnect" });
-        log.error({ err }, "disconnect cleanup failed");
-      });
+      track(
+        service.disconnect(socket.id).catch((err: unknown) => {
+          metrics.handlerErrorsTotal.inc({ event: "disconnect" });
+          log.error({ err }, "disconnect cleanup failed");
+        }),
+      );
     });
   });
+
+  return {
+    async idle() {
+      // Loop in case work was added while waiting.
+      while (running.size > 0) await Promise.allSettled([...running]);
+    },
+  };
 }
 
 function isWrongVersion(raw: unknown): boolean {

@@ -8,6 +8,7 @@ import { MemoryStore } from "../../src/store/MemoryStore";
 import {
   activePair,
   arrives,
+  delay,
   hello,
   matchedPair,
   next,
@@ -292,5 +293,27 @@ describe("graceful close", () => {
     });
     late.close();
     expect(failed).toBe(true);
+  });
+
+  test("resolves only after the disconnect cleanups have finished", async () => {
+    ts = await startServer();
+    await activePair(ts);
+    const clients = await Promise.all(Array.from({ length: 4 }, () => ts.connect()));
+    await Promise.all(clients.map((c) => sendHello(c, hello())));
+    const store = ts.store;
+    const withLock = store.withLock.bind(store);
+    let inFlight = 0;
+    store.withLock = async (fn) => {
+      inFlight++;
+      try {
+        await delay(20);
+        return await withLock(fn);
+      } finally {
+        inFlight--;
+      }
+    };
+    await ts.server.close();
+    // The caller closes the store next; nothing may still be using it.
+    expect(inFlight).toBe(0);
   });
 });
