@@ -1,4 +1,13 @@
-import { Language, Country } from '../types';
+export interface Language {
+  code: string;
+  name: string;
+}
+
+export interface Country {
+  code: string;
+  name: string;
+  flag: string;
+}
 
 export const languages: Language[] = [
   { code: 'en', name: 'English' },
