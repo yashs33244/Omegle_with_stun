@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ChatSettings } from "./ChatSettings";
-import { REPORT_REASONS, type Preferences, type SimpleAck } from "@/lib/protocol";
-import { GENDER_OPTIONS, LANGUAGE_OPTIONS, REPORT_REASON_LABELS } from "@/lib/utils";
+import type { Preferences, SimpleAck } from "@/lib/protocol";
+import { GENDER_OPTIONS, LANGUAGE_OPTIONS } from "@/lib/utils";
 
 const prefs: Preferences = { genderFilter: "all", languageFilter: "any" };
 
@@ -13,8 +13,6 @@ function renderSettings(overrides: Partial<React.ComponentProps<typeof ChatSetti
     onClose: vi.fn(),
     preferences: prefs,
     onUpdatePreferences: vi.fn(async (): Promise<SimpleAck> => ({ ok: true })),
-    onReport: vi.fn(async (): Promise<SimpleAck> => ({ ok: true })),
-    canReport: true,
     ...overrides,
   };
   render(<ChatSettings {...props} />);
@@ -35,8 +33,6 @@ describe("ChatSettings", () => {
         onClose={vi.fn()}
         preferences={prefs}
         onUpdatePreferences={vi.fn()}
-        onReport={vi.fn()}
-        canReport
       />,
     );
     expect(container).toBeEmptyDOMElement();
@@ -88,43 +84,12 @@ describe("ChatSettings", () => {
     expect(props.onUpdatePreferences).not.toHaveBeenCalled();
   });
 
-  it("report lists the protocol reasons and submits the chosen enum value", async () => {
-    const props = renderSettings();
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /Report Current User/ }));
-
-    const submit = screen.getByRole("button", { name: "Submit Report" });
-    expect(submit).toBeDisabled();
-
-    const { listbox } = await openSelect("Reason for reporting");
-    const labels = within(listbox).getAllByRole("option").map((o) => o.textContent);
-    expect(labels).toEqual(REPORT_REASONS.map((r) => REPORT_REASON_LABELS[r]));
-
-    await user.click(within(listbox).getByRole("option", { name: "Harassment or bullying" }));
-    await user.type(screen.getByLabelText(/Additional details/), "  rude  ");
-    await user.click(screen.getByRole("button", { name: "Submit Report" }));
-
-    expect(props.onReport).toHaveBeenCalledWith("harassment", "rude");
-    expect(await screen.findByRole("status")).toHaveTextContent("User reported");
-    expect(screen.queryByRole("dialog", { name: "Report User" })).not.toBeInTheDocument();
-  });
-
-  it("report shows the server error and keeps the dialog open", async () => {
-    renderSettings({
-      onReport: vi.fn(async (): Promise<SimpleAck> => ({ ok: false, error: "not_in_room" })),
-    });
-    const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /Report Current User/ }));
-    const { listbox } = await openSelect("Reason for reporting");
-    await user.click(within(listbox).getByRole("option", { name: "Spam or unwanted content" }));
-    await user.click(screen.getByRole("button", { name: "Submit Report" }));
-    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("no longer in a call"));
-    expect(screen.getByRole("dialog", { name: "Report User" })).toBeInTheDocument();
-  });
-
-  it("report is disabled outside a call", () => {
-    renderSettings({ canReport: false });
-    expect(screen.getByRole("button", { name: /Report Current User/ })).toBeDisabled();
+  it("keeps the gender and language preferences and points reporting to the flag", () => {
+    renderSettings();
+    expect(screen.getByRole("button", { name: "Who do you want to meet?" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Preferred Language" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Report/ })).not.toBeInTheDocument();
+    expect(screen.getByText(/tap the flag on their video/)).toBeInTheDocument();
   });
 
   it("close button calls onClose", async () => {
