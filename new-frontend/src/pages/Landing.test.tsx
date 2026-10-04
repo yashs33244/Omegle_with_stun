@@ -161,6 +161,23 @@ describe("Landing profile validation", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
+  it("a press outside the dialog closes an open dropdown first, then the dialog", async () => {
+    const { user, dialog } = await openDetails();
+    const overlay = dialog.previousElementSibling as HTMLElement;
+    expect(overlay).toHaveAttribute("data-state", "open");
+    expect(overlay).not.toHaveAttribute("role");
+
+    await user.click(within(dialog).getByTestId("gender-select"));
+    expect(within(dialog).getByRole("listbox")).toBeInTheDocument();
+
+    await user.click(overlay);
+    expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    await user.click(overlay);
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
   it("sends unspecified when the user prefers not to say", async () => {
     const { user, dialog } = await openDetails();
     await user.type(within(dialog).getByTestId("name-input"), "Sam");
@@ -227,6 +244,24 @@ describe("Landing photo capture", () => {
     await user.click(within(dialog).getByTestId("capture-photo"));
     expect(within(dialog).getByRole("alert")).toHaveTextContent("not showing a picture yet");
     expect(within(dialog).getByTestId("capture-photo")).toBeInTheDocument();
+  });
+});
+
+describe("Landing home settings", () => {
+  it("closes an open dropdown when Start is clicked", async () => {
+    const user = userEvent.setup();
+    render(<Landing />);
+    const start = await screen.findByTestId("start-chat");
+    await waitFor(() => expect(start).toBeEnabled());
+
+    const country = screen.getByRole("button", { name: /^Country/ });
+    await user.click(country);
+    expect(screen.getByRole("listbox", { name: "Country" })).toBeInTheDocument();
+
+    await user.click(start);
+    expect(screen.queryByRole("listbox", { name: "Country" })).not.toBeInTheDocument();
+    expect(country).toHaveAttribute("aria-expanded", "false");
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
   });
 });
 

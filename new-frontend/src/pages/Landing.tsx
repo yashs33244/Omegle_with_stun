@@ -5,6 +5,7 @@ import { Room } from "./Room";
 import { Button } from "@/components/retroui/Button";
 import { Input } from "@/components/retroui/Input";
 import { Select, SelectItem } from "@/components/retroui/Select";
+import { closedASelect } from "@/components/retroui/selectDismissal";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { countries, getCountryByCode, getLanguageByCode, languages } from "../lib/data";
 import { LIMITS, TOPICS, type Gender, type Preferences, type Topic } from "../lib/protocol";
@@ -351,6 +352,10 @@ export const Landing = () => {
         <DialogContent
           className="max-w-md w-[calc(100%-2rem)] bg-white text-black rounded-lg max-h-[90vh] overflow-y-auto"
           onEscapeKeyDown={keepOpenWhileDropdownOpen}
+          onPointerDownOutside={(e) => {
+            // Like Escape: a press outside while a dropdown is open closes only the dropdown.
+            if (closedASelect(e.detail.originalEvent)) e.preventDefault();
+          }}
         >
           <div className="space-y-6">
             <div className="text-center">

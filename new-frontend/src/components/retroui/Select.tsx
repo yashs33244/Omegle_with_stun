@@ -1,6 +1,7 @@
 import * as React from "react";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { markSelectDismissal } from "./selectDismissal";
 
 interface SelectProps {
   value: string;
@@ -33,6 +34,9 @@ const optionElements = (container: HTMLElement | null): HTMLElement[] =>
  * Keyboard: Enter, Space or the arrow keys open the list and focus the
  * selected option; arrows, Home and End move; Enter or Space picks; Escape
  * closes and returns focus to the trigger; Tab closes and moves on.
+ *
+ * A pointer press anywhere outside closes the list and still reaches its
+ * target. Dialogs that should stay open can check closedASelect().
  */
 const Select = React.forwardRef<HTMLDivElement, SelectProps>(
   (
@@ -82,6 +86,19 @@ const Select = React.forwardRef<HTMLDivElement, SelectProps>(
       options[index]?.focus();
       setFocusTarget(null);
     }, [isOpen, focusTarget]);
+
+    // Close on any press outside. A document listener, not a fixed backdrop: a
+    // backdrop is clipped by ancestors with transform or backdrop-filter.
+    React.useEffect(() => {
+      if (!isOpen) return;
+      const onPointerDown = (e: PointerEvent) => {
+        if (e.target instanceof Node && containerRef.current?.contains(e.target)) return;
+        markSelectDismissal(e);
+        setIsOpen(false);
+      };
+      document.addEventListener("pointerdown", onPointerDown, true);
+      return () => document.removeEventListener("pointerdown", onPointerDown, true);
+    }, [isOpen]);
 
     const open = (target: FocusTarget) => {
       if (disabled) return;
@@ -210,14 +227,6 @@ const Select = React.forwardRef<HTMLDivElement, SelectProps>(
               )}
             </div>
           </div>
-        )}
-
-        {isOpen && (
-          <div
-            className="fixed inset-0 z-[9998]"
-            aria-hidden="true"
-            onClick={() => close(false)}
-          />
         )}
       </div>
     );
