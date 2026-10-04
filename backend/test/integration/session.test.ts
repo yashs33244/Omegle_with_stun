@@ -253,10 +253,10 @@ describe("GET /api/config", () => {
     const later = new Date(Date.now() + 2 * 3600_000);
     const hhmm = (d: Date) => `${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
     const end = new Date(later.getTime() + 60_000);
-    await ts.server.flags.set({ staffed_hours: `${hhmm(later)}-${hhmm(end)} Etc/UTC`.replace("Etc/UTC", "Europe/London") });
+    await ts.server.flags.set({ staffed_hours: `${hhmm(later)}-${hhmm(end)} Etc/UTC` });
     const body = (await (await fetch(`${ts.url}/api/config`)).json()) as PublicConfig;
     expect(body.turnstileSiteKey).toBeNull();
-    expect(body.staffedHours).toContain("(Europe/London)");
+    expect(body.staffedHours).toContain("(Etc/UTC)");
     expect(body.matchingOpen).toBe(false);
     expect(body.reopensAt).toBeGreaterThan(Date.now());
   });
