@@ -177,9 +177,9 @@ address such as the host proxy) and `REDIS_URL` pointing at the redis service.
 | frontend (`npm run ...`) | |
 |---|---|
 | `dev` / `build` | Vite dev server / production build |
-| `typecheck` / `lint` | `tsc -p tsconfig.app.json --noEmit` / ESLint |
+| `typecheck` / `lint` | `tsc` on the app and the e2e suite / ESLint |
 | `test` | Vitest |
-| `test:e2e` | Playwright, two fake-media browsers against a local backend |
+| `test:e2e` | Playwright: pairs of fake-media Chromium users against the built backend |
 
 `scripts/sync-protocol.sh` copies the protocol to the frontend;
 `scripts/sync-protocol.sh --check` fails when the copies differ (CI runs it).
@@ -191,7 +191,22 @@ cd backend && bun run typecheck && bun run lint && bun test
 cd backend && REDIS_URL=redis://localhost:6379 bun test    # plus the Redis store and two-instance suites
 cd backend && bun run build && bun run test:node
 cd new-frontend && npm run typecheck && npm run lint && npm test && npm run build
+cd new-frontend && npx playwright install chromium && npm run test:e2e
 ```
+
+The end-to-end suite (`new-frontend/e2e/`) drives two separate Chromium
+contexts with fake camera and microphone through the real flows: onboarding,
+match and countdown, accept with remote video actually playing on both sides,
+chat with typing and server acks, text-only mode, Skip, Pass, the accept
+timeout, Report, a partner closing the tab, and Home releasing the camera.
+Every test also fails on uncaught page errors, console errors and CSP
+violations. By default Playwright builds and starts the backend on Node
+(ports 3104 and 3105, the latter with a 3 s accept window for the timeout
+test) and serves production builds of the frontend with `vite preview` on
+ports 4173 and 4174, with the same security headers nginx sends in
+production. To test a running stack instead, set `E2E_BASE_URL` (and
+optionally `E2E_TIMEOUT_BASE_URL` and `E2E_ACCEPT_TIMEOUT_MS`); no servers are
+started then. The HTML report lands in `new-frontend/playwright-report/`.
 
 CI (`.github/workflows/ci.yml`) runs all of the above on every pull request
 and push, with a Redis service container, plus the protocol sync check, both

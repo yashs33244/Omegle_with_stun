@@ -270,6 +270,7 @@ export const Room: React.FC<RoomProps> = ({
                     onClick={() => setTextOnlyMode(true)}
                     variant="outline"
                     size="sm"
+                    data-testid="text-only-toggle"
                     className="bg-black bg-opacity-60 text-white border-white hover:bg-gray-800"
                   >
                     <MessageCircle className="w-4 h-4 mr-2" />

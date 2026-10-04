@@ -28,7 +28,7 @@ const TypingDots: React.FC<{ size: "sm" | "md" }> = ({ size }) => {
 };
 
 export const PartnerTyping: React.FC = () => (
-  <div className="flex items-center justify-center gap-2 text-yellow-400" role="status">
+  <div className="flex items-center justify-center gap-2 text-yellow-400" role="status" data-testid="partner-typing">
     <TypingDots size="md" />
     <span className="text-sm">Partner is typing...</span>
   </div>
@@ -73,7 +73,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         <h3 className="font-medium text-white">{textOnly ? "Text Chat" : "Chat"}</h3>
         <div className="flex items-center gap-2">
           {partnerTyping && !textOnly && (
-            <span className="text-xs text-yellow-400 flex items-center gap-1" role="status">
+            <span className="text-xs text-yellow-400 flex items-center gap-1" role="status" data-testid="partner-typing">
               <TypingDots size="sm" />
               typing...
             </span>
@@ -109,6 +109,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               >
                 <div
                   data-testid="chat-message"
+                  data-from={message.from}
+                  data-delivery={message.delivery}
                   className={`max-w-[85%] min-w-0 px-3 py-2 rounded-lg text-sm [overflow-wrap:anywhere] whitespace-pre-wrap ${
                     message.from === "me" ? "bg-yellow-500 text-black" : "bg-gray-700 text-white"
                   } ${message.delivery === "pending" ? "opacity-70" : ""}`}

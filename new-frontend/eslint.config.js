@@ -5,7 +5,7 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "coverage", "playwright-report", "test-results"] },
+  { ignores: ["dist", "dist-e2e", "coverage", "playwright-report", "test-results"] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ["**/*.{ts,tsx}"],
@@ -37,9 +37,17 @@ export default tseslint.config(
   },
   {
     // Config files and tests run in Node.
-    files: ["*.config.{ts,js}", "src/test/**/*.ts"],
+    files: ["*.config.{ts,js}", "src/test/**/*.ts", "e2e/**/*.ts"],
     languageOptions: {
       globals: { ...globals.browser, ...globals.node },
+    },
+  },
+  {
+    // Playwright fixtures take `({}, use)`: an empty pattern and a `use` that is not React's.
+    files: ["e2e/**/*.ts"],
+    rules: {
+      "no-empty-pattern": "off",
+      "react-hooks/rules-of-hooks": "off",
     },
   }
 );

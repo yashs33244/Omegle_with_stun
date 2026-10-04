@@ -41,7 +41,11 @@ export const MatchPrompt: React.FC<MatchPromptProps> = ({
   const country = getCountryByCode(partner.country);
 
   return (
-    <div className="w-full h-full bg-black flex items-center justify-center relative" style={{ zIndex: 3 }}>
+    <div
+      className="w-full h-full bg-black flex items-center justify-center relative"
+      style={{ zIndex: 3 }}
+      data-testid="match-prompt"
+    >
       {partner.photo?.startsWith("data:image/") ? (
         <img
           src={partner.photo}
@@ -56,7 +60,7 @@ export const MatchPrompt: React.FC<MatchPromptProps> = ({
 
       {/* Timer countdown */}
       {remaining !== null && remaining > 0 && (
-        <div className="timer-text" aria-live="polite">
+        <div className="timer-text" aria-live="polite" data-testid="match-countdown">
           {remaining}s
         </div>
       )}
