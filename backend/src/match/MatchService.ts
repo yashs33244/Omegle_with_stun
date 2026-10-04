@@ -92,7 +92,7 @@ interface LocalSocket {
   telemetryRooms?: string[];
   rewards?: {
     roomId: string;
-    activeSince: number;
+    connectedSince: number;
     partnerDevice: string;
     intervalsAwarded: number;
     friended: boolean;
@@ -136,12 +136,19 @@ export class MatchService implements RestrictionSink {
   private lastOnlineAt = 0;
   /** Sessions queued or changed since the last match pass (only touched under the lock). */
   private readonly dirty = new Set<string>();
+  /**
+   * Waiting sessions a block kept from a compatible partner, with the time
+   * that block lapses. The sweeper marks them dirty then (only touched under the lock).
+   */
+  private readonly wakeAt = new Map<string, number>();
   private sweepTimer?: ReturnType<typeof setInterval>;
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   private started?: Promise<void>;
   private sweeping?: Promise<void>;
   private stopped = false;
-  private lastFullPassAt = 0;
+  private lastRecheckAt = 0;
+  /** Where the next recheck slice starts in the waiting queue. */
+  private recheckCursor = 0;
   private lastReapAt = 0;
 
   constructor(deps: MatchServiceDeps) {
@@ -189,7 +196,7 @@ export class MatchService implements RestrictionSink {
 
   /**
    * Graceful shutdown: stop the sweeper, tell local sockets, and remove their
-   * sessions so partners on other instances are re-queued.
+   * sessions so partners on other instances are re-queued and matched.
    */
   async shutdown(): Promise<void> {
     if (this.stopped) return;
@@ -209,6 +216,9 @@ export class MatchService implements RestrictionSink {
         const s = await this.store.getSession(socketId);
         if (s) await this.removeSessionLocked(s, "partner-unavailable");
       }
+      // Match the re-queued partners now: other instances never see this
+      // instance's dirty marks, so they would wait for a recheck slice.
+      await this.matchPassLocked();
       await this.store.forgetInstance(this.config.instanceId);
     });
     this.local.clear();
@@ -313,7 +323,11 @@ export class MatchService implements RestrictionSink {
       const found = await this.memberRoomLocked(socketId, roomId);
       if (!found || found.room.state !== "pending") return;
       const { room, index } = found;
-      if (this.now() > room.expiresAt + this.config.matchAcceptGraceMs) return; // the sweeper ends it
+      if (this.now() > room.expiresAt + this.config.matchAcceptGraceMs) {
+        // Too late. Say so instead of dropping it; the sweeper ends the room.
+        this.emitter.emit(socketId, "server:error", { code: "not_in_room", message: "the match expired" });
+        return;
+      }
       if (room.accepted[index]) return;
       room.accepted[index] = true;
       const other = room.members[1 - index]!;
@@ -339,6 +353,24 @@ export class MatchService implements RestrictionSink {
         [room.members[1 - index]!]: "partner-declined",
       });
       await this.matchPassLocked();
+    });
+  }
+
+  /**
+   * call:connected. Rewards start once both members say their peer
+   * connection is up, so a call whose media never connects earns nothing.
+   */
+  async connected(socketId: string, roomId: string): Promise<void> {
+    await this.store.withLock(async () => {
+      const found = await this.memberRoomLocked(socketId, roomId);
+      if (!found || found.room.state !== "active") return;
+      const { room, index } = found;
+      const connected = room.connected ?? [false, false];
+      if (connected[index]) return;
+      connected[index] = true;
+      room.connected = connected;
+      if (connected[0] && connected[1]) room.connectedSince = this.now();
+      await this.store.putRoom(room);
     });
   }
 
@@ -586,6 +618,7 @@ export class MatchService implements RestrictionSink {
     await this.store.withLock(async () => {
       // Again under the lock: a hello that held the lock may have re-added it.
       this.local.delete(socketId);
+      this.wakeAt.delete(socketId);
       const session = await this.store.getSession(socketId);
       if (!session) return;
       await this.removeSessionLocked(session, "partner-left");
@@ -598,7 +631,8 @@ export class MatchService implements RestrictionSink {
   /* ---------------------------------------------------------------- */
 
   /**
-   * Removes the sessions of dead instances, expires pending rooms, runs a
+   * Removes the sessions of dead instances and this instance's sessions
+   * whose socket is gone, expires pending rooms, runs a
    * match pass, then awards coins and friends to local sockets.
    */
   sweep(): Promise<void> {
@@ -616,6 +650,7 @@ export class MatchService implements RestrictionSink {
         if (now - this.lastReapAt >= this.config.heartbeatIntervalMs) {
           this.lastReapAt = now;
           await this.reapDeadInstancesLocked();
+          await this.removeGhostSessionsLocked();
         }
         const expired = await this.store.listExpiredPendingRooms(now - this.config.matchAcceptGraceMs);
         for (const roomId of expired) {
@@ -627,11 +662,18 @@ export class MatchService implements RestrictionSink {
             [room.members[1]]: "timeout",
           });
         }
-        // Full pass now and then: picks up users queued on other instances and lapsed blocks.
-        const full = now - this.lastFullPassAt >= this.config.fullMatchPassIntervalMs;
-        if (full) this.lastFullPassAt = now;
+        // A block that kept a pair apart has lapsed: try those sessions again.
+        for (const [socketId, until] of this.wakeAt) {
+          if (until > now) continue;
+          this.wakeAt.delete(socketId);
+          this.dirty.add(socketId);
+        }
+        // Now and then also recheck a bounded slice of the queue, for marks
+        // this instance never saw (sessions queued elsewhere, blocks changed).
+        const recheck = now - this.lastRecheckAt >= this.config.recheckIntervalMs;
+        if (recheck) this.lastRecheckAt = now;
         await this.relaxTickLocked(now);
-        await this.matchPassLocked(full);
+        await this.matchPassLocked(recheck ? "recheck" : "dirty");
       });
       await this.tickRewards();
       const now = this.now();
@@ -663,9 +705,28 @@ export class MatchService implements RestrictionSink {
     }
   }
 
-  /** Runs one full match pass under the lock (exposed for tests and multi-instance pickup). */
+  /**
+   * Removes this instance's sessions whose socket is gone. disconnect() is
+   * normally what removes them, but if its cleanup fails (a Redis blip, a
+   * lock wait timeout) nothing retries it, and the leftover session would be
+   * matched with real users over and over. Safe against hello: a session is
+   * only created under the lock after hello saw its socket connected.
+   */
+  private async removeGhostSessionsLocked(): Promise<void> {
+    for (const socketId of await this.store.listInstanceSessions(this.config.instanceId)) {
+      if (this.emitter.isLocalConnected(socketId)) continue;
+      const session = await this.store.getSession(socketId);
+      this.local.delete(socketId);
+      this.wakeAt.delete(socketId);
+      if (!session) continue;
+      await this.removeSessionLocked(session, "partner-left");
+      this.log.warn({ socketId }, "removed a session whose socket is gone");
+    }
+  }
+
+  /** Runs one full O(waiting^2) match pass under the lock (exposed for tests; the sweeper never does this). */
   matchPass(): Promise<void> {
-    return this.store.withLock(() => this.matchPassLocked(true));
+    return this.store.withLock(() => this.matchPassLocked("full"));
   }
 
   /**
@@ -706,19 +767,20 @@ export class MatchService implements RestrictionSink {
       }
       if (entry.rewards?.roomId !== session.roomId) {
         const room = await this.store.getRoom(session.roomId);
-        if (!room || room.state !== "active" || room.activeSince === undefined) continue;
+        // Nothing is earned until both peer connections are up (call:connected).
+        if (!room || room.state !== "active" || room.connectedSince === undefined) continue;
         const index = room.members.indexOf(socketId);
         if (index < 0) continue;
         entry.rewards = {
           roomId: room.id,
-          activeSince: room.activeSince,
+          connectedSince: room.connectedSince,
           partnerDevice: room.devices[1 - index]!,
           intervalsAwarded: 0,
           friended: false,
         };
       }
       const r = entry.rewards;
-      const elapsed = now - r.activeSince;
+      const elapsed = now - r.connectedSince;
       const due = Math.floor(elapsed / this.config.coinIntervalMs);
       if (due > r.intervalsAwarded) {
         const delta = (due - r.intervalsAwarded) * this.config.coinsPerInterval;
@@ -954,14 +1016,19 @@ export class MatchService implements RestrictionSink {
    * ("dirty") can form new pairs, so the default pass only tries pairs that
    * include one of them: O(waiting x dirty) instead of O(waiting^2). It gives
    * the same pairs as a full pass, because the other waiters were already
-   * unmatchable with each other. The sweeper runs the full pass.
+   * unmatchable with each other, except across a block that has since lapsed
+   * (wakeAt marks those sessions dirty again).
+   *
+   * "recheck" (sweeper) also focuses a bounded slice of the queue, so each
+   * waiter is rechecked now and then without ever scanning all pairs. "full"
+   * focuses everyone and is O(waiting^2); only tests use it.
    */
-  private async matchPassLocked(full = false): Promise<void> {
+  private async matchPassLocked(mode: "dirty" | "recheck" | "full" = "dirty"): Promise<void> {
     // Kill switch or outside staffed hours: keep the queue, match nobody.
     if (!this.flags.status(this.now()).open) return;
-    const focus = full ? null : new Set(this.dirty);
+    const focus = mode === "full" ? null : new Set(this.dirty);
     this.dirty.clear();
-    if (focus && focus.size === 0) return;
+    if (focus && focus.size === 0 && mode === "dirty") return;
 
     const ids = await this.store.listWaiting();
     if (ids.length < 2) return;
@@ -972,7 +1039,14 @@ export class MatchService implements RestrictionSink {
       if (s && s.state === "waiting") waiting.push(s);
       else await this.store.removeWaiting(ids[i]!); // stale entry
     }
+    if (mode === "recheck") {
+      // Forget lapse times of sessions that left the queue (possibly on another instance).
+      const queued = new Set(waiting.map((s) => s.socketId));
+      for (const socketId of this.wakeAt.keys()) if (!queued.has(socketId)) this.wakeAt.delete(socketId);
+    }
     if (waiting.length < 2) return;
+    if (focus && mode === "recheck") this.addRecheckSlice(waiting, focus);
+    if (focus && focus.size === 0) return;
 
     const now = this.now();
     const low = await this.safety.lowPriority();
@@ -1006,13 +1080,35 @@ export class MatchService implements RestrictionSink {
         if (step === HELD || !isCompatible(a, b) || !meetsPreferences(a, b, step)) continue;
         if ((await isBanned(a.deviceId)) || (await isBanned(b.deviceId))) continue;
         const block = await this.store.getBlock(a.deviceId, b.deviceId);
-        if (block && block.until > now) continue;
+        if (block && block.until > now) {
+          const wake = this.wakeAt.get(a.socketId);
+          if (wake === undefined || block.until < wake) this.wakeAt.set(a.socketId, block.until);
+          continue;
+        }
         taken.add(i);
         taken.add(j);
         await this.createRoomLocked(a, b, now);
         break;
       }
     }
+  }
+
+  /**
+   * Adds the next slice of the queue to `focus`, sized so the pass costs
+   * about recheckPairBudget pair checks. The cursor is a plain index into
+   * the queue, so a queue that changes between rechecks may make it skip or
+   * repeat a few sessions; the next round covers them.
+   */
+  private addRecheckSlice(waiting: Session[], focus: Set<string>): void {
+    const count = Math.max(1, Math.floor(this.config.recheckPairBudget / waiting.length));
+    if (count >= waiting.length) {
+      for (const s of waiting) focus.add(s.socketId);
+      this.recheckCursor = 0;
+      return;
+    }
+    const start = this.recheckCursor % waiting.length;
+    for (let k = 0; k < count; k++) focus.add(waiting[(start + k) % waiting.length]!.socketId);
+    this.recheckCursor = start + count;
   }
 
   /**

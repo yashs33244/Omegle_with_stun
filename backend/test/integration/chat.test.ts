@@ -2,7 +2,17 @@
  * Chat, typing, coins and friends over real sockets.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { activePair, arrives, hello, next, sendHello, startServer, type TestServer } from "../helpers";
+import {
+  activePair,
+  arrives,
+  connectedPair,
+  hello,
+  next,
+  profile,
+  sendHello,
+  startServer,
+  type TestServer,
+} from "../helpers";
 
 let ts: TestServer;
 afterEach(async () => {
@@ -53,9 +63,9 @@ describe("chat", () => {
 });
 
 describe("coins and friends", () => {
-  test("active calls earn coins every interval and become friends after the threshold", async () => {
+  test("connected calls earn coins every interval and become friends after the threshold", async () => {
     ts = await startServer();
-    const { ca, cb, a, b } = await activePair(ts);
+    const { ca, cb, a, b } = await connectedPair(ts);
     const coinsA = next(ca, "coins:update", 1500);
     const coinsB = next(cb, "coins:update", 1500);
     expect(await coinsA).toEqual({ balance: 105, delta: 5 });
@@ -77,9 +87,24 @@ describe("coins and friends", () => {
     void b;
   });
 
+  test("nothing is earned until both peer connections report connected", async () => {
+    ts = await startServer({ coinIntervalMs: 100, friendAfterMs: 150 });
+    const { ca, cb, roomId } = await activePair(ts);
+    const outsider = await ts.connect();
+    await sendHello(outsider, hello({ profile: profile({ topics: ["books"] }) })); // stays waiting
+    outsider.emit("call:connected", { roomId }); // not a member: ignored
+    ca.emit("call:connected", { roomId }); // only one side
+    expect(await arrives(ca, "coins:update", 400)).toBe(false);
+    expect(await arrives(ca, "friends:new", 50)).toBe(false);
+
+    const coins = next(ca, "coins:update", 1000);
+    cb.emit("call:connected", { roomId });
+    expect(await coins).toEqual({ balance: 105, delta: 5 });
+  });
+
   test("coins stop when the call ends", async () => {
     ts = await startServer({ coinIntervalMs: 200 });
-    const { ca } = await activePair(ts);
+    const { ca } = await connectedPair(ts);
     ca.emit("call:skip");
     await next(ca, "match:ended");
     expect(await arrives(ca, "coins:update", 400)).toBe(false);

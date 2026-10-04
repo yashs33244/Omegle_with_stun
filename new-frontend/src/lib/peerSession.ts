@@ -38,6 +38,7 @@ export class PeerSession {
   private cameraTrack: MediaStreamTrack | null = null;
   private paused = false;
   private placeholder: MediaStreamTrack | null = null;
+  private iceRestarted = false;
 
   constructor(opts: PeerSessionOptions) {
     this.opts = opts;
@@ -71,7 +72,14 @@ export class PeerSession {
     };
 
     this.pc.onconnectionstatechange = () => {
-      if (!this.closed) this.opts.onConnectionStateChange(this.pc.connectionState);
+      if (this.closed) return;
+      const state = this.pc.connectionState;
+      // One ICE restart per call: the initiator re-offers with fresh credentials.
+      if (state === "failed" && this.opts.initiator && !this.iceRestarted) {
+        this.iceRestarted = true;
+        void this.restartIce();
+      }
+      this.opts.onConnectionStateChange(state);
     };
 
     const stream = opts.localStream;
@@ -116,6 +124,9 @@ export class PeerSession {
   /**
    * ICE restart. Only the initiator sends offers, so only it restarts; the
    * other side answers the restart offer with fresh credentials on its own.
+   * Runs once by itself when the connection fails, and when the connect
+   * monitor asks (4 s disconnected, or failed). A request while an offer is
+   * already out is a no-op, so the two never send two restart offers.
    */
   restartIce(): Promise<void> {
     if (!this.opts.initiator) return Promise.resolve();

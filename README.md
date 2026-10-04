@@ -222,7 +222,10 @@ above:
 | BACKUP_S3_URI | unset | host only: where `scripts/backup-redis.sh` uploads snapshots |
 
 Inside compose the backend always runs with `NODE_ENV=production`,
-`TRUST_PROXY=true` and `REDIS_URL` pointing at the redis service. Backend,
+`TRUST_PROXY=true` (the gateway sets `X-Real-IP` to the real client address:
+`CF-Connecting-IP` when the request came from a Cloudflare edge, otherwise the
+address from `X-Forwarded-For` past private hops such as the host proxy; see
+DEPLOYMENT.md) and `REDIS_URL` pointing at the redis service. Backend,
 gateway and frontend run with `nofile` 65535; both nginx configs use
 `worker_connections 16384` and `worker_rlimit_nofile 65535`.
 
@@ -300,6 +303,9 @@ CI (`.github/workflows/ci.yml`) runs all of the above on every pull request
 and push, with a Redis service container, plus the protocol sync and lockfile
 checks, actionlint and shellcheck, both Docker image builds,
 `docker compose config` and `nginx -t` on the gateway and frontend configs.
+The `stack` job then starts the real compose stack (Redis, two backend
+replicas, the gateway and the nginx frontend) and runs the end-to-end suite
+against it with `E2E_BASE_URL`.
 
 ## Protocol (v3)
 
@@ -314,6 +320,9 @@ validated with zod; the server derives everything it can itself. In short:
   above the threshold) -> `match:found` -> accept (Preview) or the server
   accepts (Instant) -> `call:start` (per-call ICE servers and bitrate caps)
   -> `rtc:signal` relay -> `match:ended` -> re-queued.
+- `call:connected` once each side's peer connection is up. Coins and friends
+  count from when both sides have sent it, so a call whose media never
+  connects earns nothing.
 - `chat:send` / `chat:message` (with `redacted`), `report:submit` with
   evidence, `call:failed`, `call:telemetry`, `moderation:signal`,
   `safety:nudge`, `server:banner`, `matching:status`, `session:restricted`.

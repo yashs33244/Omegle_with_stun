@@ -83,4 +83,56 @@ describe("retroui Select", () => {
     expect(trigger).toHaveFocus();
     expect(onChange).not.toHaveBeenCalled();
   });
+
+  it("closes on a press outside and lets that click reach its target", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const onOutside = vi.fn();
+    render(
+      <div>
+        <Harness onChange={onChange} />
+        <button type="button" onClick={onOutside}>
+          Elsewhere
+        </button>
+      </div>,
+    );
+    const trigger = screen.getByRole("button", { name: "Letter" });
+
+    await user.click(trigger);
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Elsewhere" }));
+
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(onOutside).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("with a visible label, names the trigger by the label and the selected value", async () => {
+    const user = userEvent.setup();
+    function Labelled() {
+      const [value, setValue] = useState("b");
+      return (
+        <>
+          <label id="letter-label" htmlFor="letter">
+            Letter
+          </label>
+          <Select id="letter" labelId="letter-label" aria-label="Letter" value={value} onValueChange={setValue}>
+            <SelectItem value="a">Alpha</SelectItem>
+            <SelectItem value="b">Bravo</SelectItem>
+            <SelectItem value="c">Charlie</SelectItem>
+          </Select>
+        </>
+      );
+    }
+    render(<Labelled />);
+
+    const trigger = screen.getByRole("button", { name: "Letter Bravo" });
+    expect(trigger).toHaveTextContent("Bravo");
+    await user.click(trigger);
+    expect(screen.getByRole("listbox", { name: "Letter" })).toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: "Charlie" }));
+
+    expect(trigger).toHaveAccessibleName("Letter Charlie");
+  });
 });

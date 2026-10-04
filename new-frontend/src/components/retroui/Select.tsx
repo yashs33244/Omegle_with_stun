@@ -1,6 +1,7 @@
 import * as React from "react";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { markSelectDismissal } from "./selectDismissal";
 
 interface SelectProps {
   value: string;
@@ -10,6 +11,12 @@ interface SelectProps {
   className?: string;
   disabled?: boolean;
   id?: string;
+  /**
+   * Id of the visible label. The trigger is then named by that label plus the
+   * selected value ("Gender Female"), so screen readers announce the value.
+   * Without it the trigger is named by aria-label alone.
+   */
+  labelId?: string;
   "aria-label"?: string;
   "data-testid"?: string;
 }
@@ -33,6 +40,9 @@ const optionElements = (container: HTMLElement | null): HTMLElement[] =>
  * Keyboard: Enter, Space or the arrow keys open the list and focus the
  * selected option; arrows, Home and End move; Enter or Space picks; Escape
  * closes and returns focus to the trigger; Tab closes and moves on.
+ *
+ * A pointer press anywhere outside closes the list and still reaches its
+ * target. Dialogs that should stay open can check closedASelect().
  */
 const Select = React.forwardRef<HTMLDivElement, SelectProps>(
   (
@@ -44,6 +54,7 @@ const Select = React.forwardRef<HTMLDivElement, SelectProps>(
       className,
       disabled,
       id,
+      labelId,
       "aria-label": ariaLabel,
       "data-testid": testId,
     },
@@ -57,6 +68,7 @@ const Select = React.forwardRef<HTMLDivElement, SelectProps>(
     const containerRef = React.useRef<HTMLDivElement>(null);
     const triggerRef = React.useRef<HTMLButtonElement>(null);
     const listId = React.useId();
+    const valueId = React.useId();
     React.useImperativeHandle(ref, () => containerRef.current as HTMLDivElement);
 
     const items = React.Children.toArray(children).filter(
@@ -82,6 +94,19 @@ const Select = React.forwardRef<HTMLDivElement, SelectProps>(
       options[index]?.focus();
       setFocusTarget(null);
     }, [isOpen, focusTarget]);
+
+    // Close on any press outside. A document listener, not a fixed backdrop: a
+    // backdrop is clipped by ancestors with transform or backdrop-filter.
+    React.useEffect(() => {
+      if (!isOpen) return;
+      const onPointerDown = (e: PointerEvent) => {
+        if (e.target instanceof Node && containerRef.current?.contains(e.target)) return;
+        markSelectDismissal(e);
+        setIsOpen(false);
+      };
+      document.addEventListener("pointerdown", onPointerDown, true);
+      return () => document.removeEventListener("pointerdown", onPointerDown, true);
+    }, [isOpen]);
 
     const open = (target: FocusTarget) => {
       if (disabled) return;
@@ -168,11 +193,12 @@ const Select = React.forwardRef<HTMLDivElement, SelectProps>(
           aria-haspopup="listbox"
           aria-expanded={isOpen}
           aria-controls={isOpen ? listId : undefined}
-          aria-label={ariaLabel}
+          aria-label={labelId ? undefined : ariaLabel}
+          aria-labelledby={labelId ? `${labelId} ${valueId}` : undefined}
           data-testid={testId}
           className="flex h-10 w-full items-center justify-between rounded-md border-2 border-black bg-white px-3 py-2 text-sm shadow-sm transition-all hover:shadow-md focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <span className={cn("truncate", selectedLabel ? "text-black" : "text-gray-500")}>
+          <span id={valueId} className={cn("truncate", selectedLabel ? "text-black" : "text-gray-500")}>
             {selectedLabel || placeholder}
           </span>
           <ChevronDown
@@ -210,14 +236,6 @@ const Select = React.forwardRef<HTMLDivElement, SelectProps>(
               )}
             </div>
           </div>
-        )}
-
-        {isOpen && (
-          <div
-            className="fixed inset-0 z-[9998]"
-            aria-hidden="true"
-            onClick={() => close(false)}
-          />
         )}
       </div>
     );

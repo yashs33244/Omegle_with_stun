@@ -40,10 +40,12 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
   return {
     ...loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent", MAX_CONNECTIONS_PER_IP: "1000" }),
     requireSession: false,
+    // Tests open many sockets from one address in quick succession.
+    connectRatePerIp: { capacity: 1_000_000, refillPerSec: 1_000_000 },
     matchAcceptTimeoutMs: 400,
     matchAcceptGraceMs: 50,
     sweepIntervalMs: 20,
-    fullMatchPassIntervalMs: 40,
+    recheckIntervalMs: 40,
     coinIntervalMs: 150,
     friendAfterMs: 350,
     evidenceDir: join(tmpdir(), `chizzy-test-evidence-${process.pid}`),
@@ -108,6 +110,7 @@ export async function startServer(
   const port = await server.listen(0, "127.0.0.1");
   const url = `http://127.0.0.1:${port}`;
   const clients: Client[] = [];
+  let closing: Promise<void> | undefined;
   return {
     server,
     store,
@@ -129,10 +132,15 @@ export async function startServer(
       });
       return client;
     },
-    async close() {
-      for (const c of clients) c.disconnect();
-      await server.close();
-      for (const o of owned) await o.close();
+    // Idempotent: a test may close its server and the afterEach close it again,
+    // and a second quit() on the shared Redis client would reject.
+    close() {
+      closing ??= (async () => {
+        for (const c of clients) c.disconnect();
+        await server.close();
+        for (const o of owned) await o.close();
+      })();
+      return closing;
     },
   };
 }
@@ -242,4 +250,12 @@ export async function activePair(ts: TestServer, a?: HelloPayload, b?: HelloPayl
   pair.cb.emit("match:accept", { roomId: pair.roomId });
   const [sa, sb] = await Promise.all([startA, startB]);
   return { ...pair, startA: sa, startB: sb };
+}
+
+/** An active pair whose peer connections both reported connected (rewards run from here). */
+export async function connectedPair(ts: TestServer, a?: HelloPayload, b?: HelloPayload) {
+  const pair = await activePair(ts, a, b);
+  pair.ca.emit("call:connected", { roomId: pair.roomId });
+  pair.cb.emit("call:connected", { roomId: pair.roomId });
+  return pair;
 }

@@ -12,7 +12,9 @@ import { testConfig } from "../helpers";
 async function main(): Promise<void> {
   const url = process.env.REDIS_URL!;
   const logger = createLogger("silent");
-  const store = await RedisStore.connect(url, { prefix: process.env.TEST_PREFIX! });
+  // A short lock lease: when SIGKILL lands while this process holds the
+  // match lock, the survivor can only reap it once the lease runs out.
+  const store = await RedisStore.connect(url, { prefix: process.env.TEST_PREFIX!, lockTtlMs: 500 });
   const adapter = await connectRedisAdapter(url, logger, process.env.TEST_ADAPTER_KEY!);
   const config = testConfig({ heartbeatIntervalMs: 50, instanceTtlMs: 200 });
   const server = createServer(config, { store, logger, configureIo: adapter.install });

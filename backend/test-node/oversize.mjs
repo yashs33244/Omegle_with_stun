@@ -8,6 +8,7 @@ import { once } from "node:events";
 import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import { after, before, test } from "node:test";
+import { setTimeout } from "node:timers";
 import { fileURLToPath } from "node:url";
 import { io } from "socket.io-client";
 
@@ -99,4 +100,17 @@ test("an oversized frame closes only the sender; the server stays healthy", asyn
   assert.equal(ack.ok, true);
   bystander.disconnect();
   fresh.disconnect();
+});
+
+test("binary attachments close the sender instead of being buffered", async () => {
+  const attacker = await connect();
+  const closed = once(attacker, "disconnect");
+  const engine = attacker.io.engine;
+  engine.write('51000000-["chat:send",{"_placeholder":true,"num":0}]');
+  for (let i = 0; i < 5; i++) engine.write(new Uint8Array(64 * 1024));
+  const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error("not disconnected")), 2000).unref());
+  const [reason] = await Promise.race([closed, timeout]);
+  assert.match(reason, /^transport (close|error)$/);
+  const health = await fetch(`${base}/healthz`);
+  assert.equal(health.status, 200);
 });

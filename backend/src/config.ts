@@ -97,6 +97,23 @@ const envSchema = z
         });
       }
     }
+    // Browsers throw from new RTCPeerConnection() on a bad ICE server URL, so
+    // one typo here would break every call; refuse to start instead.
+    const iceUrls = [
+      ["STUN_URLS", env.STUN_URLS, /^stuns?:\S+$/, "stun: or stuns:"],
+      ["TURN_URLS", env.TURN_URLS, /^turns?:\S+$/, "turn: or turns:"],
+    ] as const;
+    for (const [key, value, pattern, scheme] of iceUrls) {
+      for (const url of csv(value)) {
+        if (!pattern.test(url)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: `invalid URL "${url}" (expected ${scheme} followed by host[:port], comma separated)`,
+          });
+        }
+      }
+    }
     if ((env.TURN_SECRET || env.TURN_USERNAME) && csv(env.TURN_URLS).length === 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -144,6 +161,12 @@ export interface Config extends MatchConfig {
   redisUrl?: string;
   trustProxy: boolean;
   maxConnectionsPerIp: number;
+  /**
+   * New connections per client IP (per instance): a burst, then a steady
+   * rate. Per-socket rate limits start full, so without this a client could
+   * reconnect to refill them. Not an env var; tests loosen it.
+   */
+  connectRatePerIp: { capacity: number; refillPerSec: number };
   stunUrls: string[];
   turnUrls: string[];
   turnSecret?: string;
@@ -188,11 +211,20 @@ export interface Config extends MatchConfig {
   matchAcceptGraceMs: number;
   sweepIntervalMs: number;
   /**
-   * How often the sweeper runs a FULL match pass (O(waiting^2)); in between it
-   * only matches sessions queued since the last pass. The full pass picks up
-   * lapsed blocks and users queued on other instances.
+   * How often the sweeper rechecks a slice of the waiting queue against
+   * everyone else. In between it only matches sessions queued or changed
+   * since the last pass, plus sessions whose block just lapsed. The recheck
+   * is a safety net for marks this instance never saw (blocks changed or
+   * sessions queued elsewhere).
    */
-  fullMatchPassIntervalMs: number;
+  recheckIntervalMs: number;
+  /**
+   * Pair checks one recheck may spend. The slice is this divided by the
+   * queue length (at least one session), so a recheck never scans all pairs
+   * of a long queue and never stalls the event loop; a short queue is
+   * rechecked whole.
+   */
+  recheckPairBudget: number;
   /**
    * Every instance refreshes its heartbeat this often. Sessions of an
    * instance whose heartbeat is older than instanceTtlMs are removed by the
@@ -253,6 +285,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     redisUrl: e.REDIS_URL,
     trustProxy: e.TRUST_PROXY,
     maxConnectionsPerIp: e.MAX_CONNECTIONS_PER_IP,
+    connectRatePerIp: { capacity: 20, refillPerSec: 1 },
     stunUrls: csv(e.STUN_URLS),
     turnUrls: csv(e.TURN_URLS),
     turnSecret: e.TURN_SECRET,
@@ -282,7 +315,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     matchAcceptTimeoutMs: e.MATCH_ACCEPT_TIMEOUT_MS,
     matchAcceptGraceMs: 750,
     sweepIntervalMs: 500,
-    fullMatchPassIntervalMs: 5_000,
+    recheckIntervalMs: 5_000,
+    recheckPairBudget: 100_000,
     heartbeatIntervalMs: 5_000,
     instanceTtlMs: 15_000,
     coinIntervalMs: 60_000,

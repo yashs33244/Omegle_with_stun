@@ -53,6 +53,8 @@ export interface PeerConnectionState {
   /** First audio track of the remote stream, for the speaking indicator. */
   remoteAudioTrack: MediaStreamTrack | null;
   connectionState: RTCPeerConnectionState | "idle";
+  /** Local time the connection first reached "connected" in this call; null until then. */
+  connectedAt: number | null;
   quality: ConnectionQuality;
   /** Set when the call gave up connecting; the server re-queues both sides. */
   failure: ConnectFailure | null;
@@ -79,6 +81,7 @@ export function usePeerConnection(opts: PeerConnectionOptions): PeerConnectionSt
   // ontrack reuses one MediaStream per call; this re-renders when tracks are added to it.
   const [remoteAudioTrack, setRemoteAudioTrack] = useState<MediaStreamTrack | null>(null);
   const [connectionState, setConnectionState] = useState<PeerConnectionState["connectionState"]>("idle");
+  const [connectedAt, setConnectedAt] = useState<number | null>(null);
   const [quality, setQuality] = useState<ConnectionQuality>("GOOD");
   const [failure, setFailure] = useState<ConnectFailure | null>(null);
   const [privateMode, setPrivateMode] = useState(false);
@@ -121,6 +124,7 @@ export function usePeerConnection(opts: PeerConnectionOptions): PeerConnectionSt
       onConnectionStateChange: (state) => {
         setConnectionState(state);
         monitor.update(state);
+        if (state === "connected") setConnectedAt((at) => at ?? Date.now());
       },
     });
     sessionRef.current = session;
@@ -201,6 +205,7 @@ export function usePeerConnection(opts: PeerConnectionOptions): PeerConnectionSt
       setPrivateRequested(false);
       setRelayed(false);
       setLowBandwidth(false);
+      setConnectedAt(null);
     };
   }, [roomId, initiator, sendSignal, subscribeSignals]);
 
@@ -218,6 +223,7 @@ export function usePeerConnection(opts: PeerConnectionOptions): PeerConnectionSt
     remoteStream,
     remoteAudioTrack,
     connectionState,
+    connectedAt,
     quality,
     failure,
     privateMode,

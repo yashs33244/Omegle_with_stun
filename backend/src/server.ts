@@ -63,8 +63,9 @@ export interface ChizzyServer {
   listen(port: number, host?: string): Promise<number>;
   /**
    * Graceful close: ends local sessions (partners are re-queued), tells local
-   * clients `server:shutdown`, closes Socket.IO and the HTTP server. The store
-   * belongs to the caller and is not closed.
+   * clients `server:shutdown`, closes Socket.IO and the HTTP server, then waits
+   * for running handlers and disconnect cleanups. The store belongs to the
+   * caller and is not closed, but nothing uses it once this resolves.
    */
   close(): Promise<void>;
 }
@@ -152,7 +153,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     emitter: createEmitter(io),
     gate: session.gate,
   });
-  attachHandlers(io, {
+  const handlers = attachHandlers(io, {
     config,
     service,
     logger,
@@ -205,6 +206,9 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
         await new Promise<void>((resolve) => {
           io.close(() => resolve());
         });
+        // io.close() fired a disconnect cleanup per socket; each takes the
+        // match lock, so let them finish before the caller closes the store.
+        await handlers.idle();
       })();
       return closing;
     },

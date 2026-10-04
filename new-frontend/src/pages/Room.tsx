@@ -66,6 +66,14 @@ const ConnectingPanel: React.FC<{ partner: PublicProfile }> = ({ partner }) => (
   </div>
 );
 
+/**
+ * A call whose connection stays failed this long is skipped automatically
+ * (the initiator has already tried one ICE restart by then). The answering
+ * side waits longer, so normally only one side skips and the other is told.
+ */
+const FAILED_SKIP_MS = 10_000;
+const FAILED_SKIP_STAGGER_MS = 4_000;
+
 const NOTICE_TEXT: Partial<Record<ErrorCode, string>> = {
   rate_limited: "Slow down a little, you are sending too fast.",
   not_in_room: "That call has already ended.",
@@ -84,22 +92,51 @@ const NameBadge: React.FC<{ name: string; country: string }> = ({ name, country 
   );
 };
 
-const TextOnlyPanel: React.FC<{ partner: PublicProfile | null; partnerTyping: boolean; onSwitchToVideo: () => void }> = ({
-  partner,
-  partnerTyping,
-  onSwitchToVideo,
+const MicToggle: React.FC<{ micEnabled: boolean; onToggle: () => void; showLabel?: boolean }> = ({
+  micEnabled,
+  onToggle,
+  showLabel = false,
 }) => (
+  <Button
+    onClick={onToggle}
+    variant="outline"
+    size="sm"
+    aria-label={micEnabled ? "Mute microphone" : "Unmute microphone"}
+    aria-pressed={!micEnabled}
+    data-testid="mic-toggle"
+    className={`flex items-center gap-2 ${
+      micEnabled ? "bg-black bg-opacity-60 text-white border-white" : "bg-red-600 text-white border-red-500"
+    }`}
+  >
+    {micEnabled ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
+    {showLabel && <span aria-hidden="true">{micEnabled ? "Mic on" : "Mic off"}</span>}
+  </Button>
+);
+
+const TextOnlyPanel: React.FC<{
+  partner: PublicProfile | null;
+  partnerTyping: boolean;
+  micEnabled: boolean;
+  onToggleMic: () => void;
+  onSwitchToVideo: () => void;
+}> = ({ partner, partnerTyping, micEnabled, onToggleMic, onSwitchToVideo }) => (
   <div className="flex-1 flex flex-col justify-center items-center text-center space-y-4">
     <MessageCircle className="w-16 h-16 text-yellow-400" />
     <div className="text-white space-y-2">
       <h3 className="text-xl font-bold">Text Chat Mode</h3>
       <p className="text-gray-300">You're chatting with {partner?.name || "a stranger"}</p>
+      <p className="text-sm text-gray-400">
+        {micEnabled ? "Your camera is off, but they can still hear you." : "Your camera and microphone are off."}
+      </p>
       {partnerTyping && <PartnerTyping />}
     </div>
-    <Button onClick={onSwitchToVideo} variant="outline" className="bg-yellow-500 text-black hover:bg-yellow-400">
-      <Video className="w-4 h-4 mr-2" />
-      Switch to Video
-    </Button>
+    <div className="flex items-center gap-3">
+      <MicToggle micEnabled={micEnabled} onToggle={onToggleMic} showLabel />
+      <Button onClick={onSwitchToVideo} variant="outline" className="bg-yellow-500 text-black hover:bg-yellow-400">
+        <Video className="w-4 h-4 mr-2" />
+        Switch to Video
+      </Button>
+    </div>
   </div>
 );
 
@@ -141,6 +178,25 @@ const RoomSession: React.FC<RoomProps> = ({
   const [showChat, setShowChat] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [textOnlyMode, setTextOnlyMode] = useState(false);
+  /** Entering text-only muted the mic, and the user has not touched it since. */
+  const textOnlyMutedMicRef = useRef(false);
+
+  // Text-only mutes the mic too; its toggle moves into the text panel.
+  const enterTextOnly = () => {
+    textOnlyMutedMicRef.current = micEnabled;
+    if (micEnabled) onMicEnabledChange(false);
+    setTextOnlyMode(true);
+  };
+  // Back to video: unmute only if text-only is what muted the mic.
+  const leaveTextOnly = useCallback(() => {
+    if (textOnlyMutedMicRef.current) onMicEnabledChange(true);
+    textOnlyMutedMicRef.current = false;
+    setTextOnlyMode(false);
+  }, [onMicEnabledChange]);
+  const toggleMic = () => {
+    textOnlyMutedMicRef.current = false;
+    onMicEnabledChange(!micEnabled);
+  };
 
   const sendModeration = useCallback(
     (roomId: string, kind: ModerationKind) => send("moderation:signal", { roomId, kind }),
@@ -200,9 +256,9 @@ const RoomSession: React.FC<RoomProps> = ({
 
   // Text-only is per call: a new call starts with video again.
   useEffect(() => {
-    setTextOnlyMode(false);
+    leaveTextOnly();
     setShowChat(false);
-  }, [state.roomId]);
+  }, [state.roomId, leaveTextOnly]);
 
   // The partner must stop seeing us in text-only mode.
   useEffect(() => {
@@ -238,8 +294,24 @@ const RoomSession: React.FC<RoomProps> = ({
     void signaling.sendChat(text).then(safety.noteChatAck);
   };
 
+  // The call (timer, and coins on the server) starts when the media connects, not at call:start.
+  const callConnectedAt = inCall ? peer.connectedAt : null;
+  const { reportConnected } = signaling;
+  useEffect(() => {
+    if (callConnectedAt !== null) reportConnected();
+  }, [callConnectedAt, reportConnected]);
+
   const connectionFailed = inCall && (peer.connectionState === "failed" || peer.failure !== null);
   const privateAllowed = inCall && !!state.callMedia?.privateModeAllowed;
+  // Text chat still works without media, so a user in text-only mode is never skipped for it.
+  // Normally the connect monitor's call:failed ends the call first; this is the fallback.
+  const autoSkip = connectionFailed && !textOnlyMode;
+  const { skip } = signaling;
+  useEffect(() => {
+    if (!autoSkip) return;
+    const t = setTimeout(skip, FAILED_SKIP_MS + (state.initiator ? 0 : FAILED_SKIP_STAGGER_MS));
+    return () => clearTimeout(t);
+  }, [autoSkip, state.initiator, skip]);
   // Length of the border beam: whatever is left of the accept window when the match arrives.
   const beamSeconds = useMemo(
     () => (state.expiresAt !== null ? Math.max(0, (state.expiresAt - Date.now()) / 1000) : 0),
@@ -256,7 +328,7 @@ const RoomSession: React.FC<RoomProps> = ({
         coinBump={state.coinBump}
         isFriend={state.isFriend}
         inCall={inCall}
-        callStartedAt={state.callStartedAt}
+        callStartedAt={callConnectedAt}
         quality={connectionFailed ? "DISCONNECTED" : peer.quality}
         reconnecting={state.reconnecting}
         onHome={onBackToHome}
@@ -357,18 +429,7 @@ const RoomSession: React.FC<RoomProps> = ({
               )}
 
               <div className={`absolute ${pip.style ? "bottom-1 right-1" : "bottom-4 right-4"}`} style={{ zIndex: 5 }}>
-                <Button
-                  onClick={() => onMicEnabledChange(!micEnabled)}
-                  variant="outline"
-                  size="sm"
-                  aria-label={micEnabled ? "Mute microphone" : "Unmute microphone"}
-                  aria-pressed={!micEnabled}
-                  className={`flex items-center ${
-                    micEnabled ? "bg-black bg-opacity-60 text-white border-white" : "bg-red-600 text-white border-red-500"
-                  }`}
-                >
-                  {micEnabled ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
-                </Button>
+                <MicToggle micEnabled={micEnabled} onToggle={toggleMic} />
               </div>
 
               {/* Chat toggle button */}
@@ -438,7 +499,9 @@ const RoomSession: React.FC<RoomProps> = ({
               <TextOnlyPanel
                 partner={state.partner}
                 partnerTyping={state.partnerTyping}
-                onSwitchToVideo={() => setTextOnlyMode(false)}
+                micEnabled={micEnabled}
+                onToggleMic={toggleMic}
+                onSwitchToVideo={leaveTextOnly}
               />
             )}
 
@@ -451,7 +514,7 @@ const RoomSession: React.FC<RoomProps> = ({
                 )}
                 <div className="absolute top-4 left-4" style={{ zIndex: 5 }}>
                   <Button
-                    onClick={() => setTextOnlyMode(true)}
+                    onClick={enterTextOnly}
                     variant="outline"
                     size="sm"
                     data-testid="text-only-toggle"
@@ -469,7 +532,9 @@ const RoomSession: React.FC<RoomProps> = ({
                 <div className="text-center text-white space-y-4 px-4">
                   <WifiOff className="w-12 h-12 text-red-400 mx-auto" />
                   <p className="text-lg font-medium">Couldn't connect the video</p>
-                  <p className="text-sm text-gray-300">Your networks could not reach each other.</p>
+                  <p className="text-sm text-gray-300">
+                    Your networks could not reach each other. Skipping to someone else in a few seconds.
+                  </p>
                   <button type="button" onClick={signaling.skip} className="retro-button">
                     Skip to someone else
                   </button>

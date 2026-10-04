@@ -233,6 +233,114 @@ describe("useSignaling (socket wiring)", () => {
     expect(ack).toEqual({ ok: true, reportId: "r1" });
   });
 
+  it("does not send an accept once the match countdown has run out", () => {
+    vi.useFakeTimers();
+    try {
+      const { result } = renderHook(() => useSignaling(profile, preferences));
+      const room = "11111111-1111-4111-8111-111111111111";
+      socket.connected = true;
+      socket.fire("connect");
+      const serverNow = Date.now();
+      socket.fire("match:found", {
+        roomId: room,
+        isFriend: false,
+        expiresAt: serverNow + 30_000,
+        serverNow,
+        partner: { name: "Bo", country: "IN", language: "en", topics: ["music"] },
+      });
+      vi.advanceTimersByTime(30_000);
+      act(() => result.current.accept());
+      expect(socket.emitted.some((e) => e.event === "match:accept")).toBe(false);
+      expect(result.current.state.status).toBe("match-found");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("sends an accept while the match countdown is running", () => {
+    const { result } = renderHook(() => useSignaling(profile, preferences));
+    const room = "11111111-1111-4111-8111-111111111111";
+    socket.connected = true;
+    socket.fire("connect");
+    const serverNow = Date.now();
+    socket.fire("match:found", {
+      roomId: room,
+      isFriend: false,
+      expiresAt: serverNow + 30_000,
+      serverNow,
+      partner: { name: "Bo", country: "IN", language: "en", topics: ["music"] },
+    });
+    act(() => result.current.accept());
+    expect(socket.emitted.filter((e) => e.event === "match:accept")).toEqual([
+      { event: "match:accept", payload: { roomId: room }, ack: undefined },
+    ]);
+    expect(result.current.state.status).toBe("starting-call");
+  });
+
+  it("reports the peer connection once per call, and only during a call", () => {
+    const { result } = renderHook(() => useSignaling(profile, preferences));
+    const room = "11111111-1111-4111-8111-111111111111";
+    socket.connected = true;
+    socket.fire("connect");
+    const connectedReports = () => socket.emitted.filter((e) => e.event === "call:connected");
+    act(() => result.current.reportConnected());
+    expect(connectedReports()).toHaveLength(0);
+
+    const serverNow = Date.now();
+    socket.fire("match:found", {
+      roomId: room,
+      isFriend: false,
+      expiresAt: serverNow + 30_000,
+      serverNow,
+      partner: { name: "Bo", country: "IN", language: "en", topics: ["music"] },
+    });
+    act(() => result.current.accept());
+    socket.fire("call:start", { roomId: room, initiator: true });
+    act(() => result.current.reportConnected());
+    act(() => result.current.reportConnected());
+    expect(connectedReports()).toEqual([{ event: "call:connected", payload: { roomId: room }, ack: undefined }]);
+  });
+
+  it("sends one skip per call, and only during a call", () => {
+    const { result } = renderHook(() => useSignaling(profile, preferences));
+    const room = "11111111-1111-4111-8111-111111111111";
+    const next = "22222222-2222-4222-8222-222222222222";
+    socket.connected = true;
+    socket.fire("connect");
+    const skips = () => socket.emitted.filter((e) => e.event === "call:skip");
+    const startCall = (roomId: string) => {
+      const serverNow = Date.now();
+      socket.fire("match:found", {
+        roomId,
+        isFriend: false,
+        expiresAt: serverNow + 30_000,
+        serverNow,
+        partner: { name: "Bo", country: "IN", language: "en", topics: ["music"] },
+      });
+      act(() => result.current.accept());
+      socket.fire("call:start", { roomId, initiator: true });
+    };
+
+    act(() => result.current.skip());
+    expect(skips()).toHaveLength(0);
+
+    startCall(room);
+    // A double click, or the overlay button racing the auto-skip timer.
+    act(() => result.current.skip());
+    act(() => result.current.skip());
+    expect(skips()).toHaveLength(1);
+
+    // After match:ended the user is waiting: a late click must not skip the next match.
+    socket.fire("match:ended", { roomId: room, reason: "skipped" });
+    act(() => result.current.skip());
+    expect(skips()).toHaveLength(1);
+
+    // A later call can be skipped again.
+    startCall(next);
+    act(() => result.current.skip());
+    expect(skips()).toHaveLength(2);
+  });
+
   it("disconnects on unmount", () => {
     const { unmount } = renderHook(() => useSignaling(profile, preferences));
     unmount();

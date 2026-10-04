@@ -26,6 +26,24 @@ npm is the package manager for this folder (`package-lock.json`).
 
 Copy `.env.example` to `.env.local` to override it locally.
 
+## End-to-end tests
+
+`npm run test:e2e` runs the Playwright suite in `e2e/`. By default it builds
+and starts its own backend and preview servers on these ports:
+
+| variable | default | what it is |
+|---|---|---|
+| `E2E_API_PORT` | `3104` | backend for the main specs |
+| `E2E_WEB_PORT` | `4173` | frontend preview for the main specs |
+| `E2E_TIMEOUT_API_PORT` | `E2E_API_PORT` + 1 | backend with a short accept window |
+| `E2E_TIMEOUT_WEB_PORT` | `E2E_WEB_PORT` + 1 | frontend preview for that backend |
+
+Set other ports to run beside another e2e run or `npm run preview` (4173), for
+example `E2E_API_PORT=4510 E2E_WEB_PORT=4610 npm run test:e2e`. To test a
+running stack instead, set `E2E_BASE_URL` (and optionally
+`E2E_TIMEOUT_BASE_URL` and `E2E_ACCEPT_TIMEOUT_MS`); no servers are started
+then.
+
 ## Layout
 
 - `src/pages/Landing.tsx` camera preview, profile setup (photo, name, gender, topics), then the room.

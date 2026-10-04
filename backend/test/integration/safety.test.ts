@@ -4,10 +4,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { io as ioClient } from "socket.io-client";
+import { loadConfig } from "../../src/config";
 import { MemoryStore } from "../../src/store/MemoryStore";
 import {
   activePair,
   arrives,
+  delay,
   hello,
   matchedPair,
   next,
@@ -108,6 +110,21 @@ describe("malformed payloads", () => {
     expect(await sendHello(other, hello())).toMatchObject({ ok: true });
   });
 
+  test("binary packets close the connection instead of piling up attachments", async () => {
+    ts = await startServer();
+    const c = await ts.connect();
+    const closed = new Promise<void>((r) => c.once("disconnect", () => r()));
+    // A BINARY_EVENT header announcing a million attachments, then binary
+    // frames that each pass the per-packet size check.
+    const engine = c.io.engine;
+    engine.write('51000000-["chat:send",{"_placeholder":true,"num":0}]');
+    for (let i = 0; i < 5; i++) engine.write(new Uint8Array(64 * 1024));
+    const dropped = await Promise.race([closed.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), 1000))]);
+    expect(dropped).toBe(true);
+    const other = await ts.connect();
+    expect(await sendHello(other, hello())).toMatchObject({ ok: true });
+  });
+
   test("hello is rate limited", async () => {
     ts = await startServer();
     const c = await ts.connect();
@@ -186,6 +203,24 @@ describe("connection limits", () => {
     second.disconnect();
     await new Promise((r) => setTimeout(r, 100));
     await ts.connect({ headers });
+  });
+
+  test("reconnecting does not refill the rate limits: new connections per IP are rate limited", async () => {
+    ts = await startServer({ trustProxy: true, connectRatePerIp: loadConfig({}).connectRatePerIp });
+    const headers = { "X-Real-IP": "203.0.113.9" };
+    let refused: unknown;
+    for (let i = 0; i < 50 && refused === undefined; i++) {
+      try {
+        const c = await ts.connect({ headers });
+        expect(await sendHello(c, hello())).toMatchObject({ ok: true });
+        c.disconnect();
+      } catch (err) {
+        refused = err;
+      }
+    }
+    expect(String(refused)).toContain("rate_limited");
+    // Other addresses are unaffected.
+    await ts.connect({ headers: { "X-Real-IP": "203.0.113.10" } });
   });
 
   test("X-Real-IP is ignored when TRUST_PROXY is off", async () => {
@@ -277,5 +312,27 @@ describe("graceful close", () => {
     });
     late.close();
     expect(failed).toBe(true);
+  });
+
+  test("resolves only after the disconnect cleanups have finished", async () => {
+    ts = await startServer();
+    await activePair(ts);
+    const clients = await Promise.all(Array.from({ length: 4 }, () => ts.connect()));
+    await Promise.all(clients.map((c) => sendHello(c, hello())));
+    const store = ts.store;
+    const withLock = store.withLock.bind(store);
+    let inFlight = 0;
+    store.withLock = async (fn) => {
+      inFlight++;
+      try {
+        await delay(20);
+        return await withLock(fn);
+      } finally {
+        inFlight--;
+      }
+    };
+    await ts.server.close();
+    // The caller closes the store next; nothing may still be using it.
+    expect(inFlight).toBe(0);
   });
 });

@@ -1,7 +1,7 @@
 /**
- * Socket.IO server: transport limits, per-IP connection cap, per-socket rate
- * limits and the safe() wrapper that validates every payload and guarantees a
- * handler can never throw out of an event listener.
+ * Socket.IO server: transport limits, per-IP connection cap and connection
+ * rate, per-socket rate limits and the safe() wrapper that validates every
+ * payload and guarantees a handler can never throw out of an event listener.
  */
 import type { Server as HttpServer } from "node:http";
 import { Server, type Socket } from "socket.io";
@@ -27,7 +27,7 @@ import {
   type ErrorCode,
   type ServerToClientEvents,
 } from "../protocol";
-import { SocketRateLimiter, type EventClass } from "../rateLimit";
+import { SocketRateLimiter, TokenBucket, type EventClass } from "../rateLimit";
 import { handshakeSession } from "../session/handshake";
 import { limitedParser } from "./limitedParser";
 
@@ -94,10 +94,28 @@ interface AttachDeps {
   handshake?: Parameters<AppServer["use"]>[0];
 }
 
-export function attachHandlers(io: AppServer, deps: AttachDeps): void {
+export interface Handlers {
+  /**
+   * Resolves once no handler or disconnect cleanup is running. Graceful close
+   * awaits it after io.close() so the store is never closed under a cleanup
+   * that holds the match lock.
+   */
+  idle(): Promise<void>;
+}
+
+export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
   const { config, service, logger, metrics } = deps;
   const newRateLimiter = deps.newRateLimiter ?? (() => new SocketRateLimiter());
   const perIp = new Map<string, number>();
+  const connectRate = new Map<string, TokenBucket>();
+  let lastPrune = Date.now();
+  const running = new Set<Promise<void>>();
+  /** `work` must already handle its own errors. */
+  const track = (work: Promise<void>) => {
+    running.add(work);
+    const done = () => running.delete(work);
+    work.then(done, done);
+  };
 
   if (deps.handshake) io.use(deps.handshake);
   io.use((socket, next) => {
@@ -106,6 +124,23 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): void {
     if (count >= config.maxConnectionsPerIp) {
       metrics.rateLimitedTotal.inc({ event: "connection" });
       return next(new Error("too_many_connections"));
+    }
+    // Per-socket buckets start full, so new connections per IP are rate
+    // limited too; otherwise reconnecting would refill every bucket.
+    const now = Date.now();
+    // Drop refilled buckets so the map only holds recently seen addresses.
+    if (now - lastPrune >= 60_000) {
+      lastPrune = now;
+      for (const [key, bucket] of connectRate) if (bucket.full(now)) connectRate.delete(key);
+    }
+    let bucket = connectRate.get(ip);
+    if (!bucket) {
+      bucket = new TokenBucket(config.connectRatePerIp, now);
+      connectRate.set(ip, bucket);
+    }
+    if (!bucket.take(now)) {
+      metrics.rateLimitedTotal.inc({ event: "connection_rate" });
+      return next(new Error("rate_limited"));
     }
     perIp.set(ip, count + 1);
     // Release on the underlying connection's close, which fires even when the
@@ -181,7 +216,7 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): void {
             replied = true;
             ack?.(res);
           };
-          handler(data, reply).catch(onError);
+          track(handler(data, reply).catch(onError));
         } catch (err) {
           onError(err);
         }
@@ -200,6 +235,7 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): void {
     );
     on("match:accept", "control", roomRefSchema, (p) => service.accept(socket.id, p.roomId));
     on("match:decline", "control", roomRefSchema, (p) => service.decline(socket.id, p.roomId));
+    on("call:connected", "control", roomRefSchema, (p) => service.connected(socket.id, p.roomId));
     on("call:skip", "control", null, () => service.skip(socket.id));
     on("rtc:signal", "signal", rtcSignalSchema, (p) => service.signal(socket.id, p));
     on("chat:send", "chat", chatSendSchema, (p, reply) => service.chat(socket.id, p, reply));
@@ -212,12 +248,21 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): void {
     socket.on("disconnect", (reason) => {
       metrics.connectedSockets.dec();
       log.debug({ reason }, "disconnected");
-      service.disconnect(socket.id).catch((err: unknown) => {
-        metrics.handlerErrorsTotal.inc({ event: "disconnect" });
-        log.error({ err }, "disconnect cleanup failed");
-      });
+      track(
+        service.disconnect(socket.id).catch((err: unknown) => {
+          metrics.handlerErrorsTotal.inc({ event: "disconnect" });
+          log.error({ err }, "disconnect cleanup failed");
+        }),
+      );
     });
   });
+
+  return {
+    async idle() {
+      // Loop in case work was added while waiting.
+      while (running.size > 0) await Promise.allSettled([...running]);
+    },
+  };
 }
 
 function isWrongVersion(raw: unknown): boolean {

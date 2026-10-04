@@ -22,7 +22,7 @@ test("chat works both ways with server-acked delivery and a typing indicator", a
   await expect(dev.page.getByTestId("chat-message")).toHaveCount(3);
 });
 
-test("text-only mode turns the camera off for the partner and keeps chat working", async ({
+test("text-only mode turns the camera and mic off for the partner and keeps chat working", async ({
   openStranger,
   acceptTimeoutMs,
 }) => {
@@ -35,13 +35,13 @@ test("text-only mode turns the camera off for the partner and keeps chat working
   await eve.page.getByTestId("text-only-toggle").click();
   await expect(eve.page.getByText("Text Chat Mode")).toBeVisible();
   await expect(eve.page.getByText("You're chatting with Finn")).toBeVisible();
-  // Eve's camera track is disabled, so Finn stops seeing her; her microphone stays on.
+  // Eve's camera and microphone tracks are disabled, so Finn stops seeing and hearing her.
   const liveTracks = async () =>
     (await cameraTracks(eve.page))
       .filter((t) => t.state === "live")
       .map((t) => `${t.kind}:${t.enabled ? "on" : "off"}`)
       .sort();
-  await expect.poll(liveTracks).toEqual(["audio:on", "video:off"]);
+  await expect.poll(liveTracks).toEqual(["audio:off", "video:off"]);
   await expect.poll(() => remoteVideoBrightness(finn.page), { message: "Finn only sees black" }).toBeLessThan(2);
 
   // The chat panel is always open in text-only mode; Finn opens his.

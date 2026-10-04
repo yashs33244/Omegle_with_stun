@@ -10,14 +10,30 @@ import type { E2EOptions } from "./e2e/fixtures";
  *   compose); no servers are started. The accept-timeout spec then uses
  *   E2E_TIMEOUT_BASE_URL (default E2E_BASE_URL) and waits for the stack's
  *   window, E2E_ACCEPT_TIMEOUT_MS (default 30000).
+ *
+ * In the default mode the ports come from E2E_API_PORT (default 3104) and
+ * E2E_WEB_PORT (default 4173); the accept-timeout pair uses the next port of
+ * each unless E2E_TIMEOUT_API_PORT or E2E_TIMEOUT_WEB_PORT is set. Pick other
+ * ports to run beside another e2e run or a `vite preview` (which uses 4173).
  */
 const EXTERNAL_URL = process.env.E2E_BASE_URL;
 const CI = !!process.env.CI;
 
-const API_PORT = Number(process.env.E2E_API_PORT || 3104);
-const WEB_PORT = Number(process.env.E2E_WEB_PORT || 4173);
-const TIMEOUT_API_PORT = API_PORT + 1;
-const TIMEOUT_WEB_PORT = WEB_PORT + 1;
+/** A TCP port from the environment, or the fallback when the variable is unset or empty. */
+function portFromEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const port = Number(raw);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`${name} must be a TCP port number, got "${raw}"`);
+  }
+  return port;
+}
+
+const API_PORT = portFromEnv("E2E_API_PORT", 3104);
+const WEB_PORT = portFromEnv("E2E_WEB_PORT", 4173);
+const TIMEOUT_API_PORT = portFromEnv("E2E_TIMEOUT_API_PORT", API_PORT + 1);
+const TIMEOUT_WEB_PORT = portFromEnv("E2E_TIMEOUT_WEB_PORT", WEB_PORT + 1);
 /** Accept window of the dedicated accept-timeout backend. */
 const SHORT_ACCEPT_TIMEOUT_MS = 3000;
 

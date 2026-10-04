@@ -375,6 +375,11 @@ export interface ClientToServerEvents {
   "session:preferences": (p: UpdatePreferencesPayload, ack: (res: SimpleAck) => void) => void;
   "match:accept": (p: RoomRef) => void;
   "match:decline": (p: RoomRef) => void;
+  /**
+   * This side's peer connection reached "connected" (sent once per call).
+   * Coins and friends count from the moment both sides have sent it.
+   */
+  "call:connected": (p: RoomRef) => void;
   /** Ends the pending or active room. Both sides are re-queued; the pair is blocked for a while. */
   "call:skip": () => void;
   "rtc:signal": (p: RtcSignal) => void;

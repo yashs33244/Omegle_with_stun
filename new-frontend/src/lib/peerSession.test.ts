@@ -23,8 +23,8 @@ class FakePeerConnection {
   addTrack = vi.fn();
   addTransceiver = vi.fn();
 
-  async createOffer() {
-    this.calls.push("createOffer");
+  async createOffer(opts?: RTCOfferOptions) {
+    this.calls.push(opts?.iceRestart ? "createOffer:iceRestart" : "createOffer");
     return { type: "offer" as const, sdp: "offer-sdp" };
   }
   async createAnswer() {
@@ -168,6 +168,50 @@ describe("PeerSession", () => {
     expect(fake.addTrack).toHaveBeenCalledWith(video, stream);
     expect(fake.addTransceiver).toHaveBeenCalledTimes(1);
     expect(fake.addTransceiver).toHaveBeenCalledWith("audio", { direction: "recvonly" });
+  });
+
+  it("initiator restarts ICE once when the connection fails, and the answerer answers it", async () => {
+    const offerer = setup(true);
+    const answerer = setup(false);
+    await offerer.session.start();
+    await answerer.session.handleSignal(offerer.sent[0]!);
+    await offerer.session.handleSignal(answerer.sent[0]!);
+
+    for (const side of [offerer, answerer]) {
+      side.fake.connectionState = "failed";
+      side.fake.onconnectionstatechange?.();
+    }
+    await vi.waitFor(() => expect(offerer.sent).toHaveLength(2));
+    expect(offerer.fake.calls.slice(-2)).toEqual(["createOffer:iceRestart", "setLocal:offer"]);
+    // The answering side never offers itself.
+    expect(answerer.sent).toHaveLength(1);
+
+    await answerer.session.handleSignal(offerer.sent[1]!);
+    expect(answerer.sent[1]).toEqual({ roomId: ROOM, description: { type: "answer", sdp: "answer-sdp" } });
+    await offerer.session.handleSignal(answerer.sent[1]!);
+
+    // A second failure does not restart again: the UI skips instead.
+    offerer.fake.onconnectionstatechange?.();
+    await offerer.session.handleSignal(candidate(1));
+    expect(offerer.fake.calls.filter((c) => c === "createOffer:iceRestart")).toHaveLength(1);
+  });
+
+  it("reports connection state changes", () => {
+    const fake = new FakePeerConnection();
+    const onConnectionStateChange = vi.fn();
+    new PeerSession({
+      roomId: ROOM,
+      initiator: false,
+      iceServers: [],
+      localStream: null,
+      sendSignal: vi.fn(),
+      onRemoteStream: vi.fn(),
+      onConnectionStateChange,
+      createPeerConnection: () => fake as unknown as RTCPeerConnection,
+    });
+    fake.connectionState = "connected";
+    fake.onconnectionstatechange?.();
+    expect(onConnectionStateChange).toHaveBeenCalledWith("connected");
   });
 
   it("close() closes the connection and drops later signals", async () => {

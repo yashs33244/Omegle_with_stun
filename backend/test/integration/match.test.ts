@@ -225,6 +225,18 @@ describe("ending a match", () => {
     expect((await start).roomId).toBe(roomId);
   });
 
+  test("an accept after the grace window is answered with not_in_room, not dropped", async () => {
+    // No sweeps: the expired room stays pending so the late accept reaches it.
+    ts = await startServer({ matchAcceptTimeoutMs: 100, matchAcceptGraceMs: 50, sweepIntervalMs: 60_000 });
+    const { ca, roomId } = await matchedPair(ts);
+    await new Promise((r) => setTimeout(r, 250));
+    const error = next(ca, "server:error");
+    const start = arrives(ca, "call:start", 200);
+    ca.emit("match:accept", { roomId });
+    expect(await error).toEqual({ code: "not_in_room", message: "the match expired" });
+    expect(await start).toBe(false);
+  });
+
   test("skip during a call ends it, re-queues both and escalates the block", async () => {
     ts = await startServer();
     const { ca, cb, roomId, a, b } = await activePair(ts);
@@ -257,6 +269,56 @@ describe("ending a match", () => {
     const second = await ts.store.getBlock(a.deviceId, b.deviceId);
     expect(second!.skipCount).toBe(2);
     expect(second!.until - Date.now()).toBeGreaterThan(9 * 60_000);
+  });
+
+  test("a waiting pair is matched soon after its block lapses, without a recheck", async () => {
+    // The only recheck runs on the first sweep, before anyone is waiting.
+    ts = await startServer({ recheckIntervalMs: 60_000 });
+    const a = hello();
+    const b = hello();
+    const lapse = Date.now() + 400;
+    await ts.store.setBlock(a.deviceId, b.deviceId, { until: lapse, skipCount: 1 }, 60_000);
+    const ca = await ts.connect();
+    const cb = await ts.connect();
+    const found = next(ca, "match:found", 2000);
+    await sendHello(ca, a);
+    await sendHello(cb, b);
+    await found;
+    expect(Date.now()).toBeGreaterThanOrEqual(lapse);
+  });
+
+  test("the recheck reaches every waiter of a long queue in bounded slices", async () => {
+    // One session per recheck: 40 unmatchable waiters plus the pair below.
+    ts = await startServer({ recheckPairBudget: 1, recheckIntervalMs: 20 });
+    const now = Date.now();
+    for (let i = 0; i < 40; i++) {
+      // Men who only want women: they match neither each other nor the pair.
+      const { photo: _photo, ...p } = profile({ gender: "male" });
+      const socketId = `ghost-${i}`;
+      await ts.store.putSession({
+        socketId,
+        deviceId: randomUUID(),
+        // Another instance's: the server removes its own sessions that have no socket.
+        instanceId: "other-instance",
+        profile: p,
+        preferences: prefs({ genderFilter: "female" }),
+        state: "waiting",
+        waitingSince: now - 1000 + i,
+        connectedAt: now,
+      });
+      await ts.store.addWaiting(socketId, now - 1000 + i);
+    }
+    const a = hello();
+    const b = hello();
+    await ts.store.setBlock(a.deviceId, b.deviceId, { until: now + 60_000, skipCount: 1 }, 60_000);
+    const ca = await ts.connect();
+    const cb = await ts.connect();
+    const found = next(ca, "match:found", 4000);
+    await sendHello(ca, a);
+    await sendHello(cb, b);
+    // The block is lifted behind the server's back, so no lapse is scheduled for it.
+    await ts.store.setBlock(a.deviceId, b.deviceId, { until: Date.now() - 1, skipCount: 1 }, 60_000);
+    await found;
   });
 
   test("skip while pending also ends the match", async () => {

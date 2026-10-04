@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ConfigError, loadConfig } from "../../src/config";
+import { originAllowed } from "../../src/realtime/socket";
 
 const ADMIN = "a".repeat(32);
 
@@ -109,6 +110,11 @@ describe("loadConfig", () => {
       ].sort(),
     );
     expect(() => loadConfig(env)).not.toThrow();
+    // The example says to copy it for local use, and the frontend dev server
+    // (`npm run dev` in new-frontend) runs on http://localhost:8080.
+    const { corsOrigins } = loadConfig(env);
+    expect(originAllowed("http://localhost:8080", corsOrigins)).toBe(true);
+    expect(originAllowed("http://localhost:5173", corsOrigins)).toBe(true);
   });
 
   test("TURN secret needs TURN_URLS; static credentials come in pairs", () => {
@@ -132,5 +138,16 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ TURN_SPEND_DAILY_GB: "50,40,60" })).toThrow(/TURN_SPEND_DAILY_GB/);
     expect(() => loadConfig({ TURN_SPEND_DAILY_GB: "1,2" })).toThrow(/TURN_SPEND_DAILY_GB/);
     expect(loadConfig({ TURN_SPEND_DAILY_GB: "10, 20,30" }).turnSpendDailyGb).toEqual([10, 20, 30]);
+  });
+
+  test("STUN and TURN URLs must use their scheme", () => {
+    const turn = (TURN_URLS: string) => loadConfig({ TURN_URLS, TURN_SECRET: "x" });
+    expect(() => turn("turn.example.com:3478")).toThrow(/TURN_URLS: invalid URL "turn.example.com:3478"/);
+    expect(() => turn("turn:a:3478 turn:b:3478")).toThrow(/TURN_URLS: invalid URL/);
+    expect(() => turn("stun:stun.example.com:3478")).toThrow(/TURN_URLS: invalid URL/);
+    expect(() => loadConfig({ STUN_URLS: "stun.example.com:19302" })).toThrow(/STUN_URLS: invalid URL/);
+    expect(() => loadConfig({ STUN_URLS: "turn:t:3478" })).toThrow(/STUN_URLS: invalid URL/);
+    expect(turn("turn:t:3478?transport=udp, turns:t:5349").turnUrls).toEqual(["turn:t:3478?transport=udp", "turns:t:5349"]);
+    expect(loadConfig({ STUN_URLS: "stun:s:3478,stuns:s:5349" }).stunUrls).toEqual(["stun:s:3478", "stuns:s:5349"]);
   });
 });

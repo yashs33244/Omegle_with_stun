@@ -70,9 +70,16 @@ workflow. Empty optional secrets fall back to the defaults shown.
 | `CORS_ORIGINS` | `https://chizzy.itsyash.space` | comma list of allowed browser origins (the frontend URL). The backend refuses to start in production without it |
 | `BACKEND_REPLICAS` | `2` | number of backend containers |
 | `BIND_ADDRESS` | `0.0.0.0` | host address the gateway (3004) and frontend (5173) ports bind to. Set `127.0.0.1` when the host proxy runs on the same host and connects via localhost, so the ports are not reachable around it |
+| `BACKEND_PORT`, `FRONTEND_PORT` | `3004`, `5173` | host ports of the gateway and the frontend (the host proxy must point at them) |
+| `MAX_CONNECTIONS_PER_IP` | `10` | sockets one client IP may hold on each backend replica |
+| `MATCH_ACCEPT_TIMEOUT_MS` | `30000` | how long both users have to accept a match |
+| `SHUTDOWN_GRACE_MS` | `10000` | graceful shutdown time of a replica; keep it under the 15 s compose `stop_grace_period` |
 | `REDIS_PASSWORD` | unset | optional Redis password, URL safe (`openssl rand -hex 32`) |
 | `METRICS_TOKEN` | unset | bearer token for `GET /metrics` on the replicas |
 | `LOG_LEVEL` | `info` | pino log level |
+| `MAX_CONNECTIONS_PER_IP` | `10` | Socket.IO connections allowed per client IP on each backend replica. Raise it if many users share one address (office NAT, mobile carrier NAT). Needs the real client IP, see [Behind Cloudflare](#cloudflare-in-front) |
+| `MATCH_ACCEPT_TIMEOUT_MS` | `30000` | how long both users have to accept a match |
+| `SHUTDOWN_GRACE_MS` | `10000` | how long a replica drains on stop; keep it under the 15 s `stop_grace_period` in `docker-compose.yml` |
 | `STUN_URLS` | Google public STUN | comma list |
 | `TURN_URLS`, `TURN_SECRET`, `TURN_USERNAME`, `TURN_CREDENTIAL`, `TURN_TTL_SECONDS` | unset | self-hosted TURN on a separate host only (`TURN_PROVIDER` `static` or `secret`) |
 
@@ -120,6 +127,10 @@ proxy and Docker's port publishing), so the backend sees the real client IP for
 its per-IP limits, and a client connecting directly cannot spoof it. Behind
 Cloudflare the real client IP comes from `CF-Connecting-IP`, which the gateway
 believes only when the previous hop is a Cloudflare address.
+`sh scripts/test-gateway-real-ip.sh` checks which client address and country
+the gateway passes on for each kind of forwarding chain (CI runs it). If many
+real users share one address (office or carrier NAT), raise
+`MAX_CONNECTIONS_PER_IP`.
 
 ## Cloudflare in front
 
@@ -176,14 +187,36 @@ though it also needs `ADMIN_TOKEN`.
 Migrating from the old two-container setup needs nothing special: the compose
 project name is still the directory name, so the first deploy replaces the old
 `backend` and `frontend` containers. There is no previous verified tag on the
-first run, so that deploy cannot roll back automatically.
+first run, so that deploy cannot roll back automatically. It does save the old
+`docker-compose.yml` in `.previous/`. If the first deploy fails, put the old
+setup back by hand (its `yashs3324/omegle-*:latest` images are still on the
+host, and the old compose file needs nothing from `.env`):
+
+```sh
+cd ~/Omegle_with_stun
+cp .previous/docker-compose.yml .      # or restore it from the old git checkout
+docker compose up -d --remove-orphans
+```
+
+Then fix the problem and deploy again; the next deploy installs the new files
+as usual. Never re-run a Deploy workflow run from before this setup (one
+without the "Deploy, verify and roll back on failure" step): its old script
+rewrites `.env` without the image names, runs `docker compose down` on the
+whole new stack including Redis, and prunes the sha-tagged images rollback
+needs.
+
+That first deploy also changes the socket protocol. Tabs still open on the old
+site keep sending the old events, which the new server ignores, so those users
+stay on "searching" until they reload the page. Deploy at a quiet time. From
+the second deploy on, the new client reconnects and re-queues by itself.
 
 ## What a deploy does on the host
 
 `deploy/deploy.sh <sha>` runs in `PROJECT_PATH`:
 
 1. Moves the copied `.incoming/docker-compose.yml` and `.incoming/deploy/` into
-   place, keeping the current ones in `.previous/`.
+   place, keeping the current ones in `.previous/` (when they belong to the
+   verified tag, or on the first deploy when there is no saved copy yet).
 2. Writes `.env` (mode 600) from the secrets without printing it, and sets
    `IMAGE_TAG=<sha>`.
 3. `docker compose pull`. If any image is missing it restores the previous
@@ -220,7 +253,13 @@ cat .deployed-tag                       # currently verified tag
 bash deploy/deploy.sh <older-sha>       # keeps .env secrets, only changes IMAGE_TAG
 ```
 
-Or re-run an older successful Deploy workflow run in GitHub Actions.
+This keeps the current `docker-compose.yml` and `deploy/`, so it only works
+when the older sha used the same compose file and gateway config. To roll back
+across a change to either, re-run that commit's successful Deploy workflow run
+in GitHub Actions instead: it copies that commit's files and deploys its
+images. Only re-run runs made with this setup (they have the "Deploy, verify
+and roll back on failure" step). Never re-run a run from before it; see
+First-time setup.
 
 ## Health checks
 
@@ -242,9 +281,13 @@ cd ~/Omegle_with_stun
 docker compose ps
 docker compose logs -f --tail=100 backend      # all replicas
 docker compose logs -f gateway frontend redis
-docker compose up -d                           # re-apply after editing .env by hand
+docker compose up -d                           # re-apply after editing .env by hand (lost on the next deploy; set a secret)
 bash scripts/backup-redis.sh                   # Redis snapshot (and S3 upload when BACKUP_S3_URI is set)
 ```
+
+Every workflow deploy rewrites `.env` from the GitHub secrets, so a hand edit
+only lasts until the next push to `new-v`. To change a setting for good, set
+its secret.
 
 Container logs rotate at 10 MB x 3 files per container. Backend logs are JSON
 (pino) and never contain names, photos or chat text. CERT-In requires 180 days

@@ -63,8 +63,6 @@ export interface SignalingState {
   partnerAccepted: boolean;
   /** Accept deadline in the LOCAL clock (corrected for server clock skew). */
   expiresAt: number | null;
-  /** Local time when call:start arrived, for the call timer. */
-  callStartedAt: number | null;
   coins: number | null;
   /** Increments on every positive coins:update so the UI can animate. */
   coinBump: number;
@@ -90,7 +88,6 @@ export const initialSignalingState: SignalingState = {
   initiator: null,
   partnerAccepted: false,
   expiresAt: null,
-  callStartedAt: null,
   coins: null,
   coinBump: 0,
   iceServers: [],
@@ -121,7 +118,7 @@ export type SignalingEvent =
     }
   | { type: "local-accept" }
   | { type: "partner-accepted"; roomId: string }
-  | { type: "call-start"; roomId: string; initiator: boolean; at: number; media?: CallMedia }
+  | { type: "call-start"; roomId: string; initiator: boolean; media?: CallMedia }
   | { type: "match-ended"; roomId: string; reason: MatchEndReason }
   | { type: "chat-received"; roomId: string; id: string; text: string; ts: number }
   | { type: "chat-local"; roomId: string; tempId: string; text: string; ts: number }
@@ -159,7 +156,6 @@ function clearRoom(state: SignalingState): SignalingState {
     initiator: null,
     partnerAccepted: false,
     expiresAt: null,
-    callStartedAt: null,
     callMedia: null,
     matchMode: null,
     messages: [],
@@ -194,10 +190,11 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
     }
 
     case "hello-failed":
-      if (event.error === "banned") return { ...clearRoom(state), status: "banned" };
+      if (event.error === "banned") return { ...clearRoom(state), status: "banned", reconnecting: false };
       return {
         ...clearRoom(state),
         status: "error",
+        reconnecting: false,
         error: event.message ?? event.error,
       };
 
@@ -233,7 +230,6 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
         initiator: event.initiator,
         partnerAccepted: true,
         expiresAt: null,
-        callStartedAt: event.at,
         callMedia: event.media ?? null,
       };
 
@@ -359,6 +355,8 @@ export interface Signaling {
   ) => Promise<ReportAck>;
   updatePreferences: (preferences: Preferences) => Promise<SimpleAck>;
   sendSignal: (signal: RtcSignal) => void;
+  /** Tell the server this call's peer connection is up (once per room); coins count from then. */
+  reportConnected: () => void;
   /** Subscribe to rtc:signal for a room. Signals that arrived before subscribing are replayed. */
   subscribeSignals: (roomId: string, listener: SignalListener) => () => void;
   /** Drop the socket and connect again (after an error). */
@@ -497,7 +495,6 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
         type: "call-start",
         roomId: p.roomId,
         initiator: p.initiator,
-        at: Date.now(),
         media: {
           iceServers: p.iceServers,
           maxBitrateKbps: p.maxBitrateKbps,
@@ -563,9 +560,11 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
   };
 
   const accept = useCallback(() => {
-    const { roomId, status } = stateRef.current;
+    const { roomId, status, expiresAt } = stateRef.current;
     const socket = connectedSocket();
     if (!socket || !roomId || status !== "match-found") return;
+    // The countdown hit 0: the server ends this match, so do not show a spinner for it.
+    if (expiresAt !== null && Date.now() >= expiresAt) return;
     socket.emit("match:accept", { roomId });
     dispatch({ type: "local-accept" });
   }, []);
@@ -577,8 +576,17 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
     socket.emit("match:decline", { roomId });
   }, []);
 
+  // call:skip carries no roomId and the server skips whatever room we are in now,
+  // so a second click (or the auto-skip timer) would skip the next, unseen match.
+  // A pending match can be skipped too (Next while an instant call connects, Esc on the card).
+  const skippedRoom = useRef<string | null>(null);
   const skip = useCallback(() => {
-    connectedSocket()?.emit("call:skip");
+    const socket = connectedSocket();
+    const { roomId, status } = stateRef.current;
+    const inRoom = status === "in-call" || status === "match-found" || status === "starting-call";
+    if (!socket || !roomId || !inRoom || skippedRoom.current === roomId) return;
+    skippedRoom.current = roomId;
+    socket.emit("call:skip");
   }, []);
 
   const emitTyping = useCallback((typing: boolean) => {
@@ -668,6 +676,15 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
     connectedSocket()?.emit("rtc:signal", signal);
   }, []);
 
+  const reportedConnected = useRef<string | null>(null);
+  const reportConnected = useCallback(() => {
+    const socket = connectedSocket();
+    const { roomId, status } = stateRef.current;
+    if (!socket || !roomId || status !== "in-call" || reportedConnected.current === roomId) return;
+    reportedConnected.current = roomId;
+    socket.emit("call:connected", { roomId });
+  }, []);
+
   const subscribeSignals = useCallback((roomId: string, listener: SignalListener) => {
     signalListeners.current.set(roomId, listener);
     const replay = pendingSignals.current.filter((s) => s.roomId === roomId);
@@ -711,6 +728,7 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
     report,
     updatePreferences,
     sendSignal,
+    reportConnected,
     subscribeSignals,
     retry,
     subscribe,

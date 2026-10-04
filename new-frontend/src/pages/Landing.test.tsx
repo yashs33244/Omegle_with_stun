@@ -79,6 +79,24 @@ describe("Landing profile validation", () => {
     expect(within(dialog).queryByText("Enter your name.")).not.toBeInTheDocument();
   });
 
+  it("reserves the name error line so showing it does not shift the controls below", async () => {
+    const { user, dialog } = await openDetails();
+    const name = within(dialog).getByTestId("name-input");
+    expect(name).toHaveFocus();
+    const slot = dialog.querySelector("#profile-name-error");
+    expect(slot).toBeInTheDocument();
+    expect(slot).toHaveClass("min-h-4");
+    expect(slot).toBeEmptyDOMElement();
+    expect(name).not.toHaveAttribute("aria-describedby");
+
+    // Blurring the empty name fills the same element instead of inserting a new one.
+    await user.click(within(dialog).getByTestId("topic-music"));
+    expect(dialog.querySelector("#profile-name-error")).toBe(slot);
+    expect(slot).toHaveTextContent("Enter your name.");
+    expect(name).toHaveAttribute("aria-describedby", "profile-name-error");
+    expect(within(dialog).getByTestId("topic-music")).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("requires at least one topic", async () => {
     const { user, dialog } = await openDetails();
     await user.type(within(dialog).getByTestId("name-input"), "Asha");
@@ -111,11 +129,14 @@ describe("Landing profile validation", () => {
 
     const gender = within(dialog).getByTestId("gender-select");
     expect(gender).toHaveTextContent("Prefer not to say");
+    // Screen readers hear the current value with the label, not just "Gender".
+    expect(gender).toHaveAccessibleName("Gender Prefer not to say");
     await user.click(gender);
     const options = within(dialog).getAllByRole("option");
     expect(options.map((o) => o.textContent)).toEqual(["Male", "Female", "Other", "Prefer not to say"]);
     await user.click(within(dialog).getByRole("option", { name: "Female" }));
     expect(gender).toHaveTextContent("Female");
+    expect(gender).toHaveAccessibleName("Gender Female");
 
     await user.click(within(dialog).getByTestId("topic-music"));
     await user.click(within(dialog).getByTestId("begin-chat"));
@@ -141,6 +162,23 @@ describe("Landing profile validation", () => {
     expect(screen.getByRole("dialog")).toBeInTheDocument();
 
     await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
+  it("a press outside the dialog closes an open dropdown first, then the dialog", async () => {
+    const { user, dialog } = await openDetails();
+    const overlay = dialog.previousElementSibling as HTMLElement;
+    expect(overlay).toHaveAttribute("data-state", "open");
+    expect(overlay).not.toHaveAttribute("role");
+
+    await user.click(within(dialog).getByTestId("gender-select"));
+    expect(within(dialog).getByRole("listbox")).toBeInTheDocument();
+
+    await user.click(overlay);
+    expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    await user.click(overlay);
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
@@ -192,6 +230,56 @@ describe("Landing photo capture", () => {
     expect(roomProps.current?.profile.photo).toBe(jpeg);
   });
 
+  it("binds the camera to the preview again after Take a Photo remounts it", async () => {
+    const { stream } = fakeStream();
+    getUserMedia.mockResolvedValueOnce(stream);
+    const { user, dialog } = await openDetails();
+
+    await user.click(within(dialog).getByRole("button", { name: "Take a Photo" }));
+
+    const video = within(dialog).getByLabelText("Camera preview") as HTMLVideoElement;
+    await waitFor(() => expect(video.srcObject).toBe(stream));
+  });
+
+  it("keeps the current photo when a retake is abandoned, and drops it only on skip", async () => {
+    const jpeg = "data:image/jpeg;base64,QUJD";
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(jpeg);
+
+    const { user, dialog, video } = await openCapture();
+    Object.defineProperty(video, "videoWidth", { configurable: true, value: 1280 });
+    Object.defineProperty(video, "videoHeight", { configurable: true, value: 720 });
+    fireEvent.loadedData(video);
+    await user.click(within(dialog).getByTestId("capture-photo"));
+    expect(await within(dialog).findByAltText("Your profile photo")).toHaveAttribute("src", jpeg);
+
+    // Retake, then close the dialog without taking a new photo.
+    await user.click(within(dialog).getByRole("button", { name: "Retake Photo" }));
+    expect(within(dialog).getByTestId("capture-photo")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Edit profile photo and details" }).querySelector("img")).toHaveAttribute(
+      "src",
+      jpeg,
+    );
+
+    // Reopening goes straight to the details with the photo kept.
+    await user.click(screen.getByTestId("start-chat"));
+    const reopened = await screen.findByRole("dialog");
+    expect(within(reopened).getByAltText("Your profile photo")).toHaveAttribute("src", jpeg);
+
+    // Choosing to continue without a photo is what removes it.
+    await user.click(within(reopened).getByRole("button", { name: "Retake Photo" }));
+    await user.click(within(reopened).getByTestId("skip-photo"));
+    expect(within(reopened).queryByAltText("Your profile photo")).not.toBeInTheDocument();
+    expect(within(reopened).getByRole("button", { name: "Take a Photo" })).toBeInTheDocument();
+    await user.type(within(reopened).getByTestId("name-input"), "Asha");
+    await user.click(within(reopened).getByTestId("begin-chat"));
+    expect(roomProps.current?.profile.photo).toBeUndefined();
+  });
+
   it("shows why a capture failed instead of failing silently", async () => {
     const { user, dialog, video } = await openCapture();
     // loadeddata fired but the frame size is still unknown.
@@ -199,6 +287,30 @@ describe("Landing photo capture", () => {
     await user.click(within(dialog).getByTestId("capture-photo"));
     expect(within(dialog).getByRole("alert")).toHaveTextContent("not showing a picture yet");
     expect(within(dialog).getByTestId("capture-photo")).toBeInTheDocument();
+  });
+});
+
+describe("Landing home settings", () => {
+  it("names the language and country pickers by label and current value", async () => {
+    render(<Landing />);
+    expect(await screen.findByRole("button", { name: "Language English" })).toHaveTextContent("English");
+    expect(screen.getByRole("button", { name: /^Country .*India$/ })).toHaveTextContent("India");
+  });
+
+  it("closes an open dropdown when Start is clicked", async () => {
+    const user = userEvent.setup();
+    render(<Landing />);
+    const start = await screen.findByTestId("start-chat");
+    await waitFor(() => expect(start).toBeEnabled());
+
+    const country = screen.getByRole("button", { name: /^Country/ });
+    await user.click(country);
+    expect(screen.getByRole("listbox", { name: "Country" })).toBeInTheDocument();
+
+    await user.click(start);
+    expect(screen.queryByRole("listbox", { name: "Country" })).not.toBeInTheDocument();
+    expect(country).toHaveAttribute("aria-expanded", "false");
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
   });
 });
 
@@ -239,5 +351,8 @@ describe("Landing camera handling", () => {
     await waitFor(() => expect(screen.getByTestId("start-chat")).toBeEnabled());
     expect(getUserMedia).toHaveBeenCalledTimes(2);
     second.tracks.forEach((t) => expect(t.stop).not.toHaveBeenCalled());
+    // The remounted home background shows the new camera stream.
+    const background = document.querySelector("video") as HTMLVideoElement;
+    await waitFor(() => expect(background.srcObject).toBe(second.stream));
   });
 });

@@ -7,7 +7,20 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import type { Session } from "../../src/store/MatchStore";
 import { MemoryStore } from "../../src/store/MemoryStore";
-import { delay, hello, next, prefs, profile, record, sendHello, startServer, type TestServer } from "../helpers";
+import {
+  arrives,
+  delay,
+  hello,
+  matchedPair,
+  next,
+  prefs,
+  profile,
+  record,
+  sendHello,
+  startServer,
+  type Client,
+  type TestServer,
+} from "../helpers";
 
 let ts: TestServer | undefined;
 afterEach(async () => {
@@ -34,6 +47,25 @@ async function foreignWaiter(store: MemoryStore, instanceId: string): Promise<Se
   await store.setDeviceSocket(session.deviceId, session.socketId);
   await store.addWaiting(session.socketId, session.waitingSince!);
   return session;
+}
+
+/** A memory store whose getSession fails once for chosen sockets, like a Redis blip. */
+class FlakyStore extends MemoryStore {
+  readonly failOnce = new Set<string>();
+  override async getSession(socketId: string): Promise<Session | null> {
+    if (this.failOnce.delete(socketId)) throw new Error("simulated store failure");
+    return super.getSession(socketId);
+  }
+}
+
+/** Disconnects `client` and resolves once the server's disconnect cleanup hit the planted failure. */
+async function disconnectWithFailedCleanup(store: FlakyStore, client: Client): Promise<string> {
+  const socketId = client.id!;
+  store.failOnce.add(socketId);
+  client.disconnect();
+  for (let i = 0; i < 100 && store.failOnce.has(socketId); i++) await delay(5);
+  expect(store.failOnce.has(socketId)).toBe(false);
+  return socketId;
 }
 
 describe("instances", () => {
@@ -82,6 +114,65 @@ describe("instances", () => {
     await store.deleteSession(c.id!);
     await shutdown;
     expect(await disconnected).toBe("io server disconnect");
+  });
+
+  test("a session left behind by a failed disconnect cleanup is removed and never matched", async () => {
+    const store = new FlakyStore();
+    ts = await startServer({ heartbeatIntervalMs: 30 }, store);
+    const a = await ts.connect();
+    await sendHello(a, hello());
+    const ghostId = await disconnectWithFailedCleanup(store, a);
+    // Several reconcile periods.
+    await delay(150);
+    expect(await store.getSession(ghostId)).toBeNull();
+    expect(await store.listWaiting()).toEqual([]);
+
+    const b = await ts.connect();
+    const found = arrives(b, "match:found", 300);
+    await sendHello(b, hello());
+    expect(await found).toBe(false);
+    expect(await store.listWaiting()).toEqual([b.id!]);
+  });
+
+  test("the partner of a session left behind by a failed disconnect cleanup is told and re-queued", async () => {
+    const store = new FlakyStore();
+    // A long accept window: the partner must hear about it well before the timeout.
+    ts = await startServer({ heartbeatIntervalMs: 30, matchAcceptTimeoutMs: 5000 }, store);
+    const { ca, cb, roomId } = await matchedPair(ts);
+    const ended = next(cb, "match:ended", 1000);
+    const ghostId = await disconnectWithFailedCleanup(store, ca);
+    expect(await ended).toEqual({ roomId, reason: "partner-left" });
+    await delay(30);
+    expect(await store.getSession(ghostId)).toBeNull();
+    expect(await store.listWaiting()).toEqual([cb.id!]);
+  });
+
+  test("graceful close matches the partners it re-queues with each other", async () => {
+    const store = new MemoryStore();
+    // The survivor rechecks its queue only once, at its first sweep.
+    ts = await startServer({ recheckIntervalMs: 60_000, matchAcceptTimeoutMs: 5000 }, store);
+    await delay(60);
+    const dying = await startServer({ matchAcceptTimeoutMs: 5000 }, store);
+    try {
+      const partners: string[] = [];
+      for (let i = 0; i < 2; i++) {
+        // Each survivor client waits, then a client of the dying server pairs with it.
+        const p = await ts.connect();
+        await sendHello(p, hello());
+        const d = await dying.connect();
+        const found = next(d, "match:found");
+        await sendHello(d, hello());
+        await found;
+        expect((await store.getSession(p.id!))?.state).toBe("pending");
+        partners.push(p.id!);
+      }
+      await dying.close();
+      const states = await Promise.all(partners.map(async (id) => (await store.getSession(id))?.state));
+      expect(states).toEqual(["pending", "pending"]);
+      expect(await store.listWaiting()).toEqual([]);
+    } finally {
+      await dying.close();
+    }
   });
 
   test("graceful close forgets the instance", async () => {

@@ -18,6 +18,14 @@ describe("TokenBucket", () => {
     expect(bucket.take(10_000)).toBe(false); // capped at 2
   });
 
+  test("reports when it has refilled to capacity", () => {
+    const bucket = new TokenBucket({ capacity: 2, refillPerSec: 1 }, 0);
+    expect(bucket.full(0)).toBe(true);
+    bucket.take(0);
+    expect(bucket.full(500)).toBe(false);
+    expect(bucket.full(1000)).toBe(true);
+  });
+
   test("a clock going backwards does not mint tokens", () => {
     const bucket = new TokenBucket({ capacity: 1, refillPerSec: 1 }, 1000);
     expect(bucket.take(1000)).toBe(true);
