@@ -42,7 +42,7 @@ export const MatchPrompt: React.FC<MatchPromptProps> = ({
 
   return (
     <div className="w-full h-full bg-black flex items-center justify-center relative" style={{ zIndex: 3 }}>
-      {partner.photo ? (
+      {partner.photo?.startsWith("data:image/") ? (
         <img
           src={partner.photo}
           alt={`${partner.name}'s photo`}
@@ -65,7 +65,7 @@ export const MatchPrompt: React.FC<MatchPromptProps> = ({
       {/* Partner info overlay */}
       <div className="absolute bottom-4 left-4 bg-black bg-opacity-80 backdrop-blur-sm text-white px-4 py-2 rounded-full flex items-center gap-2">
         <UserRound className="w-4 h-4" />
-        <span className="text-sm font-medium">{partner.name}</span>
+        <span className="text-sm font-medium truncate min-w-0 max-w-[10rem]">{partner.name}</span>
         {country && <span className="text-sm">{country.flag}</span>}
       </div>
 

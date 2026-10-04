@@ -39,7 +39,7 @@ const NameBadge: React.FC<{ name: string; country: string }> = ({ name, country 
   return (
     <div className="bg-black bg-opacity-80 backdrop-blur-sm text-white px-4 py-2 rounded-full flex items-center gap-2">
       <UserRound className="w-4 h-4" />
-      <span className="text-sm font-medium">{name}</span>
+      <span className="text-sm font-medium truncate min-w-0 max-w-[10rem]">{name}</span>
       {countryData && <span className="text-sm">{countryData.flag}</span>}
     </div>
   );

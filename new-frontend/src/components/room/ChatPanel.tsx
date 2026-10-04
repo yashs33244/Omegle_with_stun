@@ -109,7 +109,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               >
                 <div
                   data-testid="chat-message"
-                  className={`max-w-xs px-3 py-2 rounded-lg text-sm break-words whitespace-pre-wrap ${
+                  className={`max-w-[85%] min-w-0 px-3 py-2 rounded-lg text-sm [overflow-wrap:anywhere] whitespace-pre-wrap ${
                     message.from === "me" ? "bg-yellow-500 text-black" : "bg-gray-700 text-white"
                   } ${message.delivery === "pending" ? "opacity-70" : ""}`}
                 >
