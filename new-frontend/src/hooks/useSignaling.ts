@@ -95,6 +95,7 @@ export const initialSignalingState: SignalingState = {
 
 export type SignalingEvent =
   | { type: "socket-disconnected" }
+  | { type: "connect-failed" }
   | { type: "hello-ok"; coins: number; iceServers: IceServer[] }
   | { type: "hello-failed"; error: ErrorCode | "timeout"; message?: string }
   | { type: "queue-waiting" }
@@ -161,6 +162,11 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
     case "socket-disconnected":
       // The WebRTC call is torn down with the room; the next hello re-queues us.
       return { ...clearRoom(state), status: "connecting", reconnecting: true };
+
+    case "connect-failed":
+      // socket.io keeps retrying on its own; tell the user why nothing happens.
+      if (state.status !== "connecting") return state;
+      return { ...state, error: "Cannot reach the server. Retrying..." };
 
     case "hello-ok": {
       const busy = state.status !== "connecting" && state.status !== "error";
@@ -393,6 +399,10 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
       dispatch({ type: "socket-disconnected" });
       // A server-initiated disconnect (deploy, shutdown) is not retried by socket.io itself.
       if (reason === "io server disconnect") socket.connect();
+    });
+
+    socket.on("connect_error", () => {
+      if (!stopped) dispatch({ type: "connect-failed" });
     });
 
     socket.on("queue:waiting", () => dispatch({ type: "queue-waiting" }));

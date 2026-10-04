@@ -201,6 +201,17 @@ describe("signalingReducer", () => {
     expect(s.messages).toHaveLength(1);
   });
 
+  it("a failed connect explains itself until the hello succeeds", () => {
+    let s = run([{ type: "connect-failed" }]);
+    expect(s.status).toBe("connecting");
+    expect(s.error).toMatch(/Cannot reach the server/);
+    s = run([hello], s);
+    expect(s.error).toBeNull();
+    // Once matched, a later connect error does not overwrite the state.
+    const matched = run([hello, found]);
+    expect(run([{ type: "connect-failed" }], matched)).toBe(matched);
+  });
+
   it("queue:waiting resets any room state", () => {
     const s = run([hello, found, { type: "queue-waiting" }]);
     expect(s.status).toBe("waiting");

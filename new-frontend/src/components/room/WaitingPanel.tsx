@@ -100,6 +100,7 @@ export const WaitingPanel: React.FC<WaitingPanelProps> = ({
           {reconnecting && (
             <p className="text-sm text-gray-300">Lost the connection to the server. Your call has ended.</p>
           )}
+          {error && <p className="text-sm text-orange-300">{error}</p>}
         </div>
       </Shell>
     );
