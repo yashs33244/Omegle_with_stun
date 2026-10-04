@@ -673,6 +673,11 @@ export class MatchService {
       if (s && s.state === "waiting") waiting.push(s);
       else await this.store.removeWaiting(ids[i]!); // stale entry
     }
+    if (mode === "recheck") {
+      // Forget lapse times of sessions that left the queue (possibly on another instance).
+      const queued = new Set(waiting.map((s) => s.socketId));
+      for (const socketId of this.wakeAt.keys()) if (!queued.has(socketId)) this.wakeAt.delete(socketId);
+    }
     if (waiting.length < 2) return;
     if (focus && mode === "recheck") this.addRecheckSlice(waiting, focus);
     if (focus && focus.size === 0) return;
