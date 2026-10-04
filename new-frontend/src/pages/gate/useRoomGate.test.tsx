@@ -1,5 +1,6 @@
+import { useCallback, useMemo, useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen } from "@testing-library/react";
+import { act, render, screen, waitFor } from "@testing-library/react";
 import { initialSignalingState, type Signaling, type SignalingState } from "@/hooks/useSignaling";
 import { resetObservabilityForTests, setCaptureForTests } from "@/lib/observability";
 import type { PublicConfig, Restriction, ServerToClientEvents } from "@/lib/protocol";
@@ -109,5 +110,40 @@ describe("useRoomGate", () => {
     rerender({ status: "waiting" });
     rerender({ status: "match-found" });
     expect(events).toEqual(["first_match", "match_accepted", "call_connected"]);
+  });
+
+  it("re-reads the config once per refused hello, even though that changes the gate context", async () => {
+    const refreshes = vi.fn();
+    const Provider = ({ children }: { children: React.ReactNode }) => {
+      const [cfg, setCfg] = useState(config);
+      const refreshConfig = useCallback(async () => {
+        refreshes();
+        const next = { ...config };
+        setCfg(next);
+        return next;
+      }, []);
+      const setBanner = useCallback(() => {}, []);
+      const showRestriction = useCallback(() => {}, []);
+      const value = useMemo(
+        () => ({ config: cfg, setBanner, showRestriction, refreshConfig }),
+        [cfg, setBanner, showRestriction, refreshConfig],
+      );
+      return <GateContext.Provider value={value}>{children}</GateContext.Provider>;
+    };
+    const Harness = () => {
+      useRoomGate(
+        { state: { ...initialSignalingState, status: "error" }, subscribe: () => () => {}, retry: () => {} },
+        { onLeave: () => {}, connected: false },
+      );
+      return null;
+    };
+    render(
+      <Provider>
+        <Harness />
+      </Provider>,
+    );
+    await waitFor(() => expect(refreshes).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 50));
+    expect(refreshes).toHaveBeenCalledTimes(1);
   });
 });

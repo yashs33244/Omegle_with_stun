@@ -220,15 +220,15 @@ export const Gate: React.FC<GateProps> = ({ children, api = defaultApi, fingerpr
     }
   };
 
+  const showRestriction = useCallback(
+    (restriction: Restriction) => leave({ kind: "restricted", restriction }),
+    [leave],
+  );
+
+  // Every function in here is stable; only `config` changes the value.
   const contextValue = useMemo<GateContextValue | null>(
-    () =>
-      config && {
-        config,
-        setBanner,
-        showRestriction: (restriction) => leave({ kind: "restricted", restriction }),
-        refreshConfig: loadConfig,
-      },
-    [config, loadConfig, leave],
+    () => config && { config, setBanner, showRestriction, refreshConfig: loadConfig },
+    [config, showRestriction, loadConfig],
   );
 
   const form = (state: FormState) => (

@@ -27,16 +27,20 @@ export function useRoomGate(
   { onLeave, connected }: RoomGateOptions,
 ): { overlay: React.ReactNode } {
   const gate = useGate();
+  // Stable functions only: the context value changes whenever the config is re-read.
+  const setBanner = gate?.setBanner;
+  const showRestriction = gate?.showRestriction;
+  const refreshConfig = gate?.refreshConfig;
   const { state, subscribe, retry } = signaling;
   const [closed, setClosed] = useState<ClosedInfo | null>(null);
   const statusRef = useRef(state.status);
   statusRef.current = state.status;
 
   useEffect(() => {
-    if (!gate) return;
+    if (!setBanner || !showRestriction) return;
     const offs = [
-      subscribe("server:banner", (p) => gate.setBanner(p.message)),
-      subscribe("session:restricted", (p) => gate.showRestriction(p.restriction)),
+      subscribe("server:banner", (p) => setBanner(p.message)),
+      subscribe("session:restricted", (p) => showRestriction(p.restriction)),
       subscribe("matching:status", (p) => {
         if (!p.open) {
           setClosed({ reopensAt: p.reopensAt, message: p.message });
@@ -48,22 +52,22 @@ export function useRoomGate(
       }),
     ];
     return () => offs.forEach((off) => off());
-  }, [gate, subscribe, retry]);
+  }, [setBanner, showRestriction, subscribe, retry]);
 
   // A refused hello: find out whether matching is closed, to explain it properly.
   useEffect(() => {
-    if (state.status !== "error" || !gate) return;
+    if (state.status !== "error" || !refreshConfig) return;
     let cancelled = false;
-    void gate.refreshConfig().then((config) => {
+    void refreshConfig().then((config) => {
       if (!cancelled && config && !config.matchingOpen) setClosed({ reopensAt: config.reopensAt, message: null });
     });
     return () => {
       cancelled = true;
     };
-  }, [state.status, gate]);
+  }, [state.status, refreshConfig]);
 
   const reopenCheck = () => {
-    void gate?.refreshConfig().then((config) => {
+    void refreshConfig?.().then((config) => {
       if (!config?.matchingOpen) return;
       setClosed(null);
       if (statusRef.current === "error") retry();
