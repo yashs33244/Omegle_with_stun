@@ -45,7 +45,7 @@ workflow. Empty optional secrets fall back to the defaults shown.
 | `REDIS_PASSWORD` | unset | optional Redis password, URL safe (`openssl rand -hex 32`) |
 | `METRICS_TOKEN` | unset | bearer token for `GET /metrics` on the replicas |
 | `LOG_LEVEL` | `info` | pino log level |
-| `MAX_CONNECTIONS_PER_IP` | `10` | Socket.IO connections allowed per client IP on each backend replica. Raise it if many users share one address (office NAT, mobile carrier NAT) |
+| `MAX_CONNECTIONS_PER_IP` | `10` | Socket.IO connections allowed per client IP on each backend replica. Raise it if many users share one address (office NAT, mobile carrier NAT). Needs the real client IP, see [Behind Cloudflare](#behind-cloudflare) |
 | `MATCH_ACCEPT_TIMEOUT_MS` | `30000` | how long both users have to accept a match |
 | `SHUTDOWN_GRACE_MS` | `10000` | how long a replica drains on stop; keep it under the 15 s `stop_grace_period` in `docker-compose.yml` |
 | `STUN_URLS` | Google public STUN | comma list |
@@ -72,14 +72,59 @@ reviewers to the `production` environment if deploys should need approval.
   - `chizzy.itsyash.space` -> `http://127.0.0.1:5173`
   - `chizzyapi.itsyash.space` -> `http://127.0.0.1:3004`, with websocket upgrade
     (`Upgrade` and `Connection` headers), a read timeout of at least a few
-    minutes, and `X-Forwarded-For` / `X-Forwarded-Proto` set.
+    minutes, `X-Forwarded-For` set to the visitor's address (see
+    [Behind Cloudflare](#behind-cloudflare)) and `X-Forwarded-Proto` set.
 - Security group: 80 and 443 open to the world, 22 to where you deploy from.
   Ports 3004 and 5173 do not need to be public (set `BIND_ADDRESS=127.0.0.1`).
   For coturn: 3478 tcp+udp and 49160-49200 udp.
 
 The gateway trusts `X-Forwarded-For` only from private addresses (the host
-proxy and Docker's port publishing), so the backend sees the real client IP for
-its per-IP limits, and a client connecting directly cannot spoof it.
+proxy and Docker's port publishing), so a client connecting directly cannot
+spoof it. The backend's per-IP limits (`MAX_CONNECTIONS_PER_IP`) therefore see
+whatever address the host proxy passes on, which must be the visitor's.
+
+### Behind Cloudflare
+
+`chizzy.itsyash.space` and `chizzyapi.itsyash.space` are proxied by
+Cloudflare, so the host proxy's peer is a Cloudflare edge server, not the
+visitor. If the host proxy forwards that peer address, the gateway takes the
+edge address as the client IP. Every visitor routed through the same edge then
+shares one `MAX_CONNECTIONS_PER_IP` budget (default 10) per replica, and new
+connections are refused once it is used up.
+
+Restore the visitor's address in the host proxy before it reaches the gateway.
+With nginx (the realip module is included in the Ubuntu and Debian packages):
+
+```sh
+# Cloudflare's published ranges (https://www.cloudflare.com/ips/); re-run if they change.
+for r in $(curl -fsS https://www.cloudflare.com/ips-v4) $(curl -fsS https://www.cloudflare.com/ips-v6); do
+  echo "set_real_ip_from $r;"
+done | sudo tee /etc/nginx/cloudflare-realip.conf
+```
+
+```nginx
+# In the server block for chizzyapi.itsyash.space:
+include /etc/nginx/cloudflare-realip.conf;
+real_ip_header CF-Connecting-IP;
+
+location / {
+    proxy_pass http://127.0.0.1:3004;
+    # $remote_addr is now the visitor's address; pass only that on.
+    proxy_set_header X-Forwarded-For $remote_addr;
+    # ... plus the Upgrade, Connection, X-Forwarded-Proto and timeout settings above
+}
+```
+
+Then `sudo nginx -t && sudo systemctl reload nginx`. `CF-Connecting-IP` is
+only honoured from Cloudflare's ranges, so a client that reaches the host
+directly cannot spoof it. The gateway config does not change.
+
+Check it after the change, whatever the setup (a Cloudflare Tunnel needs the
+same result): `docker compose logs --tail=20 gateway` must show visitor
+addresses, not Cloudflare ones and not `127.0.0.1` or Docker network
+addresses (172.16.0.0/12).
+If many real users share one address (office or carrier NAT), raise
+`MAX_CONNECTIONS_PER_IP`.
 
 ## First-time setup
 
