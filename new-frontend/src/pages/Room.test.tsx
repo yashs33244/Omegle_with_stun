@@ -1,6 +1,6 @@
 import React, { useCallback, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { Preferences, Profile } from "@/lib/protocol";
 import { initialSignalingState, type SignalingState } from "@/hooks/useSignaling";
 import type { PeerConnectionState } from "@/hooks/usePeerConnection";
@@ -135,5 +135,54 @@ describe("Room text-only mode", () => {
     rerender(<Harness micChanges={micChanges} cameraChanges={cameraChanges} />);
     expect(micChanges.at(-1)).toBe(true);
     expect(screen.getByRole("button", { name: /Text Only/ })).toBeInTheDocument();
+  });
+});
+
+describe("Room when the call connection fails", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    signalingState = inCall();
+    peerState = { remoteStream: null, remoteAudioTrack: null, connectionState: "failed", quality: "DISCONNECTED" };
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it("shows the error and skips by itself after 10 s on the initiator", () => {
+    renderRoom();
+    expect(screen.getByRole("alert")).toHaveTextContent("Couldn't connect the video");
+    act(() => vi.advanceTimersByTime(9_900));
+    expect(skip).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(100));
+    expect(skip).toHaveBeenCalledTimes(1);
+  });
+
+  it("waits longer on the answering side, so the initiator normally skips first", () => {
+    signalingState = inCall({ initiator: false });
+    renderRoom();
+    act(() => vi.advanceTimersByTime(10_000));
+    expect(skip).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(4_000));
+    expect(skip).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not skip when the connection recovers (after the ICE restart)", () => {
+    const { micChanges, cameraChanges, rerender } = renderRoom();
+    act(() => vi.advanceTimersByTime(5_000));
+    peerState = { ...peerState, connectionState: "connected", quality: "GOOD" };
+    rerender(<Harness micChanges={micChanges} cameraChanges={cameraChanges} />);
+    act(() => vi.advanceTimersByTime(20_000));
+    expect(skip).not.toHaveBeenCalled();
+  });
+
+  it("does not skip a user who is chatting in text-only mode", () => {
+    peerState = { ...peerState, connectionState: "connected", quality: "GOOD" };
+    const { micChanges, cameraChanges, rerender } = renderRoom();
+    fireEvent.click(screen.getByRole("button", { name: /Text Only/ }));
+    peerState = { ...peerState, connectionState: "failed", quality: "DISCONNECTED" };
+    rerender(<Harness micChanges={micChanges} cameraChanges={cameraChanges} />);
+    act(() => vi.advanceTimersByTime(20_000));
+    expect(skip).not.toHaveBeenCalled();
   });
 });

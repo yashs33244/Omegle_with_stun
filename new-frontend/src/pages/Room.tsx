@@ -27,6 +27,14 @@ export interface RoomProps {
   onBackToHome: () => void;
 }
 
+/**
+ * A call whose connection stays failed this long is skipped automatically
+ * (the initiator has already tried one ICE restart by then). The answering
+ * side waits longer, so normally only one side skips and the other is told.
+ */
+const FAILED_SKIP_MS = 10_000;
+const FAILED_SKIP_STAGGER_MS = 4_000;
+
 const NOTICE_TEXT: Partial<Record<ErrorCode, string>> = {
   rate_limited: "Slow down a little, you are sending too fast.",
   not_in_room: "That call has already ended.",
@@ -184,6 +192,14 @@ export const Room: React.FC<RoomProps> = ({
   };
 
   const connectionFailed = inCall && peer.connectionState === "failed";
+  // Text chat still works without media, so a user in text-only mode is never skipped for it.
+  const autoSkip = connectionFailed && !textOnlyMode;
+  const { skip } = signaling;
+  useEffect(() => {
+    if (!autoSkip) return;
+    const t = setTimeout(skip, FAILED_SKIP_MS + (state.initiator ? 0 : FAILED_SKIP_STAGGER_MS));
+    return () => clearTimeout(t);
+  }, [autoSkip, state.initiator, skip]);
   // Length of the border beam: whatever is left of the accept window when the match arrives.
   const beamSeconds = useMemo(
     () => (state.expiresAt !== null ? Math.max(0, (state.expiresAt - Date.now()) / 1000) : 0),
@@ -323,7 +339,9 @@ export const Room: React.FC<RoomProps> = ({
                 <div className="text-center text-white space-y-4 px-4">
                   <WifiOff className="w-12 h-12 text-red-400 mx-auto" />
                   <p className="text-lg font-medium">Couldn't connect the video</p>
-                  <p className="text-sm text-gray-300">Your networks could not reach each other.</p>
+                  <p className="text-sm text-gray-300">
+                    Your networks could not reach each other. Skipping to someone else in a few seconds.
+                  </p>
                   <button type="button" onClick={signaling.skip} className="retro-button">
                     Skip to someone else
                   </button>
