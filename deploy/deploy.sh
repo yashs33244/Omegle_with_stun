@@ -14,17 +14,22 @@
 #
 # State kept next to .env:
 #   .deployed-tag  last tag that passed verification (the rollback target)
-#   .previous/     compose file and deploy/ that belong to that tag
+#   .previous/     compose file and deploy/ that belong to that tag (before the
+#                  first verified deploy: the files that deploy replaced)
 #
 # Only dangling images are pruned. Volumes are never pruned (Redis data).
 
 set -Eeuo pipefail
 
 # Variables copied from the environment into .env when DEPLOY_WRITE_ENV=1.
+# Every variable docker-compose.yml reads is here (scripts/test-deploy.sh
+# checks it): .env is rewritten on every workflow deploy, so a value set only by
+# editing .env by hand would be lost on the next deploy.
 ENV_KEYS=(
-  CORS_ORIGINS REDIS_PASSWORD BACKEND_REPLICAS BIND_ADDRESS
+  CORS_ORIGINS REDIS_PASSWORD BACKEND_REPLICAS BIND_ADDRESS BACKEND_PORT FRONTEND_PORT
+  MAX_CONNECTIONS_PER_IP MATCH_ACCEPT_TIMEOUT_MS SHUTDOWN_GRACE_MS
   STUN_URLS TURN_URLS TURN_SECRET TURN_USERNAME TURN_CREDENTIAL TURN_TTL_SECONDS
-  TURN_REALM TURN_EXTERNAL_IP METRICS_TOKEN LOG_LEVEL
+  TURN_REALM TURN_EXTERNAL_IP TURN_MIN_PORT TURN_MAX_PORT METRICS_TOKEN LOG_LEVEL
 )
 installed=0
 HEALTH_ATTEMPTS="${HEALTH_ATTEMPTS:-30}"
@@ -34,15 +39,27 @@ WAIT_TIMEOUT="${WAIT_TIMEOUT:-180}"
 log() { printf '[deploy] %s\n' "$*"; }
 die() { printf '[deploy] ERROR: %s\n' "$*" >&2; exit 1; }
 
-write_env() {
-  local tmp key val
-  : "${BACKEND_IMAGE:?BACKEND_IMAGE is required}"
-  : "${FRONTEND_IMAGE:?FRONTEND_IMAGE is required}"
+# Checks what write_env (or set_release) will need. Runs before any file is
+# replaced, so a bad secret cannot leave unverified files installed (the next
+# deploy would save them in .previous/ as the rollback copy).
+validate_env() {
+  local key
+  if [ "${DEPLOY_WRITE_ENV:-0}" != "1" ]; then
+    [ -f .env ] || die ".env is missing; run the deploy workflow once to create it"
+    return 0
+  fi
+  [ -n "${BACKEND_IMAGE:-}" ] || die "BACKEND_IMAGE is required"
+  [ -n "${FRONTEND_IMAGE:-}" ] || die "FRONTEND_IMAGE is required"
   for key in "${ENV_KEYS[@]}"; do
     case "${!key-}" in
       *"'"* | *$'\n'*) die "$key must not contain a single quote or newline" ;;
     esac
   done
+}
+
+# Writes .env from the environment. Call validate_env first.
+write_env() {
+  local tmp key val
   tmp=$(mktemp "$PWD/.env.XXXXXX")
   chmod 600 "$tmp"
   {
@@ -80,8 +97,15 @@ install_incoming() {
   mkdir -p .previous.tmp
   if [ -f docker-compose.yml ]; then cp -p docker-compose.yml .previous.tmp/; fi
   if [ -d deploy ]; then cp -Rp deploy .previous.tmp/; fi
-  # Only replace the saved copy when the running files belong to a verified tag.
-  if [ -f .deployed-tag ]; then rm -rf .previous && mv .previous.tmp .previous; else rm -rf .previous.tmp; fi
+  # Replace the saved copy only when the running files belong to a verified
+  # tag. The first deploy (no verified tag yet) still saves the files it
+  # replaces, once, so they can be put back by hand; a retry after a failed
+  # first deploy keeps that copy instead of saving the unverified files.
+  if [ -f .deployed-tag ] || [ ! -d .previous ]; then
+    rm -rf .previous && mv .previous.tmp .previous
+  else
+    rm -rf .previous.tmp
+  fi
   cp -p .incoming/docker-compose.yml docker-compose.yml
   rm -rf deploy
   cp -Rp .incoming/deploy deploy
@@ -150,6 +174,7 @@ main() {
   if [ -f .deployed-tag ]; then prev_tag=$(cat .deployed-tag); fi
   log "deploying $new_tag (previous verified tag: ${prev_tag:-none})"
 
+  validate_env
   install_incoming
   if [ "${DEPLOY_WRITE_ENV:-0}" = "1" ]; then write_env; fi
   set_release "$new_tag"

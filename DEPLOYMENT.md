@@ -42,6 +42,10 @@ workflow. Empty optional secrets fall back to the defaults shown.
 | `CORS_ORIGINS` | `https://chizzy.itsyash.space` | comma list of allowed browser origins (the frontend URL). The backend refuses to start in production without it |
 | `BACKEND_REPLICAS` | `2` | number of backend containers |
 | `BIND_ADDRESS` | `0.0.0.0` | host address the gateway (3004) and frontend (5173) ports bind to. Set `127.0.0.1` when the host proxy runs on the same host and connects via localhost, so the ports are not reachable around it |
+| `BACKEND_PORT`, `FRONTEND_PORT` | `3004`, `5173` | host ports of the gateway and the frontend (the host proxy must point at them) |
+| `MAX_CONNECTIONS_PER_IP` | `10` | sockets one client IP may hold on each backend replica |
+| `MATCH_ACCEPT_TIMEOUT_MS` | `30000` | how long both users have to accept a match |
+| `SHUTDOWN_GRACE_MS` | `10000` | graceful shutdown time of a replica; keep it under the 15 s compose `stop_grace_period` |
 | `REDIS_PASSWORD` | unset | optional Redis password, URL safe (`openssl rand -hex 32`) |
 | `METRICS_TOKEN` | unset | bearer token for `GET /metrics` on the replicas |
 | `LOG_LEVEL` | `info` | pino log level |
@@ -53,6 +57,11 @@ workflow. Empty optional secrets fall back to the defaults shown.
 | `RUN_COTURN` | unset | `true` runs the bundled coturn service (compose profile `turn`) on the host |
 | `TURN_REALM` | `chizzy` | coturn realm |
 | `TURN_EXTERNAL_IP` | unset | for coturn on EC2: `<public-ip>/<private-ip>` |
+| `TURN_MIN_PORT`, `TURN_MAX_PORT` | `49160`, `49200` | coturn UDP relay port range; the security group must open the same range |
+
+Every deploy rewrites `.env` on the host from these secrets, so a value
+changed by editing `.env` by hand lasts only until the next deploy. Set a
+secret instead.
 
 Secrets from the old setup that nothing reads any more and can be deleted:
 `JWT_SECRET`, `FRONTEND_URL`, `DB_URL`, `REDIS_URL` (Redis is part of the stack).
@@ -72,11 +81,36 @@ reviewers to the `production` environment if deploys should need approval.
     minutes, and `X-Forwarded-For` / `X-Forwarded-Proto` set.
 - Security group: 80 and 443 open to the world, 22 to where you deploy from.
   Ports 3004 and 5173 do not need to be public (set `BIND_ADDRESS=127.0.0.1`).
-  For coturn: 3478 tcp+udp and 49160-49200 udp.
+  For coturn: 3478 tcp+udp and 49160-49200 udp (or `TURN_MIN_PORT`-`TURN_MAX_PORT`).
 
-The gateway trusts `X-Forwarded-For` only from private addresses (the host
-proxy and Docker's port publishing), so the backend sees the real client IP for
-its per-IP limits, and a client connecting directly cannot spoof it.
+### Client IP behind Cloudflare
+
+Both hostnames are proxied by Cloudflare, so a request travels
+client -> Cloudflare -> host proxy -> gateway -> backend. The backend limits
+sockets per client IP (`MAX_CONNECTIONS_PER_IP` per replica), so it must see
+the real client address, not the Cloudflare edge address that many unrelated
+users share.
+
+The gateway (`deploy/nginx/gateway.conf`) walks `X-Forwarded-For` from right
+to left and skips trusted hops: private addresses (the host proxy and Docker's
+port publishing) and Cloudflare's published ranges. The first address left
+that is not trusted is the client. A client that connects to the origin
+directly cannot spoof its address, because its own IP is not trusted.
+
+This only works if the host proxy **appends** the address it sees to the
+`X-Forwarded-For` it received, keeping Cloudflare's entries:
+
+- nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`
+- Caddy: replaces the header with only its peer address unless that peer is
+  trusted. Add Cloudflare's ranges to `trusted_proxies` in the global
+  `servers` options.
+
+A host proxy that sends only its TCP peer would make every user on one
+Cloudflare address count as one client again. Do not switch the gateway to
+`CF-Connecting-IP`: ports 80 and 443 are open to the world, so anyone reaching
+the origin directly could set it. The Cloudflare list in `gateway.conf` comes
+from https://www.cloudflare.com/ips/ and should be refreshed now and then;
+`sh scripts/test-gateway-real-ip.sh` checks the behavior (CI runs it).
 
 ## First-time setup
 
@@ -91,14 +125,31 @@ its per-IP limits, and a client connecting directly cannot spoof it.
 Migrating from the old two-container setup needs nothing special: the compose
 project name is still the directory name, so the first deploy replaces the old
 `backend` and `frontend` containers. There is no previous verified tag on the
-first run, so that deploy cannot roll back automatically.
+first run, so that deploy cannot roll back automatically. It does save the old
+`docker-compose.yml` in `.previous/`. If the first deploy fails, put the old
+setup back by hand (its `yashs3324/omegle-*:latest` images are still on the
+host, and the old compose file needs nothing from `.env`):
+
+```sh
+cd ~/Omegle_with_stun
+cp .previous/docker-compose.yml .      # or restore it from the old git checkout
+docker compose up -d --remove-orphans
+```
+
+Then fix the problem and deploy again; the next deploy installs the new files
+as usual. Never re-run a Deploy workflow run from before this setup (one
+without the "Deploy, verify and roll back on failure" step): its old script
+rewrites `.env` without the image names, runs `docker compose down` on the
+whole new stack including Redis, and prunes the sha-tagged images rollback
+needs.
 
 ## What a deploy does on the host
 
 `deploy/deploy.sh <sha>` runs in `PROJECT_PATH`:
 
 1. Moves the copied `.incoming/docker-compose.yml` and `.incoming/deploy/` into
-   place, keeping the current ones in `.previous/`.
+   place, keeping the current ones in `.previous/` (when they belong to the
+   verified tag, or on the first deploy when there is no saved copy yet).
 2. Writes `.env` (mode 600) from the secrets without printing it, and sets
    `IMAGE_TAG=<sha>`.
 3. `docker compose pull`. If any image is missing it restores the previous
@@ -129,7 +180,13 @@ cat .deployed-tag                       # currently verified tag
 bash deploy/deploy.sh <older-sha>       # keeps .env secrets, only changes IMAGE_TAG
 ```
 
-Or re-run an older successful Deploy workflow run in GitHub Actions.
+This keeps the current `docker-compose.yml` and `deploy/`, so it only works
+when the older sha used the same compose file and gateway config. To roll back
+across a change to either, re-run that commit's successful Deploy workflow run
+in GitHub Actions instead: it copies that commit's files and deploys its
+images. Only re-run runs made with this setup (they have the "Deploy, verify
+and roll back on failure" step). Never re-run a run from before it; see
+First-time setup.
 
 ## Health checks
 
@@ -151,7 +208,7 @@ cd ~/Omegle_with_stun
 docker compose ps
 docker compose logs -f --tail=100 backend      # all replicas
 docker compose logs -f gateway frontend redis
-docker compose up -d                           # re-apply after editing .env by hand
+docker compose up -d                           # re-apply after editing .env by hand (lost on the next deploy; set a secret)
 docker compose --profile turn up -d            # start coturn manually
 ```
 
