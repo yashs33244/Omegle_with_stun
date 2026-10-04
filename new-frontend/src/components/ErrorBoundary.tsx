@@ -1,4 +1,5 @@
 import React from "react";
+import { captureError } from "@/lib/observability";
 
 interface ErrorBoundaryProps {
   children: React.ReactNode;
@@ -21,6 +22,7 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
 
   componentDidCatch(error: unknown, info: React.ErrorInfo) {
     console.error("Unhandled render error", error, info.componentStack);
+    captureError(error);
   }
 
   render() {
