@@ -83,3 +83,29 @@ describe("RedisStore.withLock wait budget", () => {
     expect(Date.now() - started).toBeLessThan(1000);
   });
 });
+
+/**
+ * The connection dropped after Redis applied SET NX but before the reply
+ * arrived: ioredis re-sends the command on reconnect and it now answers null.
+ */
+class LostReplyRedis extends FakeRedis {
+  private lost = false;
+
+  override async set(key: string, token: string): Promise<"OK" | null> {
+    const reply = await super.set(key, token);
+    if (reply !== "OK" || this.lost) return reply;
+    this.lost = true;
+    return super.set(key, token);
+  }
+}
+
+describe("RedisStore.withLock after a re-sent SET", () => {
+  test("a lock it already holds counts as acquired instead of waiting out its own lease", async () => {
+    const redis = new LostReplyRedis();
+    const store = storeOn(redis, { lockWaitMs: 300 });
+    const started = Date.now();
+    await expect(store.withLock(async () => "ran")).resolves.toBe("ran");
+    expect(Date.now() - started).toBeLessThan(100);
+    expect(redis.holder).toBeNull();
+  });
+});

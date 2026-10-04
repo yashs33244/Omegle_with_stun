@@ -196,6 +196,9 @@ export class RedisStore implements MatchStore {
     let backoff = 4;
     for (;;) {
       if ((await this.redis.set(lockKey, token, "PX", this.lockTtlMs, "NX")) === "OK") return;
+      // ioredis re-sends a command whose reply was lost in a reconnect, and
+      // the re-sent SET NX answers null when the first one already took the lock.
+      if ((await this.redis.get(lockKey)) === token) return;
       if (Date.now() >= deadline) throw new Error(LOCK_TIMEOUT);
       // Equal jitter: wait between backoff/2 and backoff ms, growing to 50 ms.
       await sleep(backoff / 2 + Math.random() * (backoff / 2));
