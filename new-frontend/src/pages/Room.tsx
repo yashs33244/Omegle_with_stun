@@ -248,7 +248,7 @@ export const Room: React.FC<RoomProps> = ({
         </div>
       )}
 
-      {inCall && (privateAllowed || peer.privateMode || peer.lowBandwidth || onFlipCamera) && (
+      {inCall && (privateAllowed || peer.privateRequested || peer.lowBandwidth || onFlipCamera) && (
         <div className="flex flex-wrap items-center gap-3 px-4 py-2 bg-black bg-opacity-70 text-white border-b border-gray-700">
           {peer.privateMode && (
             <span className="flex items-center gap-1 text-xs text-green-400" data-testid="private-badge">
@@ -256,11 +256,16 @@ export const Room: React.FC<RoomProps> = ({
               IP hidden from your partner
             </span>
           )}
+          {peer.privateRequested && !peer.privateMode && (
+            <span className="text-xs text-orange-300" role="status" data-testid="private-unavailable">
+              Hide my IP is not available right now, so this call can use a direct connection.
+            </span>
+          )}
           {privateAllowed && onHideIpChange && (
             <HideIpToggle
               checked={hideIp}
               onChange={onHideIpChange}
-              note={hideIp !== peer.privateMode ? "Applies from your next call." : undefined}
+              note={hideIp !== peer.privateRequested ? "Applies from your next call." : undefined}
             />
           )}
           {peer.lowBandwidth && (

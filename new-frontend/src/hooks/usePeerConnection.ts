@@ -58,6 +58,8 @@ export interface PeerConnectionState {
   failure: ConnectFailure | null;
   /** This call runs relay-only (Hide my IP). */
   privateMode: boolean;
+  /** Hide my IP was on when this call started (it may still have been unavailable). */
+  privateRequested: boolean;
   /** The selected path goes through the TURN relay. */
   relayed: boolean;
   /** Sustained packet loss: sending about 360p at 400 kbps. */
@@ -80,6 +82,7 @@ export function usePeerConnection(opts: PeerConnectionOptions): PeerConnectionSt
   const [quality, setQuality] = useState<ConnectionQuality>("GOOD");
   const [failure, setFailure] = useState<ConnectFailure | null>(null);
   const [privateMode, setPrivateMode] = useState(false);
+  const [privateRequested, setPrivateRequested] = useState(false);
   const [relayed, setRelayed] = useState(false);
   const [lowBandwidth, setLowBandwidth] = useState(false);
 
@@ -126,6 +129,7 @@ export function usePeerConnection(opts: PeerConnectionOptions): PeerConnectionSt
     setQuality("GOOD");
     setFailure(null);
     setPrivateMode(isPrivate);
+    setPrivateRequested(o.hideIp);
     setRelayed(false);
     setLowBandwidth(false);
     monitor.start();
@@ -194,6 +198,7 @@ export function usePeerConnection(opts: PeerConnectionOptions): PeerConnectionSt
       setConnectionState("idle");
       setFailure(null);
       setPrivateMode(false);
+      setPrivateRequested(false);
       setRelayed(false);
       setLowBandwidth(false);
     };
@@ -209,5 +214,15 @@ export function usePeerConnection(opts: PeerConnectionOptions): PeerConnectionSt
     sessionRef.current?.setLocalStream(opts.localStream);
   }, [opts.localStream]);
 
-  return { remoteStream, remoteAudioTrack, connectionState, quality, failure, privateMode, relayed, lowBandwidth };
+  return {
+    remoteStream,
+    remoteAudioTrack,
+    connectionState,
+    quality,
+    failure,
+    privateMode,
+    privateRequested,
+    relayed,
+    lowBandwidth,
+  };
 }
