@@ -24,18 +24,35 @@ const configFiles = readdirSync(root)
 
 const code = [...sourceFiles(join(root, "src")), ...configFiles].map((f) => readFileSync(f, "utf8")).join("\n");
 
+/** Static imports, side-effect imports and lazy `import("...")` calls (Sentry and PostHog load on demand). */
 function isImported(name: string): boolean {
   const escaped = name.replace(/[/.]/g, "\\$&");
-  return new RegExp(`from ["']${escaped}(/[^"']*)?["']|import ["']${escaped}(/[^"']*)?["']`).test(code);
+  const spec = `["']${escaped}(/[^"']*)?["']`;
+  return new RegExp(`from ${spec}|import ${spec}|import\\(\\s*${spec}\\s*\\)`).test(code);
+}
+
+/**
+ * A peer dependency that another runtime dependency declares (for example
+ * nsfwjs needs `buffer`): the app must list it even though it never imports it.
+ */
+function isPeerOfDependency(name: string, dependencies: string[]): boolean {
+  return dependencies.some((dep) => {
+    if (dep === name) return false;
+    const manifest = JSON.parse(readFileSync(join(root, "node_modules", dep, "package.json"), "utf8")) as {
+      peerDependencies?: Record<string, string>;
+    };
+    return name in (manifest.peerDependencies ?? {});
+  });
 }
 
 describe("dependencies", () => {
   const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
     dependencies: Record<string, string>;
   };
+  const names = Object.keys(pkg.dependencies);
 
-  it.each(Object.keys(pkg.dependencies))("%s is imported somewhere", (name) => {
-    expect(isImported(name)).toBe(true);
+  it.each(names)("%s is imported somewhere (or is a peer of a dependency)", (name) => {
+    expect(isImported(name) || isPeerOfDependency(name, names)).toBe(true);
   });
 
   it("every components/ui wrapper is used outside components/ui", () => {
