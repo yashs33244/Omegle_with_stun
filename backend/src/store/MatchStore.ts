@@ -22,13 +22,19 @@ import type { Preferences, Profile, ReportReason } from "../protocol";
 
 export type SessionState = "idle" | "waiting" | "pending" | "active";
 
+/**
+ * Profile as stored on a session. The photo (up to ~150 KB) lives under its
+ * own key (setPhoto/getPhoto) so match passes never load or copy it.
+ */
+export type SessionProfile = Omit<Profile, "photo">;
+
 /** One connected socket that completed session:hello. */
 export interface Session {
   socketId: string;
   deviceId: string;
   /** config.instanceId of the server that owns the socket. */
   instanceId: string;
-  profile: Profile;
+  profile: SessionProfile;
   preferences: Preferences;
   state: SessionState;
   /** Set while state is pending or active. */
@@ -86,7 +92,13 @@ export interface MatchStore {
   /** Same order as the input; null for missing ids. */
   getSessions(socketIds: string[]): Promise<(Session | null)[]>;
   putSession(session: Session): Promise<void>;
+  /** Deletes the session and its photo. */
   deleteSession(socketId: string): Promise<void>;
+
+  /* Profile photo per socket (data URL), stored apart from the session */
+  /** null removes it. */
+  setPhoto(socketId: string, photo: string | null): Promise<void>;
+  getPhoto(socketId: string): Promise<string | null>;
 
   /* deviceId -> socketId binding (one live socket per device) */
   getDeviceSocket(deviceId: string): Promise<string | null>;

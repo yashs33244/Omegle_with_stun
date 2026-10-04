@@ -108,6 +108,12 @@ export interface Config {
   /** Accepts this late after expiresAt are still honored (network latency). */
   matchAcceptGraceMs: number;
   sweepIntervalMs: number;
+  /**
+   * How often the sweeper runs a FULL match pass (O(waiting^2)); in between it
+   * only matches sessions queued since the last pass. The full pass picks up
+   * lapsed blocks and users queued on other instances.
+   */
+  fullMatchPassIntervalMs: number;
   /** Coins are awarded once per full interval of active call. */
   coinIntervalMs: number;
   coinsPerInterval: number;
@@ -162,6 +168,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     matchAcceptTimeoutMs: e.MATCH_ACCEPT_TIMEOUT_MS,
     matchAcceptGraceMs: 750,
     sweepIntervalMs: 500,
+    fullMatchPassIntervalMs: 2000,
     coinIntervalMs: 60_000,
     coinsPerInterval: 5,
     initialCoins: 100,

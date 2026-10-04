@@ -17,6 +17,7 @@ const copy = <T>(value: T): T => structuredClone(value);
 
 export class MemoryStore implements MatchStore {
   private readonly sessions = new Map<string, Session>();
+  private readonly photos = new Map<string, string>();
   private readonly devices = new Map<string, string>();
   private readonly waiting = new Map<string, number>();
   private readonly rooms = new Map<string, Room>();
@@ -64,6 +65,16 @@ export class MemoryStore implements MatchStore {
 
   async deleteSession(socketId: string): Promise<void> {
     this.sessions.delete(socketId);
+    this.photos.delete(socketId);
+  }
+
+  async setPhoto(socketId: string, photo: string | null): Promise<void> {
+    if (photo === null) this.photos.delete(socketId);
+    else this.photos.set(socketId, photo);
+  }
+
+  async getPhoto(socketId: string): Promise<string | null> {
+    return this.photos.get(socketId) ?? null;
   }
 
   async getDeviceSocket(deviceId: string): Promise<string | null> {

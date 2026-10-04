@@ -20,7 +20,11 @@ function accepts(a: Candidate, b: Candidate): boolean {
   const { genderFilter, languageFilter } = a.preferences;
   // Filters never include "unspecified", so an unspecified gender only meets "all".
   if (genderFilter !== "all" && genderFilter !== b.profile.gender) return false;
-  if (languageFilter !== "any" && primaryLanguage(languageFilter) !== primaryLanguage(b.profile.language)) {
+  if (
+    languageFilter !== "any" &&
+    languageFilter !== b.profile.language &&
+    primaryLanguage(languageFilter) !== primaryLanguage(b.profile.language)
+  ) {
     return false;
   }
   return true;

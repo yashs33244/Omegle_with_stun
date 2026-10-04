@@ -20,7 +20,6 @@ import type {
   HelloAck,
   HelloPayload,
   MatchEndReason,
-  Profile,
   PublicProfile,
   ReportPayload,
   RtcSignal,
@@ -28,7 +27,7 @@ import type {
   SimpleAck,
   UpdatePreferencesPayload,
 } from "../protocol";
-import type { MatchStore, Room, Session } from "../store/MatchStore";
+import type { MatchStore, Room, Session, SessionProfile } from "../store/MatchStore";
 import { buildIceServers } from "../turn";
 import { isCompatible } from "./compatibility";
 
@@ -71,9 +70,9 @@ interface LocalSocket {
   };
 }
 
-export function publicProfile(profile: Profile): PublicProfile {
+export function publicProfile(profile: SessionProfile, photo: string | null): PublicProfile {
   const { gender: _gender, ...rest } = profile;
-  return rest;
+  return photo ? { ...rest, photo } : rest;
 }
 
 export class MatchService {
@@ -84,9 +83,12 @@ export class MatchService {
   private readonly emitter: Emitter;
   private readonly now: () => number;
   private readonly local = new Map<string, LocalSocket>();
+  /** Sessions queued or changed since the last match pass (only touched under the lock). */
+  private readonly dirty = new Set<string>();
   private sweepTimer?: ReturnType<typeof setInterval>;
   private sweeping?: Promise<void>;
   private stopped = false;
+  private lastFullPassAt = 0;
 
   constructor(deps: MatchServiceDeps) {
     this.store = deps.store;
@@ -148,6 +150,7 @@ export class MatchService {
       // The socket may have disconnected while we waited for the lock.
       if (!this.emitter.isLocalConnected(socketId)) return reply({ ok: false, error: "bad_state" });
       const now = this.now();
+      const { photo, ...profile } = payload.profile;
       let session = await this.store.getSession(socketId);
 
       if (session && session.deviceId !== deviceId) {
@@ -161,17 +164,18 @@ export class MatchService {
           socketId,
           deviceId,
           instanceId: this.config.instanceId,
-          profile: payload.profile,
+          profile,
           preferences: payload.preferences,
           state: "idle",
           connectedAt: now,
         };
         await this.store.setDeviceSocket(deviceId, socketId);
       } else {
-        session.profile = payload.profile;
+        session.profile = profile;
         session.preferences = payload.preferences;
       }
       await this.store.putSession(session);
+      await this.store.setPhoto(socketId, photo ?? null);
       this.local.set(socketId, this.local.get(socketId) ?? { deviceId });
 
       const coins = (await this.store.getCoins(deviceId)) ?? this.config.initialCoins;
@@ -191,7 +195,10 @@ export class MatchService {
       session.preferences = payload.preferences;
       await this.store.putSession(session);
       reply({ ok: true });
-      if (session.state === "waiting") await this.matchPassLocked();
+      if (session.state === "waiting") {
+        this.dirty.add(socketId);
+        await this.matchPassLocked();
+      }
     });
   }
 
@@ -357,7 +364,10 @@ export class MatchService {
             [room.members[1]]: "timeout",
           });
         }
-        await this.matchPassLocked();
+        // Full pass now and then: picks up users queued on other instances and lapsed blocks.
+        const full = now - this.lastFullPassAt >= this.config.fullMatchPassIntervalMs;
+        if (full) this.lastFullPassAt = now;
+        await this.matchPassLocked(full);
       });
       await this.tickRewards();
     } catch (err) {
@@ -365,9 +375,9 @@ export class MatchService {
     }
   }
 
-  /** Runs one match pass under the lock (exposed for tests and multi-instance pickup). */
+  /** Runs one full match pass under the lock (exposed for tests and multi-instance pickup). */
   matchPass(): Promise<void> {
-    return this.store.withLock(() => this.matchPassLocked());
+    return this.store.withLock(() => this.matchPassLocked(true));
   }
 
   /**
@@ -449,6 +459,7 @@ export class MatchService {
     session.waitingSince = since ?? this.now();
     await this.store.putSession(session);
     await this.store.addWaiting(session.socketId, session.waitingSince);
+    this.dirty.add(session.socketId);
     this.emitter.emit(session.socketId, "queue:waiting");
   }
 
@@ -524,8 +535,18 @@ export class MatchService {
   /**
    * FIFO match pass: walk waiting sessions oldest first and pair each with
    * the oldest compatible, unblocked, unbanned waiting session after it.
+   *
+   * After an event only the sessions queued or changed since the last pass
+   * ("dirty") can form new pairs, so the default pass only tries pairs that
+   * include one of them: O(waiting x dirty) instead of O(waiting^2). It gives
+   * the same pairs as a full pass, because the other waiters were already
+   * unmatchable with each other. The sweeper runs the full pass.
    */
-  private async matchPassLocked(): Promise<void> {
+  private async matchPassLocked(full = false): Promise<void> {
+    const focus = full ? null : new Set(this.dirty);
+    this.dirty.clear();
+    if (focus && focus.size === 0) return;
+
     const ids = await this.store.listWaiting();
     if (ids.length < 2) return;
     const loaded = await this.store.getSessions(ids);
@@ -547,17 +568,24 @@ export class MatchService {
       }
       return banned;
     };
+    const all = waiting.map((_, i) => i);
+    const focused = focus ? all.filter((i) => focus.has(waiting[i]!.socketId)) : all;
 
     const taken = new Set<number>();
     for (let i = 0; i < waiting.length; i++) {
       if (taken.has(i)) continue;
       const a = waiting[i]!;
-      if (await isBanned(a.deviceId)) continue;
-      for (let j = i + 1; j < waiting.length; j++) {
+      // A non-dirty session can only pair with a dirty one.
+      const partners = !focus || focus.has(a.socketId) ? all : focused;
+      // Both lists are ascending; start after i.
+      let k = partners === all ? i + 1 : 0;
+      while (k < partners.length && partners[k]! <= i) k++;
+      for (; k < partners.length; k++) {
+        const j = partners[k]!;
         if (taken.has(j)) continue;
         const b = waiting[j]!;
         if (!isCompatible(a, b)) continue;
-        if (await isBanned(b.deviceId)) continue;
+        if ((await isBanned(a.deviceId)) || (await isBanned(b.deviceId))) continue;
         const block = await this.store.getBlock(a.deviceId, b.deviceId);
         if (block && block.until > now) continue;
         taken.add(i);
@@ -586,11 +614,15 @@ export class MatchService {
       await this.store.putSession(s);
       await this.store.removeWaiting(s.socketId);
     }
-    const isFriend = await this.store.areFriends(a.deviceId, b.deviceId);
+    const [isFriend, photoA, photoB] = await Promise.all([
+      this.store.areFriends(a.deviceId, b.deviceId),
+      this.store.getPhoto(a.socketId),
+      this.store.getPhoto(b.socketId),
+    ]);
     this.metrics.matchesTotal.inc();
     this.log.info({ roomId: room.id }, "match found");
     const base = { roomId: room.id, isFriend, expiresAt: room.expiresAt, serverNow: now };
-    this.emitter.emit(a.socketId, "match:found", { ...base, partner: publicProfile(b.profile) });
-    this.emitter.emit(b.socketId, "match:found", { ...base, partner: publicProfile(a.profile) });
+    this.emitter.emit(a.socketId, "match:found", { ...base, partner: publicProfile(b.profile, photoB) });
+    this.emitter.emit(b.socketId, "match:found", { ...base, partner: publicProfile(a.profile, photoA) });
   }
 }

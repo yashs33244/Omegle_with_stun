@@ -28,6 +28,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     matchAcceptTimeoutMs: 400,
     matchAcceptGraceMs: 50,
     sweepIntervalMs: 20,
+    fullMatchPassIntervalMs: 40,
     coinIntervalMs: 150,
     friendAfterMs: 350,
     ...overrides,

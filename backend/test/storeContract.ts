@@ -76,6 +76,20 @@ export function runStoreContract(
       expect(await store.getSessions([])).toEqual([]);
     });
 
+    test("photos are stored apart from sessions and removed with them", async () => {
+      const store = await make();
+      const a = session();
+      await store.putSession(a);
+      expect(await store.getPhoto(a.socketId)).toBeNull();
+      await store.setPhoto(a.socketId, "data:image/jpeg;base64,AAAA");
+      expect(await store.getPhoto(a.socketId)).toBe("data:image/jpeg;base64,AAAA");
+      await store.setPhoto(a.socketId, null);
+      expect(await store.getPhoto(a.socketId)).toBeNull();
+      await store.setPhoto(a.socketId, "data:image/png;base64,BBBB");
+      await store.deleteSession(a.socketId);
+      expect(await store.getPhoto(a.socketId)).toBeNull();
+    });
+
     test("values are copied in and out", async () => {
       const store = await make();
       const a = session();

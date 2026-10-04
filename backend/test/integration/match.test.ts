@@ -36,7 +36,7 @@ describe("hello and matching", () => {
 
   test("two compatible users match; partner sees no gender; exactly one initiator", async () => {
     ts = await startServer();
-    const a = hello({ profile: profile({ name: "Alice", gender: "female" }) });
+    const a = hello({ profile: profile({ name: "Alice", gender: "female", photo: "data:image/jpeg;base64,QUJD" }) });
     const b = hello({ profile: profile({ name: "Bob", gender: "male" }) });
     const ca = await ts.connect();
     const cb = await ts.connect();
@@ -49,6 +49,8 @@ describe("hello and matching", () => {
     expect(fa.partner.name).toBe("Bob");
     expect(fb.partner.name).toBe("Alice");
     expect("gender" in fa.partner).toBe(false);
+    expect(fb.partner.photo).toBe("data:image/jpeg;base64,QUJD");
+    expect("photo" in fa.partner).toBe(false);
     expect(fa.isFriend).toBe(false);
     expect(fa.expiresAt - fa.serverNow).toBe(ts.config.matchAcceptTimeoutMs);
 
