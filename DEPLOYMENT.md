@@ -180,9 +180,13 @@ cat .deployed-tag                       # currently verified tag
 bash deploy/deploy.sh <older-sha>       # keeps .env secrets, only changes IMAGE_TAG
 ```
 
-Or re-run an older successful Deploy workflow run in GitHub Actions, but only
-one made with this setup (it has the "Deploy, verify and roll back on failure"
-step). Never re-run a run from before it; see First-time setup.
+This keeps the current `docker-compose.yml` and `deploy/`, so it only works
+when the older sha used the same compose file and gateway config. To roll back
+across a change to either, re-run that commit's successful Deploy workflow run
+in GitHub Actions instead: it copies that commit's files and deploys its
+images. Only re-run runs made with this setup (they have the "Deploy, verify
+and roll back on failure" step). Never re-run a run from before it; see
+First-time setup.
 
 ## Health checks
 
