@@ -30,6 +30,20 @@ jobs:
       - name: Lockfiles only reference the public npm registry
         run: sh scripts/check-lockfiles.sh
 
+  ops-lint:
+    name: Workflows and shell scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color
+      - name: shellcheck
+        run: >-
+          docker run --rm -v "$PWD:/mnt:ro" -w /mnt koalaman/shellcheck:v0.11.0
+          deploy/deploy.sh deploy/cloudflare-ips.sh scripts/backup-redis.sh scripts/restore-redis.sh
+          scripts/check-lockfiles.sh scripts/sync-protocol.sh new-frontend/nginx-api-origin.envsh
+
   backend:
     name: Backend
     runs-on: ubuntu-latest
@@ -58,6 +72,8 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
+      - name: Typecheck the load test and canary (scripts/loadtest)
+        run: node_modules/.bin/tsc -p ../scripts/loadtest
       - run: bun run lint
       - name: Test (includes the Redis suites)
         run: bun test
@@ -96,6 +112,11 @@ jobs:
     needs: [backend, frontend]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Inherited by the backends Playwright starts. Test-only values, not
+    # secrets: the e2e browsers cannot solve a real Turnstile challenge.
+    env:
+      SESSION_SECRET: ci-e2e-session-secret-not-used-in-production
+      TURNSTILE_DISABLED: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -148,6 +169,8 @@ jobs:
         with:
           context: ./new-frontend
           push: false
+          load: true
+          tags: chizzy-frontend:ci
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,scope=frontend,mode=max
       - name: Validate docker-compose.yml
@@ -155,5 +178,8 @@ jobs:
       - name: Validate the gateway nginx config
         run: >-
           docker run --rm
-          -v "$PWD/deploy/nginx/gateway.conf:/etc/nginx/conf.d/default.conf:ro"
+          -v "$PWD/deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro"
+          -v "$PWD/deploy/nginx:/etc/nginx/chizzy:ro"
           nginxinc/nginx-unprivileged:1.28.2-alpine3.23 nginx -t
+      - name: Validate the frontend nginx config (rendered by the image entrypoint)
+        run: docker run --rm chizzy-frontend:ci nginx -t
