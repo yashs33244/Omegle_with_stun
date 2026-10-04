@@ -211,7 +211,9 @@ started then. The HTML report lands in `new-frontend/playwright-report/`.
 CI (`.github/workflows/ci.yml`) runs all of the above on every pull request
 and push, with a Redis service container, plus the protocol sync check, both
 Docker image builds, `docker compose config` and `nginx -t` on the gateway
-config.
+config. The `stack` job then starts the real compose stack (Redis, two backend
+replicas, the gateway and the nginx frontend) and runs the end-to-end suite
+against it with `E2E_BASE_URL`.
 
 ## Socket protocol
 
