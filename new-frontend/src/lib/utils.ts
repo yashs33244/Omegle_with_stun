@@ -68,31 +68,3 @@ export function formatConnectionTime(seconds: number): string {
   }
   return `${minutes}:${secs.toString().padStart(2, '0')}`;
 }
-
-// Generate random room ID
-export function generateRoomId(): string {
-  return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-}
-
-// Validate email format
-export function isValidEmail(email: string): boolean {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return emailRegex.test(email);
-}
-
-// Get random element from array
-export function getRandomElement<T>(array: T[]): T {
-  return array[Math.floor(Math.random() * array.length)];
-}
-
-// Debounce function for search/typing
-export function debounce<A extends unknown[]>(
-  func: (...args: A) => void,
-  delay: number
-): (...args: A) => void {
-  let timeoutId: ReturnType<typeof setTimeout>;
-  return (...args: A) => {
-    clearTimeout(timeoutId);
-    timeoutId = setTimeout(() => func(...args), delay);
-  };
-}
