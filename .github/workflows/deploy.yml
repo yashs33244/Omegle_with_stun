@@ -1,155 +1,128 @@
-name: Deploy to EC2
+name: Deploy
 
+# Every secret used here is documented in DEPLOYMENT.md.
 on:
   push:
-    branches: [ new-v ]
+    branches: [new-v]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time; a newer push waits instead of cancelling a running deploy.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
 
 env:
-  DOCKER_REGISTRY: docker.io
   BACKEND_IMAGE: yashs3324/omegle-backend
   FRONTEND_IMAGE: yashs3324/omegle-frontend
 
 jobs:
-  test:
+  ci:
+    name: CI
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  images:
+    name: Build and push images
+    needs: ci
     runs-on: ubuntu-latest
-    name: Test Backend
-    
+    timeout-minutes: 30
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      - name: Backend image
+        uses: docker/build-push-action@v7
+        with:
+          context: ./backend
+          push: true
+          tags: |
+            ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+            ${{ env.BACKEND_IMAGE }}:latest
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,scope=backend,mode=max
+      - name: Frontend image
+        uses: docker/build-push-action@v7
+        with:
+          context: ./new-frontend
+          push: true
+          # VITE_API_URL is new; REACT_APP_API_URL is the older secret with the same value.
+          build-args: |
+            VITE_API_URL=${{ secrets.VITE_API_URL || secrets.REACT_APP_API_URL || 'https://chizzyapi.itsyash.space' }}
+          tags: |
+            ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+            ${{ env.FRONTEND_IMAGE }}:latest
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,scope=frontend,mode=max
 
-    - name: Setup Bun
-      uses: oven-sh/setup-bun@v1
-      with:
-        bun-version: latest
-
-    - name: Install backend dependencies
-      run: |
-        cd backend
-        bun install
-
-    - name: Build backend
-      run: |
-        cd backend
-        bun run build
-
-  build-and-deploy:
+  deploy:
+    name: Deploy to EC2
+    needs: images
     runs-on: ubuntu-latest
-    needs: test
-    
+    timeout-minutes: 20
+    environment: production
+    env:
+      PROJECT_PATH: ${{ secrets.PROJECT_PATH || 'Omegle_with_stun' }}
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            docker-compose.yml
+            deploy
+          sparse-checkout-cone-mode: false
 
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
+      # The host always runs the compose file and deploy/ from this commit. They
+      # land in .incoming/ and deploy.sh installs them (keeping the previous
+      # copy for rollback).
+      - name: Copy compose file and deploy/ to the host
+        uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1.0.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          fingerprint: ${{ secrets.EC2_SSH_FINGERPRINT }}
+          source: docker-compose.yml,deploy
+          target: ${{ env.PROJECT_PATH }}/.incoming
+          rm: true
 
-    - name: Login to Docker Hub
-      uses: docker/login-action@v3
-      with:
-        username: ${{ secrets.DOCKERHUB_USERNAME }}
-        password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-    - name: Build and push backend image
-      uses: docker/build-push-action@v5
-      with:
-        context: ./backend
-        push: true
-        tags: |
-          ${{ env.BACKEND_IMAGE }}:latest
-          ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-
-    - name: Build and push frontend image
-      uses: docker/build-push-action@v5
-      with:
-        context: ./new-frontend
-        push: true
-        build-args: |
-          REACT_APP_API_URL=${{ secrets.REACT_APP_API_URL }}
-          REACT_APP_ENVIRONMENT=production
-        tags: |
-          ${{ env.FRONTEND_IMAGE }}:latest
-          ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
-
-    - name: Deploy to EC2
-      uses: appleboy/ssh-action@v1.0.3
-      with:
-        host: ${{ secrets.EC2_HOST }}
-        username: ${{ secrets.EC2_USER }}
-        key: ${{ secrets.EC2_SSH_KEY }}
-        script: |
-          # Set project path with fallback
-          PROJECT_PATH="${{ secrets.PROJECT_PATH }}"
-          if [ -z "$PROJECT_PATH" ]; then
-            PROJECT_PATH="Omegle_with_stun"
-          fi
-          
-          # Navigate to project directory
-          echo "Navigating to project directory: $PROJECT_PATH"
-          if [ ! -d "$PROJECT_PATH" ]; then
-            echo "Project directory $PROJECT_PATH does not exist!"
-            exit 1
-          fi
-          cd "$PROJECT_PATH"
-          
-          # Verify we're in the right directory
-          if [ ! -f "docker-compose.yml" ]; then
-            echo "docker-compose.yml not found in current directory: $(pwd)"
-            exit 1
-          fi
-          
-          echo "Current directory: $(pwd)"
-          echo "Files in directory: $(ls -la)"
-          
-          # Create .env file with secrets
-          cat > .env << EOF
-          NODE_ENV=production
-          BACKEND_PORT=3004
-          FRONTEND_PORT=5173
-          REACT_APP_API_URL=${{ secrets.REACT_APP_API_URL }}
-          FRONTEND_URL=http://localhost:5173
-          EOF
-          
-          echo "Environment file created:"
-          cat .env
-          
-          # Pull latest images
-          echo "Pulling latest images..."
-          docker compose pull
-          
-          # Stop existing containers gracefully
-          echo "Stopping existing containers..."
-          docker compose down --timeout 30
-          
-          # Start new containers
-          echo "Starting new containers..."
-          docker compose up -d
-          
-          # Wait for services to start
-          echo "Waiting for services to start..."
-          sleep 15
-          
-          # Check container status
-          echo "Container status:"
-          docker compose ps
-          
-          # Check container logs for any errors
-          echo "Recent backend logs:"
-          docker compose logs backend --tail=20
-          echo "Recent frontend logs:"
-          docker compose logs frontend --tail=20
-          
-          # Clean up old images
-          echo "Cleaning up old images..."
-          docker system prune -f --volumes
-          docker image prune -a -f
-          
-          # Verify deployment with retries
-          echo "Verifying deployment..."
-          BACKEND_HEALTHY=false
-          FRONTEND_HEALTHY=false
-    
+      # deploy.sh writes .env (mode 600) from these variables without printing
+      # them, pulls the sha-tagged images, runs `docker compose up --wait`,
+      # verifies /healthz and /readyz through the gateway and the frontend
+      # /healthz, and rolls back to the previous tag if anything fails.
+      - name: Deploy, verify and roll back on failure
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        env:
+          DEPLOY_WRITE_ENV: "1"
+          DEPLOY_TAG: ${{ github.sha }}
+          CORS_ORIGINS: ${{ secrets.CORS_ORIGINS || 'https://chizzy.itsyash.space' }}
+          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+          BACKEND_REPLICAS: ${{ secrets.BACKEND_REPLICAS }}
+          BIND_ADDRESS: ${{ secrets.BIND_ADDRESS }}
+          STUN_URLS: ${{ secrets.STUN_URLS }}
+          TURN_URLS: ${{ secrets.TURN_URLS }}
+          TURN_SECRET: ${{ secrets.TURN_SECRET }}
+          TURN_USERNAME: ${{ secrets.TURN_USERNAME }}
+          TURN_CREDENTIAL: ${{ secrets.TURN_CREDENTIAL }}
+          TURN_TTL_SECONDS: ${{ secrets.TURN_TTL_SECONDS }}
+          TURN_REALM: ${{ secrets.TURN_REALM }}
+          TURN_EXTERNAL_IP: ${{ secrets.TURN_EXTERNAL_IP }}
+          RUN_COTURN: ${{ secrets.RUN_COTURN }}
+          METRICS_TOKEN: ${{ secrets.METRICS_TOKEN }}
+          LOG_LEVEL: ${{ secrets.LOG_LEVEL }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          fingerprint: ${{ secrets.EC2_SSH_FINGERPRINT }}
+          command_timeout: 15m
+          envs: PROJECT_PATH,BACKEND_IMAGE,FRONTEND_IMAGE,DEPLOY_WRITE_ENV,DEPLOY_TAG,CORS_ORIGINS,REDIS_PASSWORD,BACKEND_REPLICAS,BIND_ADDRESS,STUN_URLS,TURN_URLS,TURN_SECRET,TURN_USERNAME,TURN_CREDENTIAL,TURN_TTL_SECONDS,TURN_REALM,TURN_EXTERNAL_IP,RUN_COTURN,METRICS_TOKEN,LOG_LEVEL
+          script: |
+            set -eu
+            cd "$PROJECT_PATH"
+            bash .incoming/deploy/deploy.sh "$DEPLOY_TAG"
