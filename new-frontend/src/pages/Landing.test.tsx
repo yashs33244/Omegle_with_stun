@@ -130,6 +130,19 @@ describe("Landing profile validation", () => {
     expect(roomProps.current?.preferences).toEqual({ genderFilter: "all", languageFilter: "any" });
   });
 
+  it("Escape closes an open dropdown first, then the dialog", async () => {
+    const { user, dialog } = await openDetails();
+    await user.click(within(dialog).getByTestId("gender-select"));
+    expect(within(dialog).getByRole("listbox")).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    expect(within(dialog).queryByRole("listbox")).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+  });
+
   it("sends unspecified when the user prefers not to say", async () => {
     const { user, dialog } = await openDetails();
     await user.type(within(dialog).getByTestId("name-input"), "Sam");
