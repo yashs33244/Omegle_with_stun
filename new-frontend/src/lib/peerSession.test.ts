@@ -52,14 +52,14 @@ class FakePeerConnection {
   }
 }
 
-function setup(initiator: boolean) {
+function setup(initiator: boolean, localStream: MediaStream | null = null) {
   const fake = new FakePeerConnection();
   const sent: RtcSignal[] = [];
   const session = new PeerSession({
     roomId: ROOM,
     initiator,
     iceServers: [{ urls: "stun:stun.example.com" }],
-    localStream: null,
+    localStream,
     sendSignal: (s) => sent.push(s),
     onRemoteStream: vi.fn(),
     onConnectionStateChange: vi.fn(),
@@ -155,6 +155,19 @@ describe("PeerSession", () => {
     const { fake } = setup(true);
     expect(fake.addTransceiver).toHaveBeenCalledWith("audio", { direction: "recvonly" });
     expect(fake.addTransceiver).toHaveBeenCalledWith("video", { direction: "recvonly" });
+  });
+
+  it("sends a camera-only stream and still receives the partner's audio", () => {
+    const video = { kind: "video" };
+    const stream = {
+      getTracks: () => [video],
+      getAudioTracks: () => [],
+      getVideoTracks: () => [video],
+    } as unknown as MediaStream;
+    const { fake } = setup(true, stream);
+    expect(fake.addTrack).toHaveBeenCalledWith(video, stream);
+    expect(fake.addTransceiver).toHaveBeenCalledTimes(1);
+    expect(fake.addTransceiver).toHaveBeenCalledWith("audio", { direction: "recvonly" });
   });
 
   it("close() closes the connection and drops later signals", async () => {

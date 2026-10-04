@@ -68,9 +68,12 @@ export class PeerSession {
 
     const stream = opts.localStream;
     stream?.getTracks().forEach((track) => this.pc.addTrack(track, stream));
-    if (!stream) {
-      // Still ask for the partner's media when we have none to send.
+    // Still ask for the partner's media of any kind we have none to send
+    // (no stream at all, or a camera-only stream when there is no microphone).
+    if (!stream || stream.getAudioTracks().length === 0) {
       this.pc.addTransceiver("audio", { direction: "recvonly" });
+    }
+    if (!stream || stream.getVideoTracks().length === 0) {
       this.pc.addTransceiver("video", { direction: "recvonly" });
     }
   }
