@@ -110,7 +110,7 @@ export const WaitingPanel: React.FC<WaitingPanelProps> = ({
     <Shell testId="status-waiting">
       {photo ? (
         <div className="w-20 h-20 mx-auto rounded-full overflow-hidden border-4 border-yellow-500 animate-pulse">
-          <img src={photo} alt="Your profile" className="w-full h-full object-cover" style={{ transform: "scaleX(-1)" }} />
+          <img src={photo} alt="Your profile" className="w-full h-full object-cover" />
         </div>
       ) : (
         <Loader className="w-16 h-16 text-yellow-400 animate-spin mx-auto" />

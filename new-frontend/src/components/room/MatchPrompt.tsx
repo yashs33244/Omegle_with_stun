@@ -47,7 +47,6 @@ export const MatchPrompt: React.FC<MatchPromptProps> = ({
           src={partner.photo}
           alt={`${partner.name}'s photo`}
           className="w-full h-full object-cover"
-          style={{ transform: "scaleX(-1)" }}
         />
       ) : (
         <div className="w-full h-full bg-gray-800 flex items-center justify-center">
