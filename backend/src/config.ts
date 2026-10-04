@@ -114,6 +114,13 @@ export interface Config {
    * lapsed blocks and users queued on other instances.
    */
   fullMatchPassIntervalMs: number;
+  /**
+   * Every instance refreshes its heartbeat this often. Sessions of an
+   * instance whose heartbeat is older than instanceTtlMs are removed by the
+   * other instances (their partners get partner-unavailable).
+   */
+  heartbeatIntervalMs: number;
+  instanceTtlMs: number;
   /** Coins are awarded once per full interval of active call. */
   coinIntervalMs: number;
   coinsPerInterval: number;
@@ -169,6 +176,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     matchAcceptGraceMs: 750,
     sweepIntervalMs: 500,
     fullMatchPassIntervalMs: 2000,
+    heartbeatIntervalMs: 5_000,
+    instanceTtlMs: 15_000,
     coinIntervalMs: 60_000,
     coinsPerInterval: 5,
     initialCoins: 100,

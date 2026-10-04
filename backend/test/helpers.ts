@@ -15,7 +15,7 @@ import {
   type Profile,
   type ServerToClientEvents,
 } from "../src/protocol";
-import { createServer, type ChizzyServer } from "../src/server";
+import { createServer, type ChizzyServer, type ServerDeps } from "../src/server";
 import { MemoryStore } from "../src/store/MemoryStore";
 import type { MatchStore } from "../src/store/MatchStore";
 
@@ -60,9 +60,10 @@ export interface TestServer {
 export async function startServer(
   overrides: Partial<Config> = {},
   store: MatchStore = new MemoryStore(),
+  deps: Pick<ServerDeps, "configureIo"> = {},
 ): Promise<TestServer> {
   const config = testConfig(overrides);
-  const server = createServer(config, { store, logger: createLogger("silent") });
+  const server = createServer(config, { store, logger: createLogger("silent"), ...deps });
   const port = await server.listen(0, "127.0.0.1");
   const url = `http://127.0.0.1:${port}`;
   const clients: Client[] = [];

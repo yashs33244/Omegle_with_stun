@@ -61,6 +61,8 @@ export interface MatchServiceDeps {
 /** Per-socket bookkeeping for sockets owned by this instance. */
 interface LocalSocket {
   deviceId: string;
+  /** Set when a sweep found no stored session for this socket (see tickRewards). */
+  orphaned?: boolean;
   rewards?: {
     roomId: string;
     activeSince: number;
@@ -86,9 +88,12 @@ export class MatchService {
   /** Sessions queued or changed since the last match pass (only touched under the lock). */
   private readonly dirty = new Set<string>();
   private sweepTimer?: ReturnType<typeof setInterval>;
+  private heartbeatTimer?: ReturnType<typeof setInterval>;
+  private started?: Promise<void>;
   private sweeping?: Promise<void>;
   private stopped = false;
   private lastFullPassAt = 0;
+  private lastReapAt = 0;
 
   constructor(deps: MatchServiceDeps) {
     this.store = deps.store;
@@ -103,10 +108,28 @@ export class MatchService {
   /* Lifecycle                                                         */
   /* ---------------------------------------------------------------- */
 
-  start(): void {
-    if (this.sweepTimer || this.stopped) return;
+  /**
+   * Starts the sweeper and the instance heartbeat. Resolves after the first
+   * heartbeat is stored, so other instances never see this instance's
+   * sessions before they see it alive. Idempotent.
+   */
+  start(): Promise<void> {
+    if (this.stopped) return Promise.resolve();
+    if (this.started) return this.started;
     this.sweepTimer = setInterval(() => void this.sweep(), this.config.sweepIntervalMs);
     this.sweepTimer.unref?.();
+    // Separate from the sweeper: a sweep stuck waiting for the lock must not
+    // let the heartbeat lapse and get this live instance reaped.
+    this.heartbeatTimer = setInterval(() => {
+      this.beat().catch((err: unknown) => this.log.error({ err }, "instance heartbeat failed"));
+    }, this.config.heartbeatIntervalMs);
+    this.heartbeatTimer.unref?.();
+    this.started = this.beat();
+    return this.started;
+  }
+
+  private beat(): Promise<void> {
+    return this.store.heartbeat(this.config.instanceId, this.config.instanceTtlMs);
   }
 
   /**
@@ -117,13 +140,21 @@ export class MatchService {
     if (this.stopped) return;
     this.stopped = true;
     if (this.sweepTimer) clearInterval(this.sweepTimer);
+    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     this.sweepTimer = undefined;
+    this.heartbeatTimer = undefined;
     await this.sweeping;
     const ids = [...this.local.keys()];
     for (const id of ids) this.emitter.emit(id, "server:shutdown");
     await this.store.withLock(async () => {
       const sessions = await this.store.getSessions(ids);
       for (const s of sessions) if (s) await this.removeSessionLocked(s, "partner-unavailable");
+      // Also sessions the local map lost track of, then the instance itself.
+      for (const socketId of await this.store.listInstanceSessions(this.config.instanceId)) {
+        const s = await this.store.getSession(socketId);
+        if (s) await this.removeSessionLocked(s, "partner-unavailable");
+      }
+      await this.store.forgetInstance(this.config.instanceId);
     });
     this.local.clear();
   }
@@ -341,7 +372,10 @@ export class MatchService {
   /* Sweeper                                                           */
   /* ---------------------------------------------------------------- */
 
-  /** Expires pending rooms, runs a match pass, then awards coins and friends to local sockets. */
+  /**
+   * Removes the sessions of dead instances, expires pending rooms, runs a
+   * match pass, then awards coins and friends to local sockets.
+   */
   sweep(): Promise<void> {
     if (this.sweeping || this.stopped) return this.sweeping ?? Promise.resolve();
     this.sweeping = this.runSweep().finally(() => {
@@ -354,6 +388,10 @@ export class MatchService {
     try {
       await this.store.withLock(async () => {
         const now = this.now();
+        if (now - this.lastReapAt >= this.config.heartbeatIntervalMs) {
+          this.lastReapAt = now;
+          await this.reapDeadInstancesLocked();
+        }
         const expired = await this.store.listExpiredPendingRooms(now - this.config.matchAcceptGraceMs);
         for (const roomId of expired) {
           const room = await this.store.getRoom(roomId);
@@ -372,6 +410,25 @@ export class MatchService {
       await this.tickRewards();
     } catch (err) {
       this.log.error({ err }, "sweep failed");
+    }
+  }
+
+  /**
+   * Another instance stopped sending heartbeats (crash, kill, network split):
+   * remove its sessions so their partners are told and re-queued, and so
+   * nobody is matched with a socket that no longer exists.
+   */
+  private async reapDeadInstancesLocked(): Promise<void> {
+    const dead = (await this.store.listDeadInstances()).filter((id) => id !== this.config.instanceId);
+    for (const instanceId of dead) {
+      const socketIds = await this.store.listInstanceSessions(instanceId);
+      for (const socketId of socketIds) {
+        // Read each one fresh: removing a session re-queues its partner.
+        const session = await this.store.getSession(socketId);
+        if (session) await this.removeSessionLocked(session, "partner-unavailable");
+      }
+      await this.store.forgetInstance(instanceId);
+      this.log.warn({ deadInstance: instanceId, sessions: socketIds.length }, "removed sessions of a dead instance");
     }
   }
 
@@ -395,7 +452,24 @@ export class MatchService {
       const entry = this.local.get(socketId);
       const session = sessions[i];
       if (!entry) continue;
-      if (!session || session.state !== "active" || !session.roomId) {
+      if (!session) {
+        // The session was removed behind our back. Usually the device was
+        // replaced on another instance and that instance's disconnect is a
+        // few ms away, so wait one more sweep. If it is still here, this
+        // instance was reaped after its heartbeat lapsed: the socket is
+        // unusable, so ask the client to reconnect (it re-sends hello).
+        if (!entry.orphaned) {
+          entry.orphaned = true;
+          continue;
+        }
+        this.local.delete(socketId);
+        this.log.warn({ socketId }, "local socket lost its session; disconnecting it");
+        this.emitter.emit(socketId, "server:shutdown");
+        this.emitter.disconnect(socketId);
+        continue;
+      }
+      entry.orphaned = false;
+      if (session.state !== "active" || !session.roomId) {
         entry.rewards = undefined;
         continue;
       }

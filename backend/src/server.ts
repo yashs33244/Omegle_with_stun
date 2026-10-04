@@ -23,7 +23,10 @@ export interface ChizzyServer {
   io: AppServer;
   service: MatchService;
   metrics: Metrics;
-  /** Starts listening; resolves with the bound port (use 0 for a random port). */
+  /**
+   * Starts listening once the instance heartbeat is stored; resolves with the
+   * bound port (use 0 for a random port). Rejects if the store is unreachable.
+   */
   listen(port: number, host?: string): Promise<number>;
   /**
    * Graceful close: ends local sessions (partners are re-queued), tells local
@@ -43,7 +46,9 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
 
   const service = new MatchService({ store, config, logger, metrics, emitter: createEmitter(io) });
   attachHandlers(io, { config, service, logger, metrics });
-  service.start();
+  // listen() waits for this, so no client connects before the first heartbeat.
+  const started = service.start();
+  started.catch(() => {}); // surfaced by listen(); avoid an unhandled rejection meanwhile
 
   let closing: Promise<void> | undefined;
   return {
@@ -51,7 +56,8 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     io,
     service,
     metrics,
-    listen(port, host) {
+    async listen(port, host) {
+      await started;
       return new Promise((resolve, reject) => {
         httpServer.once("error", reject);
         httpServer.listen(port, host, () => {
