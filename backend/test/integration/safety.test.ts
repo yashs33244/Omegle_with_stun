@@ -79,6 +79,15 @@ describe("malformed payloads", () => {
     expect(health.status).toBe(200);
   });
 
+  test("a failing store yields an internal error, not a crash", async () => {
+    const store = new MemoryStore();
+    store.getBan = () => Promise.reject(new Error("store exploded"));
+    ts = await startServer({}, store);
+    const c = await ts.connect();
+    expect(await sendHello(c, hello())).toEqual({ ok: false, error: "internal" });
+    expect((await fetch(`${ts.url}/healthz`)).status).toBe(200);
+  });
+
   test("a wrong protocol version is reported as unsupported_version", async () => {
     ts = await startServer();
     const c = await ts.connect();

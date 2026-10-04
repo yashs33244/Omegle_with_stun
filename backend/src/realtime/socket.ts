@@ -137,40 +137,45 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): void {
         const last = args[args.length - 1];
         const ack = typeof last === "function" ? (last as (res: unknown) => void) : undefined;
         const raw = ack ? args.slice(0, -1)[0] : args[0];
-
-        if (!limiter.allow(cls)) {
-          metrics.rateLimitedTotal.inc({ event });
-          return fail(event, "rate_limited", ack);
-        }
-        let data: T;
-        if (schema) {
-          if (event === "session:hello" && isWrongVersion(raw)) {
-            return fail(event, "unsupported_version", ack, `protocolVersion must be ${PROTOCOL_VERSION}`);
-          }
-          const parsed = schema.safeParse(raw);
-          if (!parsed.success) {
-            metrics.invalidPayloadTotal.inc({ event });
-            return fail(event, "invalid_payload", ack);
-          }
-          data = parsed.data;
-        } else {
-          data = undefined as T;
-        }
-
         let replied = false;
-        const reply = (res: unknown) => {
-          if (replied) return;
-          replied = true;
-          ack?.(res);
-        };
-        handler(data, reply).catch((err: unknown) => {
+        const onError = (err: unknown) => {
           metrics.handlerErrorsTotal.inc({ event });
           log.error({ err, event }, "handler failed");
           if (!replied) {
             replied = true;
             fail(event, "internal", ack);
           }
-        });
+        };
+        try {
+
+          if (!limiter.allow(cls)) {
+            metrics.rateLimitedTotal.inc({ event });
+            return fail(event, "rate_limited", ack);
+          }
+          let data: T;
+          if (schema) {
+            if (event === "session:hello" && isWrongVersion(raw)) {
+              return fail(event, "unsupported_version", ack, `protocolVersion must be ${PROTOCOL_VERSION}`);
+            }
+            const parsed = schema.safeParse(raw);
+            if (!parsed.success) {
+              metrics.invalidPayloadTotal.inc({ event });
+              return fail(event, "invalid_payload", ack);
+            }
+            data = parsed.data;
+          } else {
+            data = undefined as T;
+          }
+
+          const reply = (res: unknown) => {
+            if (replied) return;
+            replied = true;
+            ack?.(res);
+          };
+          handler(data, reply).catch(onError);
+        } catch (err) {
+          onError(err);
+        }
       });
     }
 
