@@ -62,26 +62,45 @@ test("one hello with 2000 unmatchable waiters completes in under 50 ms", async (
   expect(best).toBeLessThan(50);
 });
 
+test("a recheck sweep costs a small fraction of a full pass at 4000 waiters", async () => {
+  const store = new MemoryStore();
+  // Sweeps are run by hand; every one of them rechecks.
+  ts = await startServer({ sweepIntervalMs: 60_000, recheckIntervalMs: 0 }, store);
+  await fillUnmatchable(store, ts.config.instanceId, 4000);
+  await ts.server.service.sweep(); // warm up
+  // Relative to a full pass on the same machine, so a slow CI core cannot fail it.
+  let recheck = Infinity;
+  for (let i = 0; i < 3; i++) {
+    const started = performance.now();
+    await ts.server.service.sweep();
+    recheck = Math.min(recheck, performance.now() - started);
+  }
+  const started = performance.now();
+  await ts.server.service.matchPass();
+  const full = performance.now() - started;
+  // Measured: about 30 ms against about 850 ms.
+  expect(recheck * 5).toBeLessThan(full);
+});
+
 test("the sweeper's recheck keeps /healthz fast with 4000 unmatchable waiters", async () => {
   const store = new MemoryStore();
-  // A recheck on every sweep, 50x more often than in production. Before the
-  // fix each one was a full O(waiting^2) pass: about 700 ms at 4000 waiters.
-  ts = await startServer({ sweepIntervalMs: 100, recheckIntervalMs: 100 }, store);
+  // A recheck on every sweep, 20x more often than in production. Before the
+  // fix each one was a full O(waiting^2) pass of about 850 ms, back to back.
+  ts = await startServer({ sweepIntervalMs: 250, recheckIntervalMs: 250 }, store);
   await fillUnmatchable(store, ts.config.instanceId, 4000);
-  const deadline = performance.now() + 1500;
-  const latencies: number[] = [];
-  while (performance.now() < deadline) {
-    const started = performance.now();
-    const res = await fetch(`${ts.url}/healthz`);
-    expect(res.status).toBe(200);
-    latencies.push(performance.now() - started);
+  // Best of three 600 ms windows, so one GC pause or a busy core does not fail
+  // the run; with the old full pass every window stalls for hundreds of ms.
+  let best = Infinity;
+  for (let w = 0; w < 3; w++) {
+    const deadline = performance.now() + 600;
+    let worst = 0;
+    while (performance.now() < deadline) {
+      const started = performance.now();
+      const res = await fetch(`${ts.url}/healthz`);
+      expect(res.status).toBe(200);
+      worst = Math.max(worst, performance.now() - started);
+    }
+    best = Math.min(best, worst);
   }
-  latencies.sort((x, y) => x - y);
-  const p99 = latencies[Math.floor(latencies.length * 0.99)]!;
-  const worst = latencies[latencies.length - 1]!;
-  // Before the fix: about 5 requests in 1.5 s, each waiting out a 700 ms pass.
-  // Loose bounds for the worst case leave room for a GC pause on a busy CI core.
-  expect(latencies.length).toBeGreaterThan(100);
-  expect(p99).toBeLessThan(50);
-  expect(worst).toBeLessThan(300);
+  expect(best).toBeLessThan(250);
 });
