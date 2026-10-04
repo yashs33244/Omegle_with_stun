@@ -68,6 +68,10 @@ export interface SignalingState {
   /** Increments on every positive coins:update so the UI can animate. */
   coinBump: number;
   iceServers: IceServer[];
+  /** ICE servers (with per-call TURN credentials), bitrate caps and Hide my IP permission from call:start. */
+  callMedia: CallMedia | null;
+  /** Your effective mode for the current match (match:found). */
+  matchMode: MatchMode | null;
   messages: ChatEntry[];
   partnerTyping: boolean;
   lastEndReason: MatchEndReason | null;
@@ -89,6 +93,8 @@ export const initialSignalingState: SignalingState = {
   coins: null,
   coinBump: 0,
   iceServers: [],
+  callMedia: null,
+  matchMode: null,
   messages: [],
   partnerTyping: false,
   lastEndReason: null,
@@ -110,10 +116,11 @@ export type SignalingEvent =
       expiresAt: number;
       serverNow: number;
       receivedAt: number;
+      mode?: MatchMode;
     }
   | { type: "local-accept" }
   | { type: "partner-accepted"; roomId: string }
-  | { type: "call-start"; roomId: string; initiator: boolean; at: number }
+  | { type: "call-start"; roomId: string; initiator: boolean; at: number; media?: CallMedia }
   | { type: "match-ended"; roomId: string; reason: MatchEndReason }
   | { type: "chat-received"; roomId: string; id: string; text: string; ts: number }
   | { type: "chat-local"; roomId: string; tempId: string; text: string; ts: number }
@@ -152,6 +159,8 @@ function clearRoom(state: SignalingState): SignalingState {
     partnerAccepted: false,
     expiresAt: null,
     callStartedAt: null,
+    callMedia: null,
+    matchMode: null,
     messages: [],
     partnerTyping: false,
   };
@@ -202,6 +211,7 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
         partner: event.partner,
         isFriend: event.isFriend,
         expiresAt: toLocalDeadline(event.expiresAt, event.serverNow, event.receivedAt),
+        matchMode: event.mode ?? null,
         lastEndReason: null,
       };
 
@@ -223,6 +233,7 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
         partnerAccepted: true,
         expiresAt: null,
         callStartedAt: event.at,
+        callMedia: event.media ?? null,
       };
 
     case "match-ended":
@@ -306,6 +317,14 @@ const PARTNER_TYPING_TTL_MS = 6000;
 const NOTICE_TTL_MS = 4000;
 
 export type SignalListener = (signal: RtcSignal) => void;
+
+/** Per-call media settings from call:start. */
+export interface CallMedia {
+  iceServers: IceServer[];
+  maxBitrateKbps: number;
+  relayMaxBitrateKbps: number;
+  privateModeAllowed: boolean;
+}
 
 /** Client events other hooks may send without touching this file. */
 export type ExtraClientEvent = "call:failed" | "call:telemetry" | "moderation:signal";
@@ -439,6 +458,12 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
     socket.on("match:found", (p) => {
       pendingSignals.current = [];
       dispatch({ type: "match-found", ...p, receivedAt: Date.now() });
+      // Instant mode: the server accepts for us. Accepting here too is a no-op on
+      // such a server and covers one without server-side auto-accept.
+      if (p.mode === "instant") {
+        socket.emit("match:accept", { roomId: p.roomId });
+        dispatch({ type: "local-accept" });
+      }
     });
     socket.on("match:partner-accepted", (p) => dispatch({ type: "partner-accepted", roomId: p.roomId }));
     socket.on("match:ended", (p) => {
@@ -446,7 +471,18 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
       dispatch({ type: "match-ended", roomId: p.roomId, reason: p.reason });
     });
     socket.on("call:start", (p) =>
-      dispatch({ type: "call-start", roomId: p.roomId, initiator: p.initiator, at: Date.now() }),
+      dispatch({
+        type: "call-start",
+        roomId: p.roomId,
+        initiator: p.initiator,
+        at: Date.now(),
+        media: {
+          iceServers: p.iceServers,
+          maxBitrateKbps: p.maxBitrateKbps,
+          relayMaxBitrateKbps: p.relayMaxBitrateKbps,
+          privateModeAllowed: p.privateModeAllowed,
+        },
+      }),
     );
     socket.on("rtc:signal", (signal) => {
       const listener = signalListeners.current.get(signal.roomId);
