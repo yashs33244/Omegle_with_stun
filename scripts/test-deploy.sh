@@ -92,8 +92,17 @@ new_project() {
   printf '%s' "$dir"
 }
 
+# Test values for the secrets a production backend needs. Never real secrets.
+SESSION_TEST_SECRET=test-session-secret-0123456789abcdef
+ADMIN_TEST_TOKEN=test-admin-token-0123456789
+REQUIRED_SECRETS=(
+  CORS_ORIGINS=https://app.example.com SESSION_SECRET="$SESSION_TEST_SECRET" ADMIN_TOKEN="$ADMIN_TEST_TOKEN"
+  TURNSTILE_SECRET=test-turnstile-secret TURNSTILE_SITE_KEY=test-site-key PSEUDONYM_SALT=test-pseudonym-salt-0123
+)
+
 # Runs deploy.sh the way the workflow does (DEPLOY_WRITE_ENV=1) in a clean
-# environment, with any extra VAR=value arguments. Output goes to $dir/out.
+# environment with the required secrets, plus any extra VAR=value arguments
+# (later ones win). Output goes to $dir/out.
 run_deploy() {
   local dir=$1
   shift
@@ -101,7 +110,7 @@ run_deploy() {
     cd "$dir" &&
       env -i PATH="$stub_bin:$PATH" HOME="$HOME" STUB_LOG="$dir/docker.log" HEALTH_ATTEMPTS=1 HEALTH_INTERVAL=0 \
         DEPLOY_WRITE_ENV=1 BACKEND_IMAGE=example/backend FRONTEND_IMAGE=example/frontend \
-        "$@" bash .incoming/deploy/deploy.sh new-sha >"$dir/out" 2>&1
+        "${REQUIRED_SECRETS[@]}" "$@" bash .incoming/deploy/deploy.sh new-sha >"$dir/out" 2>&1
   )
 }
 
@@ -117,6 +126,7 @@ expect() {
 
 file_is() { [ -f "$1" ] && [ "$(cat "$1")" = "$2" ]; }
 not_pulled() { ! grep -q "compose pull" "$1/docker.log"; }
+not_in() { ! grep -qF -- "$1" "$2"; }
 
 test_deploy_success() {
   local name="a verified deploy keeps the old files in .previous/" dir
@@ -204,6 +214,70 @@ test_missing_image_fails_before_install() {
     pass "$name"
 }
 
+# The backend refuses to start without these in production; the deploy must
+# say which one is missing before it replaces any file or pulls.
+test_missing_secret_fails_before_install() {
+  local name="a missing or short required secret fails before any file is replaced" dir
+  dir=$(new_project)
+  echo "old-sha" >"$dir/.deployed-tag"
+  if run_deploy "$dir" SESSION_SECRET= ADMIN_TOKEN=too-short TURNSTILE_SITE_KEY=; then expect "$name" "$dir" false; return; fi
+  expect "$name" "$dir" grep -q "missing or too short: SESSION_SECRET ADMIN_TOKEN TURNSTILE_SITE_KEY" "$dir/out" &&
+    expect "$name" "$dir" not_in "too-short" "$dir/out" &&
+    expect "$name" "$dir" file_is "$dir/docker-compose.yml" "old" &&
+    expect "$name" "$dir" not_pulled "$dir" &&
+    pass "$name"
+}
+
+test_evidence_bucket_needs_region() {
+  local name="an evidence bucket without a region fails before any file is replaced" dir
+  dir=$(new_project)
+  if run_deploy "$dir" EVIDENCE_S3_BUCKET=evidence-bucket; then expect "$name" "$dir" false; return; fi
+  expect "$name" "$dir" grep -q "missing or too short: EVIDENCE_S3_REGION" "$dir/out" &&
+    expect "$name" "$dir" file_is "$dir/docker-compose.yml" "old" &&
+    pass "$name"
+}
+
+test_turnstile_disabled_needs_no_keys() {
+  local name="TURNSTILE_DISABLED=true deploys without Turnstile keys, with a warning" dir
+  dir=$(new_project)
+  run_deploy "$dir" TURNSTILE_DISABLED=true TURNSTILE_SECRET= TURNSTILE_SITE_KEY= || { expect "$name" "$dir" false; return; }
+  expect "$name" "$dir" grep -q "WARNING: TURNSTILE_DISABLED" "$dir/out" &&
+    expect "$name" "$dir" file_is "$dir/.deployed-tag" "new-sha" &&
+    pass "$name"
+}
+
+test_secrets_written_but_not_printed() {
+  local name="secrets reach .env (mode 600) and never the output" dir
+  dir=$(new_project)
+  run_deploy "$dir" || { expect "$name" "$dir" false; return; }
+  expect "$name" "$dir" grep -qx "SESSION_SECRET='$SESSION_TEST_SECRET'" "$dir/.env" &&
+    expect "$name" "$dir" grep -qx "ADMIN_TOKEN='$ADMIN_TEST_TOKEN'" "$dir/.env" &&
+    expect "$name" "$dir" [ "$(stat -c %a "$dir/.env" 2>/dev/null || stat -f %Lp "$dir/.env")" = 600 ] &&
+    expect "$name" "$dir" not_in "$SESSION_TEST_SECRET" "$dir/out" &&
+    expect "$name" "$dir" not_in "$ADMIN_TEST_TOKEN" "$dir/out" &&
+    pass "$name"
+}
+
+test_pseudonym_salt_warning() {
+  local name="an empty PSEUDONYM_SALT deploys with a warning" dir
+  dir=$(new_project)
+  run_deploy "$dir" PSEUDONYM_SALT= || { expect "$name" "$dir" false; return; }
+  expect "$name" "$dir" grep -q "WARNING: PSEUDONYM_SALT is empty" "$dir/out" &&
+    pass "$name"
+}
+
+# A manual run (rollback by hand) checks the secrets already in .env.
+test_manual_run_checks_env_file() {
+  local name="a manual run with .env lacking ADMIN_TOKEN fails before any file is replaced" dir
+  dir=$(new_project)
+  echo "old-sha" >"$dir/.deployed-tag"
+  printf "CORS_ORIGINS='https://app.example.com'\nSESSION_SECRET='%s'\nTURNSTILE_DISABLED='true'\n" "$SESSION_TEST_SECRET" >"$dir/.env"
+  if run_deploy "$dir" DEPLOY_WRITE_ENV=0; then expect "$name" "$dir" false; return; fi
+  expect "$name" "$dir" grep -q "missing or too short: ADMIN_TOKEN" "$dir/out" &&
+    expect "$name" "$dir" file_is "$dir/docker-compose.yml" "old" &&
+    pass "$name"
+}
+
 test_manual_run_without_env_fails_before_install() {
   local name="a manual run without .env fails before any file is replaced" dir
   dir=$(new_project)
@@ -217,7 +291,13 @@ test_manual_run_without_env_fails_before_install() {
 test_env_keys_cover_compose
 test_env_keys_passed_by_workflow
 test_manual_run_without_env_fails_before_install
+test_manual_run_checks_env_file
 test_invalid_env_changes_nothing
+test_missing_secret_fails_before_install
+test_evidence_bucket_needs_region
+test_turnstile_disabled_needs_no_keys
+test_secrets_written_but_not_printed
+test_pseudonym_salt_warning
 test_missing_image_fails_before_install
 test_deploy_success
 test_failed_deploy_rolls_back
