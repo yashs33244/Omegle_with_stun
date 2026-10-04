@@ -9,14 +9,19 @@ export interface OnboardOptions {
   /** Exactly these topics end up selected (the form starts with "general"). */
   topics?: Topic[];
   photo?: "capture" | "skip";
+  /** Match mode picked on the start screen. Preview (the accept card) unless a test asks for instant. */
+  mode?: "instant" | "preview";
 }
 
 /** Opens the app, fills the profile dialog and starts chatting. Ends waiting or matched. */
 export async function onboard(s: Stranger, opts: OnboardOptions = {}): Promise<void> {
   const { page } = s;
-  const { gender = "Prefer not to say", topics = ["general"], photo = "skip" } = opts;
+  const { gender = "Prefer not to say", topics = ["general"], photo = "skip", mode = "preview" } = opts;
 
   if (page.url() === "about:blank") await page.goto("/");
+  const modeButton = page.getByTestId(`mode-${mode}`);
+  await modeButton.click();
+  await expect(modeButton).toHaveAttribute("aria-checked", "true");
   const start = page.getByTestId("start-chat");
   await expect(start, "Start is enabled once the camera is ready").toBeEnabled();
   await start.click();
@@ -44,8 +49,10 @@ export async function onboard(s: Stranger, opts: OnboardOptions = {}): Promise<v
   }
 
   await page.getByTestId("begin-chat").click();
-  // Queued; a partner who is already waiting may match straight away.
-  await expect(page.getByTestId("status-waiting").or(page.getByTestId("match-prompt"))).toBeVisible();
+  // Queued; a partner who is already waiting may match straight away (instant mode may already be in the call).
+  await expect(
+    page.getByTestId("status-waiting").or(page.getByTestId("match-prompt")).or(page.getByTestId("next-button")),
+  ).toBeVisible();
 }
 
 /** The match prompt names the partner and shows a running countdown within the accept window. */
