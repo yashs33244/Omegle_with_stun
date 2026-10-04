@@ -29,6 +29,7 @@ describe("SafetyCoachGate", () => {
     expect(screen.getByRole("link", { name: "988" })).toHaveAttribute("href", "tel:988");
     expect(screen.getByRole("link", { name: "More safety tips" })).toHaveAttribute("href", "/safety");
     expect(screen.queryByText("room")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "I understand" })).toHaveFocus();
 
     await user.click(screen.getByRole("button", { name: "I understand" }));
     expect(screen.getByText("room")).toBeInTheDocument();

@@ -54,6 +54,8 @@ export const SafetyCoachCard: React.FC<SafetyCoachCardProps> = ({ onContinue, on
           <button
             type="button"
             onClick={onContinue}
+            // Focus the main action rather than the first helpline link.
+            autoFocus
             data-testid="safety-coach-continue"
             className="retro-button flex-1"
           >
