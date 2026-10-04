@@ -85,6 +85,8 @@ describe("loadConfig", () => {
         "TURNSTILE_DISABLED", "TRUST_CLOUDFLARE", "SESSION_RATE_PER_IP_PER_MIN",
         "SESSION_RATE_PER_NETWORK_PER_MIN", "MATCH_CAP_PER_DEVICE_PER_HOUR", "MATCH_CAP_PER_IP_PER_HOUR",
         "SENTRY_DSN", "SENTRY_DSN_FRONTEND", "POSTHOG_KEY", "POSTHOG_HOST",
+        "TURN_PROVIDER", "CF_TURN_KEY_ID", "CF_TURN_API_TOKEN", "TURN_CACHE_SECONDS", "TURN_MAX_PER_DEVICE_HOUR",
+        "TURN_MAX_PER_IP_HOUR", "CF_ACCOUNT_ID", "CF_ANALYTICS_TOKEN", "TURN_SPEND_DAILY_GB",
       ].sort(),
     );
     expect(() => loadConfig(env)).not.toThrow();
@@ -96,5 +98,20 @@ describe("loadConfig", () => {
     const c = loadConfig({ TURN_URLS: "turn:t:3478,turns:t:5349", TURN_SECRET: "x", TRUST_PROXY: "true" });
     expect(c.turnUrls).toEqual(["turn:t:3478", "turns:t:5349"]);
     expect(c.trustProxy).toBe(true);
+    expect(c.turnProvider).toBe("secret");
+  });
+
+  test("TURN provider and spend poller settings", () => {
+    expect(loadConfig({}).turnProvider).toBe("none");
+    expect(loadConfig({}).turnTtlSeconds).toBe(7200);
+    expect(loadConfig({ TURN_URLS: "turn:t:3478", TURN_USERNAME: "u", TURN_CREDENTIAL: "p" }).turnProvider).toBe("static");
+    expect(() => loadConfig({ TURN_PROVIDER: "cloudflare" })).toThrow(/CF_TURN_KEY_ID/);
+    const cf = loadConfig({ TURN_PROVIDER: "cloudflare", CF_TURN_KEY_ID: "k", CF_TURN_API_TOKEN: "t" });
+    expect(cf).toMatchObject({ turnProvider: "cloudflare", cfTurnKeyId: "k", cfTurnApiToken: "t", turnTtlSeconds: 7200 });
+    expect(() => loadConfig({ TURN_PROVIDER: "secret" })).toThrow(/TURN_SECRET/);
+    expect(() => loadConfig({ CF_ACCOUNT_ID: "a" })).toThrow(/CF_ANALYTICS_TOKEN/);
+    expect(() => loadConfig({ TURN_SPEND_DAILY_GB: "50,40,60" })).toThrow(/TURN_SPEND_DAILY_GB/);
+    expect(() => loadConfig({ TURN_SPEND_DAILY_GB: "1,2" })).toThrow(/TURN_SPEND_DAILY_GB/);
+    expect(loadConfig({ TURN_SPEND_DAILY_GB: "10, 20,30" }).turnSpendDailyGb).toEqual([10, 20, 30]);
   });
 });

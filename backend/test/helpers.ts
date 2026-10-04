@@ -3,6 +3,7 @@
  * socket.io clients with small await helpers.
  */
 import { randomUUID } from "node:crypto";
+import Redis from "ioredis";
 import { io as ioClient, type Socket } from "socket.io-client";
 import { loadConfig, type Config } from "../src/config";
 import { createLogger } from "../src/logger";
@@ -84,9 +85,11 @@ export async function startServer(
     const redisUrl = process.env.REDIS_URL;
     const redisStore = await RedisStore.connect(redisUrl, { prefix: `test:${randomUUID()}:` });
     const adapter = await connectRedisAdapter(redisUrl, createLogger("silent"), `test:${randomUUID()}:socket.io`);
-    owned.push(redisStore, adapter);
+    // The shared feature-store client, as index.ts creates it in Redis mode.
+    const redis = new Redis(redisUrl);
+    owned.push(redisStore, adapter, { close: async () => void (await redis.quit()) });
     store = redisStore;
-    deps = { configureIo: adapter.install, ...deps };
+    deps = { configureIo: adapter.install, redis, ...deps };
   }
   store ??= new MemoryStore();
   const server = createServer(config, { store, logger: createLogger("silent"), ...deps });

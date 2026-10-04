@@ -12,7 +12,7 @@ import { FlagsReader, MemoryFlagsStore } from "../../src/flags/flags";
 import { TOS_VERSION, type PublicConfig, type Restriction } from "../../src/protocol";
 import { startMatchingBroadcast } from "../../src/session/broadcast";
 import { TokenSigner } from "../../src/session/tokens";
-import type { FetchLike } from "../../src/session/turnstile";
+import type { FetchFn } from "../../src/turn/cloudflare";
 import {
   type Client,
   arrives,
@@ -37,11 +37,12 @@ const FAIL_SECRET = "2x0000000000000000000000000000000AA";
 const SITE_KEY = "1x00000000000000000000AA";
 
 /** Mimics Cloudflare's test secrets without touching the network. */
-function fakeSiteverify(calls: URLSearchParams[] = []): FetchLike {
+function fakeSiteverify(calls: URLSearchParams[] = []): FetchFn {
   return async (_url, init) => {
-    calls.push(init.body);
-    const ok = init.body.get("secret") === PASS_SECRET && Boolean(init.body.get("response"));
-    return { ok: true, json: async () => ({ success: ok, "error-codes": ok ? [] : ["invalid-input-secret"] }) };
+    const body = init?.body as URLSearchParams;
+    calls.push(body);
+    const ok = body.get("secret") === PASS_SECRET && Boolean(body.get("response"));
+    return Response.json({ success: ok, "error-codes": ok ? [] : ["invalid-input-secret"] });
   };
 }
 

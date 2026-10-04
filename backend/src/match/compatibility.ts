@@ -1,6 +1,8 @@
 /**
- * Pure matching rules between two waiting users. Blocks and bans live in the
- * store and are checked by MatchService on top of this.
+ * Pure HARD matching rules between two waiting users: the gender filter and
+ * the language FILTER, both mutual. They never relax. Soft preferences
+ * (shared topics, same language) relax with waiting time in relax.ts. Blocks
+ * and bans live in the store and are checked by MatchService on top of this.
  */
 import type { Preferences, Profile } from "../protocol";
 
@@ -32,6 +34,5 @@ function accepts(a: Candidate, b: Candidate): boolean {
 
 export function isCompatible(a: Candidate, b: Candidate): boolean {
   if (a.deviceId === b.deviceId) return false;
-  if (!a.profile.topics.some((t) => b.profile.topics.includes(t))) return false;
   return accepts(a, b) && accepts(b, a);
 }

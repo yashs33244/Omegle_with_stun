@@ -25,9 +25,9 @@ describe("isCompatible", () => {
     expect(isCompatible(cand({ deviceId: "x" }), cand({ deviceId: "x" }))).toBe(false);
   });
 
-  test("needs at least one shared topic", () => {
+  test("topics are not a hard rule (they relax, see relax.test.ts)", () => {
     expect(isCompatible(cand({ topics: ["music", "art"] }), cand({ topics: ["art"] }))).toBe(true);
-    expect(isCompatible(cand({ topics: ["music"] }), cand({ topics: ["art"] }))).toBe(false);
+    expect(isCompatible(cand({ topics: ["music"] }), cand({ topics: ["art"] }))).toBe(true);
   });
 
   const genderTable: [Gender, GenderFilter, Gender, GenderFilter, boolean][] = [

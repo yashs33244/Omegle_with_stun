@@ -5,6 +5,7 @@
  */
 import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
+import { MATCH_ENV, matchConfigFromEnv, refineMatchEnv, type MatchConfig } from "./match/matchConfig";
 
 const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace", "silent"] as const;
 
@@ -34,7 +35,7 @@ const envSchema = z
     TURN_SECRET: z.string().min(1).optional(),
     TURN_USERNAME: z.string().min(1).optional(),
     TURN_CREDENTIAL: z.string().min(1).optional(),
-    TURN_TTL_SECONDS: int(60).default(43200),
+    TURN_TTL_SECONDS: int(60).default(7200),
     LOG_LEVEL: z.enum(LOG_LEVELS).default("info"),
     METRICS_TOKEN: z.string().min(1).optional(),
     SHUTDOWN_GRACE_MS: int(0).default(10000),
@@ -52,8 +53,10 @@ const envSchema = z
     SENTRY_DSN_FRONTEND: z.string().url().optional(),
     POSTHOG_KEY: z.string().min(1).optional(),
     POSTHOG_HOST: z.string().url().optional(),
+    ...MATCH_ENV,
   })
   .superRefine((env, ctx) => {
+    refineMatchEnv(env, ctx);
     const origins = csv(env.CORS_ORIGINS);
     if (env.NODE_ENV === "production") {
       if (origins.length === 0) {
@@ -118,7 +121,7 @@ const envSchema = z
 
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
-export interface Config {
+export interface Config extends MatchConfig {
   nodeEnv: "development" | "production" | "test";
   port: number;
   /** "*" allows any origin (never in production). */
@@ -265,5 +268,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     reportWindowMs: 24 * 60 * 60_000,
     reportsToBan: 3,
     banMs: 24 * 60 * 60_000,
+    ...matchConfigFromEnv(e),
   };
 }

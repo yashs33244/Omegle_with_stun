@@ -3,9 +3,10 @@
  * can run in one process (tests) without clashing on metric names.
  */
 import { Counter, Gauge, Registry, collectDefaultMetrics } from "prom-client";
+import { createMatchMetrics, type MatchMetrics } from "./match/matchMetrics";
 import type { MatchStore } from "./store/MatchStore";
 
-export interface Metrics {
+export interface Metrics extends MatchMetrics {
   registry: Registry;
   connectedSockets: Gauge;
   matchesTotal: Counter;
@@ -72,5 +73,6 @@ export function createMetrics(store: MatchStore): Metrics {
       labelNames: ["event"],
       registers: [registry],
     }),
+    ...createMatchMetrics(registry),
   };
 }

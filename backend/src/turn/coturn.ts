@@ -1,5 +1,6 @@
 /**
- * ICE server list handed to clients in the session:hello ack.
+ * Self-hosted TURN providers ("secret" and "static"). Used per call by
+ * TurnService; the hello ack carries STUN only.
  *
  * TURN credentials follow the coturn REST API (`use-auth-secret`):
  *   username   = "<unix expiry seconds>:<deviceId>"
@@ -7,8 +8,8 @@
  * so credentials expire on their own and the secret never leaves the server.
  */
 import { createHmac } from "node:crypto";
-import type { Config } from "./config";
-import type { IceServer } from "./protocol";
+import type { Config } from "../config";
+import type { IceServer } from "../protocol";
 
 export function turnCredential(secret: string, username: string): string {
   return createHmac("sha1", secret).update(username).digest("base64");

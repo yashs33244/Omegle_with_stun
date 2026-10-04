@@ -9,7 +9,7 @@ export interface BucketSpec {
   refillPerSec: number;
 }
 
-export type EventClass = "hello" | "preferences" | "control" | "signal" | "chat" | "typing" | "report";
+export type EventClass = "hello" | "preferences" | "control" | "signal" | "chat" | "typing" | "report" | "telemetry";
 
 /** Limits per event class. Signal is generous because ICE candidates arrive in bursts. */
 export const RATE_LIMITS: Record<EventClass, BucketSpec> = {
@@ -20,6 +20,8 @@ export const RATE_LIMITS: Record<EventClass, BucketSpec> = {
   chat: { capacity: 10, refillPerSec: 2 },
   typing: { capacity: 10, refillPerSec: 4 },
   report: { capacity: 3, refillPerSec: 1 / 20 },
+  /** call:failed, call:telemetry and moderation:signal: a few per call, calls can be seconds apart. */
+  telemetry: { capacity: 20, refillPerSec: 1 },
 };
 
 export class TokenBucket {
