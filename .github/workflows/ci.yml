@@ -157,6 +157,8 @@ jobs:
           docker run --rm
           -v "$PWD/deploy/nginx/gateway.conf:/etc/nginx/conf.d/default.conf:ro"
           nginxinc/nginx-unprivileged:1.28.2-alpine3.23 nginx -t
+      - name: Check the gateway's real client IP handling
+        run: sh scripts/test-gateway-real-ip.sh
 
   stack:
     name: Compose stack end-to-end

@@ -160,8 +160,9 @@ default in [`.env.example`](.env.example). The ones that matter most:
 
 Inside compose the backend always runs with `NODE_ENV=production`,
 `TRUST_PROXY=true` (the gateway sets `X-Real-IP` to the real client address,
-taken from `X-Forwarded-For` only when the request comes from a private
-address such as the host proxy) and `REDIS_URL` pointing at the redis service.
+taken from `X-Forwarded-For` past trusted hops: private addresses such as the
+host proxy, and Cloudflare's ranges; see DEPLOYMENT.md) and `REDIS_URL`
+pointing at the redis service.
 
 ## Scripts
 

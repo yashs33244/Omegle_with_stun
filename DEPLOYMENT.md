@@ -74,9 +74,34 @@ reviewers to the `production` environment if deploys should need approval.
   Ports 3004 and 5173 do not need to be public (set `BIND_ADDRESS=127.0.0.1`).
   For coturn: 3478 tcp+udp and 49160-49200 udp.
 
-The gateway trusts `X-Forwarded-For` only from private addresses (the host
-proxy and Docker's port publishing), so the backend sees the real client IP for
-its per-IP limits, and a client connecting directly cannot spoof it.
+### Client IP behind Cloudflare
+
+Both hostnames are proxied by Cloudflare, so a request travels
+client -> Cloudflare -> host proxy -> gateway -> backend. The backend limits
+sockets per client IP (`MAX_CONNECTIONS_PER_IP` per replica), so it must see
+the real client address, not the Cloudflare edge address that many unrelated
+users share.
+
+The gateway (`deploy/nginx/gateway.conf`) walks `X-Forwarded-For` from right
+to left and skips trusted hops: private addresses (the host proxy and Docker's
+port publishing) and Cloudflare's published ranges. The first address left
+that is not trusted is the client. A client that connects to the origin
+directly cannot spoof its address, because its own IP is not trusted.
+
+This only works if the host proxy **appends** the address it sees to the
+`X-Forwarded-For` it received, keeping Cloudflare's entries:
+
+- nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`
+- Caddy: replaces the header with only its peer address unless that peer is
+  trusted. Add Cloudflare's ranges to `trusted_proxies` in the global
+  `servers` options.
+
+A host proxy that sends only its TCP peer would make every user on one
+Cloudflare address count as one client again. Do not switch the gateway to
+`CF-Connecting-IP`: ports 80 and 443 are open to the world, so anyone reaching
+the origin directly could set it. The Cloudflare list in `gateway.conf` comes
+from https://www.cloudflare.com/ips/ and should be refreshed now and then;
+`sh scripts/test-gateway-real-ip.sh` checks the behavior (CI runs it).
 
 ## First-time setup
 
