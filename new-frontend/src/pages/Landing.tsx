@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { useMediaStream } from "../hooks/useMediaStream";
 import { Room } from "./Room";
 import { Camera, Loader, User, X, Languages, Globe } from "lucide-react";
@@ -12,6 +12,20 @@ import {
   countries,
 } from "../lib/data";
 import { UserProfile } from "../types";
+import {
+  LIMITS,
+  TOPICS,
+  type Preferences,
+  type Profile,
+  type Topic,
+} from "../lib/protocol";
+
+const isTopic = (id: string): id is Topic => (TOPICS as readonly string[]).includes(id);
+
+/** The server only accepts small inline images; anything else is left out of the profile. */
+const PHOTO_DATA_URL = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/;
+const usablePhoto = (photo?: string) =>
+  photo && photo.length <= LIMITS.photoMaxChars && PHOTO_DATA_URL.test(photo) ? photo : undefined;
 
 // Topics list
 const topics = [
@@ -99,11 +113,13 @@ export const Landing = () => {
     coins: 100,
   });
   const [selectedTopics, setSelectedTopics] = useState<string[]>(["general"]);
+  const [preferences, setPreferences] = useState<Preferences>({
+    genderFilter: "all",
+    languageFilter: "any",
+  });
   const [isCapturing, setIsCapturing] = useState<boolean>(false);
 
   const {
-    localAudioTrack,
-    localVideoTrack,
     videoRef,
     hasPermission,
     isLoading,
@@ -111,7 +127,23 @@ export const Landing = () => {
     getCam,
     restartStream,
     stream,
+    micEnabled,
+    setMicEnabled,
+    setCameraEnabled,
   } = useMediaStream();
+
+  const profile = useMemo<Profile>(() => {
+    const photo = usablePhoto(user.profilePhoto);
+    return {
+      name: user.name.trim().slice(0, LIMITS.nameMax),
+      country: user.country,
+      language: user.language,
+      // The gender field arrives with the profile form update; until then it is not shared.
+      gender: "unspecified",
+      topics: selectedTopics.filter(isTopic).slice(0, LIMITS.topicsMax),
+      ...(photo ? { photo } : {}),
+    };
+  }, [user, selectedTopics]);
 
   const { faceDetected } = useSimpleFaceDetection(videoRef, stream);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -180,11 +212,11 @@ export const Landing = () => {
 
   // Restart camera when returning to home page (step === "home")
   useEffect(() => {
-    if (step === "home" && !stream && !isLoading) {
+    if (step === "home" && !stream && !isLoading && !error) {
       console.log("Restarting camera stream on homepage return");
       restartStream();
     }
-  }, [step, stream, isLoading, restartStream]);
+  }, [step, stream, isLoading, error, restartStream]);
 
   const capturePhoto = () => {
     const videoElement = modalVideoRef.current;
@@ -615,6 +647,7 @@ export const Landing = () => {
                     type="text"
                     placeholder="Enter your name"
                     value={user.name}
+                    maxLength={LIMITS.nameMax}
                     onChange={(e) =>
                       setUser((prev) => ({ ...prev, name: e.target.value }))
                     }
@@ -664,13 +697,13 @@ export const Landing = () => {
   if (step === "chat") {
     return (
       <Room
-        name={user.name}
-        localAudioTrack={localAudioTrack}
-        localVideoTrack={localVideoTrack}
-        profilePhoto={user.profilePhoto}
-        language={user.language}
-        country={user.country}
-        topics={selectedTopics}
+        profile={profile}
+        preferences={preferences}
+        onPreferencesChange={setPreferences}
+        localStream={stream}
+        micEnabled={micEnabled}
+        onMicEnabledChange={setMicEnabled}
+        onCameraEnabledChange={setCameraEnabled}
         onBackToHome={() => setStep("home")}
       />
     );
