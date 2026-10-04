@@ -1,7 +1,7 @@
 /**
- * Socket.IO server: transport limits, per-IP connection cap, per-socket rate
- * limits and the safe() wrapper that validates every payload and guarantees a
- * handler can never throw out of an event listener.
+ * Socket.IO server: transport limits, per-IP connection cap and connection
+ * rate, per-socket rate limits and the safe() wrapper that validates every
+ * payload and guarantees a handler can never throw out of an event listener.
  */
 import type { Server as HttpServer } from "node:http";
 import { Server, type Socket } from "socket.io";
@@ -23,7 +23,7 @@ import {
   type ErrorCode,
   type ServerToClientEvents,
 } from "../protocol";
-import { SocketRateLimiter, type EventClass } from "../rateLimit";
+import { SocketRateLimiter, TokenBucket, type EventClass } from "../rateLimit";
 import { limitedParser } from "./limitedParser";
 
 export type AppServer = Server<ClientToServerEvents, ServerToClientEvents>;
@@ -100,6 +100,8 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
   const { config, service, logger, metrics } = deps;
   const newRateLimiter = deps.newRateLimiter ?? (() => new SocketRateLimiter());
   const perIp = new Map<string, number>();
+  const connectRate = new Map<string, TokenBucket>();
+  let lastPrune = Date.now();
   const running = new Set<Promise<void>>();
   /** `work` must already handle its own errors. */
   const track = (work: Promise<void>) => {
@@ -114,6 +116,23 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
     if (count >= config.maxConnectionsPerIp) {
       metrics.rateLimitedTotal.inc({ event: "connection" });
       return next(new Error("too_many_connections"));
+    }
+    // Per-socket buckets start full, so new connections per IP are rate
+    // limited too; otherwise reconnecting would refill every bucket.
+    const now = Date.now();
+    // Drop refilled buckets so the map only holds recently seen addresses.
+    if (now - lastPrune >= 60_000) {
+      lastPrune = now;
+      for (const [key, bucket] of connectRate) if (bucket.full(now)) connectRate.delete(key);
+    }
+    let bucket = connectRate.get(ip);
+    if (!bucket) {
+      bucket = new TokenBucket(config.connectRatePerIp, now);
+      connectRate.set(ip, bucket);
+    }
+    if (!bucket.take(now)) {
+      metrics.rateLimitedTotal.inc({ event: "connection_rate" });
+      return next(new Error("rate_limited"));
     }
     perIp.set(ip, count + 1);
     // Release on the underlying connection's close, which fires even when the

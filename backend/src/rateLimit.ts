@@ -1,5 +1,6 @@
 /**
- * Per-socket token buckets, one bucket per event class.
+ * Per-socket token buckets, one bucket per event class, plus the per-IP
+ * connection rate bucket (see realtime/socket.ts).
  * A bucket holds up to `capacity` tokens and refills continuously at
  * `refillPerSec`. Each event takes one token; an empty bucket rejects.
  */
@@ -41,6 +42,12 @@ export class TokenBucket {
     if (this.tokens < 1) return false;
     this.tokens -= 1;
     return true;
+  }
+
+  /** True once refilled to capacity, when dropping the bucket loses nothing. */
+  full(now: number): boolean {
+    const elapsedSec = Math.max(0, now - this.last) / 1000;
+    return this.tokens + elapsedSec * this.spec.refillPerSec >= this.spec.capacity;
   }
 }
 

@@ -4,6 +4,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { io as ioClient } from "socket.io-client";
+import { loadConfig } from "../../src/config";
 import { MemoryStore } from "../../src/store/MemoryStore";
 import {
   activePair,
@@ -202,6 +203,24 @@ describe("connection limits", () => {
     second.disconnect();
     await new Promise((r) => setTimeout(r, 100));
     await ts.connect({ headers });
+  });
+
+  test("reconnecting does not refill the rate limits: new connections per IP are rate limited", async () => {
+    ts = await startServer({ trustProxy: true, connectRatePerIp: loadConfig({}).connectRatePerIp });
+    const headers = { "X-Real-IP": "203.0.113.9" };
+    let refused: unknown;
+    for (let i = 0; i < 50 && refused === undefined; i++) {
+      try {
+        const c = await ts.connect({ headers });
+        expect(await sendHello(c, hello())).toMatchObject({ ok: true });
+        c.disconnect();
+      } catch (err) {
+        refused = err;
+      }
+    }
+    expect(String(refused)).toContain("rate_limited");
+    // Other addresses are unaffected.
+    await ts.connect({ headers: { "X-Real-IP": "203.0.113.10" } });
   });
 
   test("X-Real-IP is ignored when TRUST_PROXY is off", async () => {

@@ -108,6 +108,12 @@ export interface Config {
   redisUrl?: string;
   trustProxy: boolean;
   maxConnectionsPerIp: number;
+  /**
+   * New connections per client IP (per instance): a burst, then a steady
+   * rate. Per-socket rate limits start full, so without this a client could
+   * reconnect to refill them. Not an env var; tests loosen it.
+   */
+  connectRatePerIp: { capacity: number; refillPerSec: number };
   stunUrls: string[];
   turnUrls: string[];
   turnSecret?: string;
@@ -188,6 +194,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     redisUrl: e.REDIS_URL,
     trustProxy: e.TRUST_PROXY,
     maxConnectionsPerIp: e.MAX_CONNECTIONS_PER_IP,
+    connectRatePerIp: { capacity: 20, refillPerSec: 1 },
     stunUrls: csv(e.STUN_URLS),
     turnUrls: csv(e.TURN_URLS),
     turnSecret: e.TURN_SECRET,
