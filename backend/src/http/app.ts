@@ -15,6 +15,8 @@ export interface AppDeps {
   metricsToken?: string;
   /** How long /readyz waits for the store before answering 503. */
   readyTimeoutMs?: number;
+  /** Mounts feature routes (public API, admin API) before the 404 handler. */
+  routes?: (app: Express) => void;
 }
 
 /** Constant-time compare; hashing first also hides the token length. */
@@ -68,6 +70,8 @@ export function createApp(deps: AppDeps): Express {
     }
     res.set("Content-Type", deps.registry.contentType).send(await deps.registry.metrics());
   });
+
+  deps.routes?.(app);
 
   app.use((_req, res) => {
     res.status(404).json({ error: "not_found" });
