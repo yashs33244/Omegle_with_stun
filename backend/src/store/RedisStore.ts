@@ -24,6 +24,13 @@
  * The lock is a lease: SET NX PX with a random token, released by a Lua
  * compare-and-delete so an instance never deletes a lock it no longer holds.
  * Callers in one process queue locally first, so only one of them polls Redis.
+ *
+ * Instance liveness is "instance:{id} exists". A Redis outage longer than the
+ * TTL expires every heartbeat, live or not. So once this client loses Redis
+ * (connection closed or a heartbeat failed), listDeadInstances() reports
+ * nothing until a full TTL after its next successful heartbeat, which gives
+ * peers that reconnect a little later the time to beat again. The store also
+ * re-sends its last heartbeat as soon as the connection is ready again.
  */
 import { randomUUID } from "node:crypto";
 import Redis, { type ChainableCommander, type RedisOptions } from "ioredis";
@@ -45,7 +52,11 @@ export interface RedisStoreOptions {
   logger?: Logger;
   /** Lock lease. A critical section running longer than this is logged as an error. */
   lockTtlMs?: number;
-  /** withLock() rejects if the lock cannot be acquired within this time. */
+  /**
+   * withLock() rejects if the lock cannot be acquired within this time,
+   * counted from the call: time queued behind earlier callers in this
+   * process counts too, so a backlog sheds work instead of growing.
+   */
   lockWaitMs?: number;
 }
 
@@ -73,6 +84,19 @@ return 0`;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+const LOCK_TIMEOUT = "timed out waiting for the match lock";
+
+/** True if `p` resolves before `deadline` (epoch ms), false once the deadline passes. */
+async function resolvesBefore(p: Promise<void>, deadline: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<boolean>((resolve) => (timer = setTimeout(() => resolve(false), deadline - Date.now())));
+  try {
+    return await Promise.race([p.then(() => true), timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const parse = <T>(raw: string | null): T | null => (raw === null ? null : (JSON.parse(raw) as T));
 
 /** Runs a MULTI or pipeline and throws the first command error (exec() only reports them). */
@@ -91,6 +115,10 @@ export class RedisStore implements MatchStore {
   private readonly lockTtlMs: number;
   private readonly lockWaitMs: number;
   private localTail: Promise<void> = Promise.resolve();
+  /** The last heartbeat sent, re-sent when the connection comes back. */
+  private lastBeat?: { instanceId: string; ttlMs: number };
+  /** listDeadInstances() reports nothing before this time (Infinity until a beat succeeds after an outage). */
+  private reapAllowedAt = 0;
 
   private constructor(
     private readonly redis: Redis,
@@ -100,6 +128,14 @@ export class RedisStore implements MatchStore {
     this.log = opts.logger;
     this.lockTtlMs = opts.lockTtlMs ?? 3_000;
     this.lockWaitMs = opts.lockWaitMs ?? 10_000;
+    redis.on("close", () => this.markOutage());
+    redis.on("ready", () => {
+      const beat = this.lastBeat;
+      if (!beat) return;
+      this.heartbeat(beat.instanceId, beat.ttlMs).catch((err: unknown) =>
+        this.log?.warn({ err }, "heartbeat after reconnect failed"),
+      );
+    });
   }
 
   /** Connects and resolves once Redis answers; rejects (and gives up) if it cannot connect. */
@@ -131,13 +167,19 @@ export class RedisStore implements MatchStore {
   /* ---------------------------------------------------------------- */
 
   async withLock<T>(fn: () => Promise<T>): Promise<T> {
+    const deadline = Date.now() + this.lockWaitMs;
     const previous = this.localTail;
     let releaseLocal!: () => void;
     this.localTail = new Promise<void>((resolve) => (releaseLocal = resolve));
-    await previous;
+    if (!(await resolvesBefore(previous, deadline))) {
+      // Pass the slot on only once the caller ahead is done, so the next
+      // local caller does not start polling Redis while that one still waits.
+      void previous.then(releaseLocal);
+      throw new Error(LOCK_TIMEOUT);
+    }
     try {
       const token = randomUUID();
-      await this.acquire(token);
+      await this.acquire(token, deadline);
       const started = Date.now();
       try {
         return await fn();
@@ -149,13 +191,15 @@ export class RedisStore implements MatchStore {
     }
   }
 
-  private async acquire(token: string): Promise<void> {
+  private async acquire(token: string, deadline: number): Promise<void> {
     const lockKey = this.key("lock", "match");
-    const deadline = Date.now() + this.lockWaitMs;
     let backoff = 4;
     for (;;) {
       if ((await this.redis.set(lockKey, token, "PX", this.lockTtlMs, "NX")) === "OK") return;
-      if (Date.now() >= deadline) throw new Error("timed out waiting for the match lock");
+      // ioredis re-sends a command whose reply was lost in a reconnect, and
+      // the re-sent SET NX answers null when the first one already took the lock.
+      if ((await this.redis.get(lockKey)) === token) return;
+      if (Date.now() >= deadline) throw new Error(LOCK_TIMEOUT);
       // Equal jitter: wait between backoff/2 and backoff ms, growing to 50 ms.
       await sleep(backoff / 2 + Math.random() * (backoff / 2));
       backoff = Math.min(backoff * 2, 50);
@@ -384,15 +428,28 @@ export class RedisStore implements MatchStore {
   /* ---------------------------------------------------------------- */
 
   async heartbeat(instanceId: string, ttlMs: number): Promise<void> {
-    await run(
-      this.redis
-        .multi()
-        .set(this.key("instance", instanceId), String(Date.now()), "PX", Math.max(1, Math.ceil(ttlMs)))
-        .sadd(this.key("instances"), instanceId),
-    );
+    this.lastBeat = { instanceId, ttlMs };
+    try {
+      await run(
+        this.redis
+          .multi()
+          .set(this.key("instance", instanceId), String(Date.now()), "PX", Math.max(1, Math.ceil(ttlMs)))
+          .sadd(this.key("instances"), instanceId),
+      );
+    } catch (err) {
+      this.markOutage();
+      throw err;
+    }
+    if (this.reapAllowedAt === Infinity) this.reapAllowedAt = Date.now() + ttlMs;
+  }
+
+  /** This client lost Redis, so peers' heartbeats may have lapsed through no fault of theirs. */
+  private markOutage(): void {
+    this.reapAllowedAt = Infinity;
   }
 
   async listDeadInstances(): Promise<string[]> {
+    if (Date.now() < this.reapAllowedAt) return [];
     const ids = await this.redis.smembers(this.key("instances"));
     if (ids.length === 0) return [];
     const alive = await run(this.redis.pipeline(ids.map((id) => ["exists", this.key("instance", id)])));
@@ -404,6 +461,7 @@ export class RedisStore implements MatchStore {
   }
 
   async forgetInstance(instanceId: string): Promise<void> {
+    if (this.lastBeat?.instanceId === instanceId) this.lastBeat = undefined;
     await run(
       this.redis
         .multi()

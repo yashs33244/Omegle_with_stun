@@ -156,7 +156,11 @@ export interface MatchStore {
   /* Instances (several servers sharing one store) */
   /** Marks the instance alive for ttlMs and remembers it until forgetInstance(). */
   heartbeat(instanceId: string, ttlMs: number): Promise<void>;
-  /** Instances that sent a heartbeat once but whose last one has lapsed. */
+  /**
+   * Instances that sent a heartbeat once but whose last one has lapsed.
+   * RedisStore returns [] once it has lost Redis, until one TTL after its
+   * next successful heartbeat, so peers get time to beat again after an outage.
+   */
   listDeadInstances(): Promise<string[]>;
   /** Socket ids of the stored sessions owned by instanceId (any order). */
   listInstanceSessions(instanceId: string): Promise<string[]>;

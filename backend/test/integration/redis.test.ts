@@ -155,6 +155,7 @@ describe.skipIf(!url)("two instances on one Redis", () => {
     const deadSocket = ca.id!;
 
     const waiting = record(cb, "queue:waiting");
+    // At worst the fixture's 500 ms lock lease plus its 200 ms instance TTL.
     const ended = next(cb, "match:ended", 3000);
     proc.kill("SIGKILL"); // no graceful shutdown, no cleanup
     expect(await ended).toEqual({ roomId, reason: "partner-unavailable" });
