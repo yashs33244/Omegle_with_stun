@@ -15,7 +15,7 @@
     "lint": "eslint .",
     "test": "bun test",
     "test:redis": "TEST_STORE=redis bun test",
-    "test:node": "node --test \"test-node/*.test.mjs\""
+    "test:node": "node --test \"test-node/*.mjs\""
   },
   "license": "UNLICENSED",
   "dependencies": {

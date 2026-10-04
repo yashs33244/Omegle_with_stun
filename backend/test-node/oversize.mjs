@@ -1,6 +1,6 @@
 // Runs the BUILT server (dist/) under Node, the production runtime, and
 // proves an oversized WebSocket frame drops only that client.
-// Run with: bun run build && bun run test:node
+// Run with: bun run build && bun run test:node (not named *.test.mjs, so bun test skips it)
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";

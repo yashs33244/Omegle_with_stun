@@ -89,7 +89,8 @@ describe("hello and matching", () => {
   });
 
   test("a non-member cannot inject signals, chat or accepts into another room", async () => {
-    ts = await startServer();
+    // Long accept window: the test waits 300 ms between the two accepts.
+    ts = await startServer({ matchAcceptTimeoutMs: 5000 });
     const pending = await matchedPair(ts);
     const intruder = await ts.connect();
     await sendHello(intruder, hello({ profile: profile({ topics: ["books"] }) })); // incompatible, stays waiting

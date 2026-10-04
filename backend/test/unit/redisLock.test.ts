@@ -50,6 +50,7 @@ describe.skipIf(!url)("RedisStore lock across clients", () => {
     const logger = { error, warn: () => {} } as unknown as Logger;
     const slow = await connect({ prefix, logger, lockTtlMs: 60 });
     const other = await connect({ prefix, lockTtlMs: 5_000 });
+    const third = await connect({ prefix, lockWaitMs: 30 });
 
     let otherEntered = false;
     let otherInside = false;
@@ -60,7 +61,7 @@ describe.skipIf(!url)("RedisStore lock across clients", () => {
     const otherRun = other.withLock(async () => {
       otherEntered = true;
       otherInside = true;
-      await sleep(150);
+      await sleep(400);
       otherInside = false;
     });
     await slowRun;
@@ -68,7 +69,6 @@ describe.skipIf(!url)("RedisStore lock across clients", () => {
     expect(otherEntered).toBe(true);
     expect(otherInside).toBe(true);
     // The slow holder's release must not have freed the other holder's lock.
-    const third = await connect({ prefix, lockWaitMs: 30 });
     await expect(third.withLock(async () => "x")).rejects.toThrow("timed out waiting for the match lock");
     await otherRun;
     await expect(third.withLock(async () => "free")).resolves.toBe("free");

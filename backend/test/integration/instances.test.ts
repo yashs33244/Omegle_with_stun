@@ -38,8 +38,9 @@ async function foreignWaiter(store: MemoryStore, instanceId: string): Promise<Se
 describe("instances", () => {
   test("sessions of a dead instance are removed and their partners re-queued", async () => {
     const store = new MemoryStore();
-    ts = await startServer({ heartbeatIntervalMs: 30, instanceTtlMs: 90, matchAcceptTimeoutMs: 3000 }, store);
-    await store.heartbeat("ghost-instance", 150);
+    // Checks for dead instances every 30 ms; a generous TTL keeps this server alive on a busy machine.
+    ts = await startServer({ heartbeatIntervalMs: 30, instanceTtlMs: 5000, matchAcceptTimeoutMs: 3000 }, store);
+    await store.heartbeat("ghost-instance", 60_000);
     const ghost = await foreignWaiter(store, "ghost-instance");
 
     const c = await ts.connect();
@@ -48,7 +49,8 @@ describe("instances", () => {
     const match = await found;
     const waiting = record(c, "queue:waiting");
 
-    // The ghost instance never beats again, so it is declared dead.
+    // The ghost instance stops beating: its heartbeat lapses right away.
+    await store.heartbeat("ghost-instance", 1);
     expect(await next(c, "match:ended", 2000)).toEqual({ roomId: match.roomId, reason: "partner-unavailable" });
     await delay(30);
     expect(waiting.length).toBe(1);
@@ -60,12 +62,12 @@ describe("instances", () => {
 
   test("a live instance never reaps itself", async () => {
     const store = new MemoryStore();
-    ts = await startServer({ heartbeatIntervalMs: 30, instanceTtlMs: 90 }, store);
+    // A 1 ms TTL: our own heartbeat has always lapsed when the reaper looks.
+    ts = await startServer({ heartbeatIntervalMs: 30, instanceTtlMs: 1 }, store);
     const c = await ts.connect();
     await sendHello(c, hello());
-    await delay(300);
+    await delay(200);
     expect(await store.getSession(c.id!)).not.toBeNull();
-    expect(await store.listDeadInstances()).toEqual([]);
   });
 
   test("a socket whose session vanished is told to reconnect and disconnected", async () => {

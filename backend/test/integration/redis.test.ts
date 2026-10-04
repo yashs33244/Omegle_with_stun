@@ -158,10 +158,14 @@ describe.skipIf(!url)("two instances on one Redis", () => {
     const ended = next(cb, "match:ended", 3000);
     proc.kill("SIGKILL"); // no graceful shutdown, no cleanup
     expect(await ended).toEqual({ roomId, reason: "partner-unavailable" });
-    await Bun.sleep(50);
+    for (let i = 0; i < 50 && waiting.length === 0; i++) await Bun.sleep(20);
     expect(waiting.length).toBe(1);
-    expect(await b.store.getSession(deadSocket)).toBeNull();
-    expect(await b.store.listWaiting()).toEqual([cb.id!]);
-    expect(await b.store.listDeadInstances()).toEqual([]);
+    // Under the lock, so the reaping that sent those events has finished.
+    const [dead, queue, deadInstances] = await b.store.withLock(() =>
+      Promise.all([b.store.getSession(deadSocket), b.store.listWaiting(), b.store.listDeadInstances()]),
+    );
+    expect(dead).toBeNull();
+    expect(queue).toEqual([cb.id!]);
+    expect(deadInstances).toEqual([]);
   });
 });
