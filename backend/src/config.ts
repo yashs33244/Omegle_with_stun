@@ -3,7 +3,7 @@
  * Invalid configuration fails fast with a readable message (see loadConfig).
  * Every variable is documented in backend/.env.example.
  */
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 
 const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace", "silent"] as const;
@@ -38,6 +38,20 @@ const envSchema = z
     LOG_LEVEL: z.enum(LOG_LEVELS).default("info"),
     METRICS_TOKEN: z.string().min(1).optional(),
     SHUTDOWN_GRACE_MS: int(0).default(10000),
+    SESSION_SECRET: z.string().min(32, "must be at least 32 characters").optional(),
+    SESSION_SECRET_PREVIOUS: z.string().min(32, "must be at least 32 characters").optional(),
+    TURNSTILE_SECRET: z.string().min(1).optional(),
+    TURNSTILE_SITE_KEY: z.string().min(1).optional(),
+    TURNSTILE_DISABLED: bool.default("false"),
+    TRUST_CLOUDFLARE: bool.default("false"),
+    SESSION_RATE_PER_IP_PER_MIN: int(1).default(10),
+    SESSION_RATE_PER_NETWORK_PER_MIN: int(1).default(60),
+    MATCH_CAP_PER_DEVICE_PER_HOUR: int(1).default(200),
+    MATCH_CAP_PER_IP_PER_HOUR: int(1).default(200),
+    SENTRY_DSN: z.string().url().optional(),
+    SENTRY_DSN_FRONTEND: z.string().url().optional(),
+    POSTHOG_KEY: z.string().min(1).optional(),
+    POSTHOG_HOST: z.string().url().optional(),
   })
   .superRefine((env, ctx) => {
     const origins = csv(env.CORS_ORIGINS);
@@ -72,6 +86,27 @@ const envSchema = z
         message: "is required when TURN_SECRET or TURN_USERNAME is set",
       });
     }
+    if (env.NODE_ENV === "production" && !env.SESSION_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["SESSION_SECRET"],
+        message: "is required in production (at least 32 random characters, e.g. openssl rand -hex 32)",
+      });
+    }
+    if (env.NODE_ENV === "production" && !env.TURNSTILE_SECRET && !env.TURNSTILE_DISABLED) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["TURNSTILE_SECRET"],
+        message: "is required in production (set TURNSTILE_DISABLED=true to run without bot protection)",
+      });
+    }
+    if (env.TURNSTILE_SECRET && !env.TURNSTILE_DISABLED && !env.TURNSTILE_SITE_KEY) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["TURNSTILE_SITE_KEY"],
+        message: "is required when TURNSTILE_SECRET is set (clients need it to render the challenge)",
+      });
+    }
     if (Boolean(env.TURN_USERNAME) !== Boolean(env.TURN_CREDENTIAL)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -100,6 +135,32 @@ export interface Config {
   logLevel: LogLevel;
   metricsToken?: string;
   shutdownGraceMs: number;
+  /** Signs session and age tokens. Random per process outside production when unset. */
+  sessionSecret: string;
+  /** True when sessionSecret was generated at startup (tokens die with the process). */
+  sessionSecretGenerated: boolean;
+  /** Old secret still accepted for verification during a rotation. */
+  sessionSecretPrevious?: string;
+  /** Turnstile Siteverify secret; undefined means verification is off. */
+  turnstileSecret?: string;
+  turnstileSiteKey?: string;
+  /** CF-IPCountry is trusted (both hosts are behind Cloudflare and the origin only accepts Cloudflare). */
+  trustCloudflare: boolean;
+  sessionRatePerIpPerMin: number;
+  sessionRatePerNetworkPerMin: number;
+  matchCapPerDevicePerHour: number;
+  matchCapPerIpPerHour: number;
+  sentryDsn?: string;
+  sentryDsnFrontend?: string;
+  posthogKey?: string;
+  posthogHost?: string;
+  /**
+   * The Socket.IO handshake requires a session token. Always true from the
+   * environment; only tests turn it off (via createServer's config).
+   */
+  requireSession: boolean;
+  /** How often matching:status is re-checked for staffed-hours boundaries. */
+  matchingStatusIntervalMs: number;
   /** Unique id of this process, used to own sessions in a shared store. */
   instanceId: string;
 
@@ -171,6 +232,22 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     logLevel: e.LOG_LEVEL,
     metricsToken: e.METRICS_TOKEN,
     shutdownGraceMs: e.SHUTDOWN_GRACE_MS,
+    sessionSecret: e.SESSION_SECRET ?? randomBytes(32).toString("hex"),
+    sessionSecretGenerated: !e.SESSION_SECRET,
+    sessionSecretPrevious: e.SESSION_SECRET_PREVIOUS,
+    turnstileSecret: e.TURNSTILE_DISABLED ? undefined : e.TURNSTILE_SECRET,
+    turnstileSiteKey: e.TURNSTILE_DISABLED ? undefined : e.TURNSTILE_SITE_KEY,
+    trustCloudflare: e.TRUST_CLOUDFLARE,
+    sessionRatePerIpPerMin: e.SESSION_RATE_PER_IP_PER_MIN,
+    sessionRatePerNetworkPerMin: e.SESSION_RATE_PER_NETWORK_PER_MIN,
+    matchCapPerDevicePerHour: e.MATCH_CAP_PER_DEVICE_PER_HOUR,
+    matchCapPerIpPerHour: e.MATCH_CAP_PER_IP_PER_HOUR,
+    sentryDsn: e.SENTRY_DSN,
+    sentryDsnFrontend: e.SENTRY_DSN_FRONTEND,
+    posthogKey: e.POSTHOG_KEY,
+    posthogHost: e.POSTHOG_HOST,
+    requireSession: true,
+    matchingStatusIntervalMs: 30_000,
     instanceId: randomUUID(),
     matchAcceptTimeoutMs: e.MATCH_ACCEPT_TIMEOUT_MS,
     matchAcceptGraceMs: 750,
