@@ -36,7 +36,7 @@ updates:
     schedule:
       interval: weekly
 
-  # Pinned images in docker-compose.yml (redis, gateway nginx, coturn).
+  # Pinned images in docker-compose.yml (redis, gateway nginx).
   - package-ecosystem: docker-compose
     directory: /
     schedule:
