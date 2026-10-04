@@ -17,7 +17,7 @@
     "test:redis": "TEST_STORE=redis bun test",
     "test:node": "node --test \"test-node/*.mjs\""
   },
-  "license": "UNLICENSED",
+  "license": "ISC",
   "dependencies": {
     "@socket.io/redis-adapter": "^8.3.0",
     "express": "^5.1.0",
