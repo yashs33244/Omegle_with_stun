@@ -6,6 +6,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import Redis from "ioredis";
 import { io as ioClient } from "socket.io-client";
 import type { Config } from "../../src/config";
 import { createLogger } from "../../src/logger";
@@ -118,6 +119,27 @@ describe.skipIf(!url)("two instances on one Redis", () => {
     expect(await closed).toBe("io server disconnect");
     expect(await b.store.getDeviceSocket(payload.deviceId)).toBe(newSocket.id!);
     expect(await b.store.getSession(oldSocket.id ?? "gone")).toBeNull();
+  });
+
+  test("graceful close leaves the match lock free for the other instances", async () => {
+    const cl = cluster();
+    const a = await cl.add();
+    const clients = await Promise.all(Array.from({ length: 6 }, () => a.connect()));
+    await Promise.all(clients.map((c) => sendHello(c, hello())));
+    // Slow store reads keep each disconnect cleanup inside the lock for a while.
+    const getSession = a.store.getSession.bind(a.store);
+    a.store.getSession = async (socketId) => {
+      await Bun.sleep(30);
+      return getSession(socketId);
+    };
+    const redis = new Redis(url!);
+    cleanups.push(() => redis.quit());
+    await a.server.close();
+    // index.ts closes the store right after this; a cleanup still holding the
+    // lock then never releases it and every instance waits out the lease.
+    expect(await redis.exists(`${cl.prefix}lock:match`)).toBe(0);
+    await a.store.close();
+    expect(await redis.exists(`${cl.prefix}lock:match`)).toBe(0);
   });
 
   test("a crashed instance is reaped and its partners get partner-unavailable", async () => {

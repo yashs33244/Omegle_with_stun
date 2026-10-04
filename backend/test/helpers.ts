@@ -27,6 +27,8 @@ export type Client = Socket<ServerToClientEvents, ClientToServerEvents>;
 export function testConfig(overrides: Partial<Config> = {}): Config {
   return {
     ...loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent", MAX_CONNECTIONS_PER_IP: "1000" }),
+    // Tests open many sockets from one address in quick succession.
+    connectRatePerIp: { capacity: 1_000_000, refillPerSec: 1_000_000 },
     matchAcceptTimeoutMs: 400,
     matchAcceptGraceMs: 50,
     sweepIntervalMs: 20,

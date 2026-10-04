@@ -65,6 +65,23 @@ const envSchema = z
         });
       }
     }
+    // Browsers throw from new RTCPeerConnection() on a bad ICE server URL, so
+    // one typo here would break every call; refuse to start instead.
+    const iceUrls = [
+      ["STUN_URLS", env.STUN_URLS, /^stuns?:\S+$/, "stun: or stuns:"],
+      ["TURN_URLS", env.TURN_URLS, /^turns?:\S+$/, "turn: or turns:"],
+    ] as const;
+    for (const [key, value, pattern, scheme] of iceUrls) {
+      for (const url of csv(value)) {
+        if (!pattern.test(url)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: `invalid URL "${url}" (expected ${scheme} followed by host[:port], comma separated)`,
+          });
+        }
+      }
+    }
     if ((env.TURN_SECRET || env.TURN_USERNAME) && csv(env.TURN_URLS).length === 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -91,6 +108,12 @@ export interface Config {
   redisUrl?: string;
   trustProxy: boolean;
   maxConnectionsPerIp: number;
+  /**
+   * New connections per client IP (per instance): a burst, then a steady
+   * rate. Per-socket rate limits start full, so without this a client could
+   * reconnect to refill them. Not an env var; tests loosen it.
+   */
+  connectRatePerIp: { capacity: number; refillPerSec: number };
   stunUrls: string[];
   turnUrls: string[];
   turnSecret?: string;
@@ -171,6 +194,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     redisUrl: e.REDIS_URL,
     trustProxy: e.TRUST_PROXY,
     maxConnectionsPerIp: e.MAX_CONNECTIONS_PER_IP,
+    connectRatePerIp: { capacity: 20, refillPerSec: 1 },
     stunUrls: csv(e.STUN_URLS),
     turnUrls: csv(e.TURN_URLS),
     turnSecret: e.TURN_SECRET,
