@@ -218,6 +218,17 @@ export const Landing = () => {
     }
   }, [step, stream, isLoading, error, restartStream]);
 
+  // Coming back from the Room mounts a fresh home <video>; reattach the live stream.
+  useEffect(() => {
+    const video = videoRef.current;
+    if (step === "home" && hasPermission && video && stream && video.srcObject !== stream) {
+      video.srcObject = stream;
+      video.play().catch(() => {
+        // Muted preview; a rejected play here only means the element was replaced again.
+      });
+    }
+  }, [step, stream, hasPermission, videoRef]);
+
   const capturePhoto = () => {
     const videoElement = modalVideoRef.current;
 
