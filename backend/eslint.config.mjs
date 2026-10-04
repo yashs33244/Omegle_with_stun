@@ -16,4 +16,9 @@ export default tseslint.config(
       "no-console": "error",
     },
   },
+  {
+    // Plain Node ESM tests run against the built server (bun run test:node).
+    files: ["test-node/**/*.mjs"],
+    languageOptions: { globals: { process: "readonly", fetch: "readonly" } },
+  },
 );
