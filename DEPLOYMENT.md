@@ -45,6 +45,9 @@ workflow. Empty optional secrets fall back to the defaults shown.
 | `REDIS_PASSWORD` | unset | optional Redis password, URL safe (`openssl rand -hex 32`) |
 | `METRICS_TOKEN` | unset | bearer token for `GET /metrics` on the replicas |
 | `LOG_LEVEL` | `info` | pino log level |
+| `MAX_CONNECTIONS_PER_IP` | `10` | Socket.IO connections allowed per client IP on each backend replica. Raise it if many users share one address (office NAT, mobile carrier NAT) |
+| `MATCH_ACCEPT_TIMEOUT_MS` | `30000` | how long both users have to accept a match |
+| `SHUTDOWN_GRACE_MS` | `10000` | how long a replica drains on stop; keep it under the 15 s `stop_grace_period` in `docker-compose.yml` |
 | `STUN_URLS` | Google public STUN | comma list |
 | `TURN_URLS` | unset | comma list of TURN URLs handed to clients |
 | `TURN_SECRET` | unset | shared secret with coturn (`use-auth-secret`); the backend issues short-lived credentials |
@@ -151,9 +154,13 @@ cd ~/Omegle_with_stun
 docker compose ps
 docker compose logs -f --tail=100 backend      # all replicas
 docker compose logs -f gateway frontend redis
-docker compose up -d                           # re-apply after editing .env by hand
+docker compose up -d                           # re-apply after editing .env by hand (until the next deploy)
 docker compose --profile turn up -d            # start coturn manually
 ```
+
+Every workflow deploy rewrites `.env` from the GitHub secrets, so a hand edit
+only lasts until the next push to `new-v`. To change a setting for good, set
+its secret.
 
 Container logs rotate at 10 MB x 3 files per container. Backend logs are JSON
 (pino) and never contain names, photos or chat text.
