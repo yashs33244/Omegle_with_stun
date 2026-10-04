@@ -141,7 +141,7 @@ export class MatchService {
 
   /**
    * Graceful shutdown: stop the sweeper, tell local sockets, and remove their
-   * sessions so partners on other instances are re-queued.
+   * sessions so partners on other instances are re-queued and matched.
    */
   async shutdown(): Promise<void> {
     if (this.stopped) return;
@@ -161,6 +161,9 @@ export class MatchService {
         const s = await this.store.getSession(socketId);
         if (s) await this.removeSessionLocked(s, "partner-unavailable");
       }
+      // Match the re-queued partners now: other instances never see this
+      // instance's dirty marks, so they would wait for a recheck slice.
+      await this.matchPassLocked();
       await this.store.forgetInstance(this.config.instanceId);
     });
     this.local.clear();

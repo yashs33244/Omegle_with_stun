@@ -146,6 +146,34 @@ describe("instances", () => {
     expect(await store.listWaiting()).toEqual([cb.id!]);
   });
 
+  test("graceful close matches the partners it re-queues with each other", async () => {
+    const store = new MemoryStore();
+    // The survivor rechecks its queue only once, at its first sweep.
+    ts = await startServer({ recheckIntervalMs: 60_000, matchAcceptTimeoutMs: 5000 }, store);
+    await delay(60);
+    const dying = await startServer({ matchAcceptTimeoutMs: 5000 }, store);
+    try {
+      const partners: string[] = [];
+      for (let i = 0; i < 2; i++) {
+        // Each survivor client waits, then a client of the dying server pairs with it.
+        const p = await ts.connect();
+        await sendHello(p, hello());
+        const d = await dying.connect();
+        const found = next(d, "match:found");
+        await sendHello(d, hello());
+        await found;
+        expect((await store.getSession(p.id!))?.state).toBe("pending");
+        partners.push(p.id!);
+      }
+      await dying.close();
+      const states = await Promise.all(partners.map(async (id) => (await store.getSession(id))?.state));
+      expect(states).toEqual(["pending", "pending"]);
+      expect(await store.listWaiting()).toEqual([]);
+    } finally {
+      await dying.close();
+    }
+  });
+
   test("graceful close forgets the instance", async () => {
     const store = new MemoryStore();
     const server = await startServer({ instanceTtlMs: 50 }, store);
