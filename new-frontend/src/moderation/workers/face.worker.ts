@@ -10,6 +10,14 @@ import { serveWorker } from "./serve";
 
 let detector: FaceDetector | null = null;
 
+// MediaPipe prints routine "INFO: ..." lines through console.error; keep them
+// out of the error console so real errors stand out.
+const consoleError = console.error.bind(console);
+console.error = (...args: unknown[]) => {
+  if (typeof args[0] === "string" && args[0].startsWith("INFO:")) console.info(...args);
+  else consoleError(...args);
+};
+
 serveWorker<FaceResult>({
   async load() {
     const origin = self.location.origin;

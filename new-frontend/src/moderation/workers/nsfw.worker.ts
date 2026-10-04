@@ -14,6 +14,22 @@ import { serveWorker } from "./serve";
 const BACKENDS = ["webgl", "wasm", "cpu"] as const;
 let model: NSFWJS | null = null;
 
+/**
+ * True when WebGL is a software rasterizer (SwiftShader, llvmpipe): the GPU is
+ * blocklisted or absent, and the wasm backend is much faster than WebGL then.
+ */
+function softwareWebGL(): boolean {
+  try {
+    const gl = new OffscreenCanvas(1, 1).getContext("webgl2") ?? new OffscreenCanvas(1, 1).getContext("webgl");
+    if (!gl) return true;
+    const info = gl.getExtension("WEBGL_debug_renderer_info");
+    const renderer = String(gl.getParameter(info ? info.UNMASKED_RENDERER_WEBGL : gl.RENDERER));
+    return /swiftshader|llvmpipe|software/i.test(renderer);
+  } catch {
+    return true;
+  }
+}
+
 async function loadOn(backend: (typeof BACKENDS)[number]): Promise<NSFWJS> {
   if (!(await tf.setBackend(backend))) throw new Error(`${backend} backend unavailable`);
   await tf.ready();
@@ -27,7 +43,8 @@ serveWorker<NsfwResult>({
   async load() {
     setWasmPaths(`${self.location.origin}${MODEL_PATHS.tfjsWasmDir}`);
     const errors: string[] = [];
-    for (const backend of BACKENDS) {
+    const backends = softwareWebGL() ? BACKENDS.filter((b) => b !== "webgl") : BACKENDS;
+    for (const backend of backends) {
       try {
         model = await loadOn(backend);
         return backend;
