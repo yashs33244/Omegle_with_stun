@@ -197,6 +197,13 @@ describe("connection limits", () => {
     });
     expect(bad.headers.get("access-control-allow-origin")).toBeNull();
   });
+
+  test("WebSocket handshakes from origins outside the allowlist are refused", async () => {
+    ts = await startServer({ corsOrigins: ["https://chizzy.example.com"] });
+    await ts.connect({ headers: { Origin: "https://chizzy.example.com" } });
+    await ts.connect(); // no Origin: a non-browser client
+    await expect(ts.connect({ headers: { Origin: "https://evil.example.com" } })).rejects.toThrow();
+  });
 });
 
 describe("HTTP endpoints", () => {

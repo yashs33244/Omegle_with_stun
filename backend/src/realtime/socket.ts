@@ -41,9 +41,19 @@ export function clientIp(socket: Pick<AppSocket, "handshake">, trustProxy: boole
   return socket.handshake.address;
 }
 
+/**
+ * Browsers do not apply CORS to WebSocket upgrades, so the allowlist is also
+ * checked on every handshake. Requests without an Origin header come from
+ * non-browser clients, which can send any Origin anyway, and are allowed.
+ */
+export function originAllowed(origin: string | undefined, allowed: Config["corsOrigins"]): boolean {
+  return allowed === "*" || origin === undefined || allowed.includes(origin);
+}
+
 export function createSocketServer(httpServer: HttpServer, config: Config): AppServer {
   return new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
     cors: { origin: config.corsOrigins === "*" ? "*" : config.corsOrigins, methods: ["GET", "POST"] },
+    allowRequest: (req, callback) => callback(null, originAllowed(req.headers.origin, config.corsOrigins)),
     maxHttpBufferSize: MAX_HTTP_BUFFER_SIZE,
     parser: limitedParser(MAX_HTTP_BUFFER_SIZE),
     pingInterval: 20_000,
