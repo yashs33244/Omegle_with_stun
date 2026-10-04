@@ -564,7 +564,7 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
     signalListeners.current.set(roomId, listener);
     const replay = pendingSignals.current.filter((s) => s.roomId === roomId);
     pendingSignals.current = pendingSignals.current.filter((s) => s.roomId !== roomId);
-    replay.forEach(listener);
+    replay.forEach((signal) => listener(signal));
     return () => {
       if (signalListeners.current.get(roomId) === listener) signalListeners.current.delete(roomId);
     };
