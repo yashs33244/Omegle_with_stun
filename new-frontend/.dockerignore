@@ -1,0 +1,16 @@
+# Keep the build context small and free of secrets. Vite reads .env files at
+# build time, so local env files must never reach the image build.
+node_modules
+dist
+coverage
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+Dockerfile
+.dockerignore
+bun.lockb
+playwright-report
+test-results
+blob-report
