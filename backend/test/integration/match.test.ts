@@ -238,6 +238,24 @@ describe("ending a match", () => {
     expect(await arrives(ca, "match:found", 300)).toBe(false);
   });
 
+  test("skipping the same device again after the block lapses doubles the block", async () => {
+    ts = await startServer();
+    const { ca, cb, a, b } = await activePair(ts);
+    ca.emit("call:skip");
+    await next(cb, "match:ended");
+    // Let the first block lapse but keep its record (as the store would for 24 h).
+    const first = await ts.store.getBlock(a.deviceId, b.deviceId);
+    const rematchA = next(ca, "match:found");
+    await ts.store.setBlock(a.deviceId, b.deviceId, { ...first!, until: Date.now() - 1 }, 60_000);
+    const { roomId } = await rematchA;
+    const endB = next(cb, "match:ended");
+    ca.emit("call:skip");
+    expect(await endB).toEqual({ roomId, reason: "partner-skipped" });
+    const second = await ts.store.getBlock(a.deviceId, b.deviceId);
+    expect(second!.skipCount).toBe(2);
+    expect(second!.until - Date.now()).toBeGreaterThan(9 * 60_000);
+  });
+
   test("skip while pending also ends the match", async () => {
     ts = await startServer();
     const { ca, cb, roomId } = await matchedPair(ts);
