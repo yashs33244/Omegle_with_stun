@@ -49,6 +49,9 @@ workflow. Empty optional secrets fall back to the defaults shown.
 | `REDIS_PASSWORD` | unset | optional Redis password, URL safe (`openssl rand -hex 32`) |
 | `METRICS_TOKEN` | unset | bearer token for `GET /metrics` on the replicas |
 | `LOG_LEVEL` | `info` | pino log level |
+| `MAX_CONNECTIONS_PER_IP` | `10` | Socket.IO connections allowed per client IP on each backend replica. Raise it if many users share one address (office NAT, mobile carrier NAT). Needs the real client IP, see [Behind Cloudflare](#behind-cloudflare) |
+| `MATCH_ACCEPT_TIMEOUT_MS` | `30000` | how long both users have to accept a match |
+| `SHUTDOWN_GRACE_MS` | `10000` | how long a replica drains on stop; keep it under the 15 s `stop_grace_period` in `docker-compose.yml` |
 | `STUN_URLS` | Google public STUN | comma list |
 | `TURN_URLS` | unset | comma list of TURN URLs handed to clients |
 | `TURN_SECRET` | unset | shared secret with coturn (`use-auth-secret`); the backend issues short-lived credentials |
@@ -78,7 +81,8 @@ reviewers to the `production` environment if deploys should need approval.
   - `chizzy.itsyash.space` -> `http://127.0.0.1:5173`
   - `chizzyapi.itsyash.space` -> `http://127.0.0.1:3004`, with websocket upgrade
     (`Upgrade` and `Connection` headers), a read timeout of at least a few
-    minutes, and `X-Forwarded-For` / `X-Forwarded-Proto` set.
+    minutes, `X-Forwarded-For` set to the visitor's address (see
+    [Behind Cloudflare](#behind-cloudflare)) and `X-Forwarded-Proto` set.
 - Security group: 80 and 443 open to the world, 22 to where you deploy from.
   Ports 3004 and 5173 do not need to be public (set `BIND_ADDRESS=127.0.0.1`).
   For coturn: 3478 tcp+udp and 49160-49200 udp (or `TURN_MIN_PORT`-`TURN_MAX_PORT`).
@@ -112,6 +116,11 @@ the origin directly could set it. The Cloudflare list in `gateway.conf` comes
 from https://www.cloudflare.com/ips/ and should be refreshed now and then;
 `sh scripts/test-gateway-real-ip.sh` checks the behavior (CI runs it).
 
+Check it after any change to the host proxy: `docker compose logs --tail=20 gateway`
+must show visitor addresses, not Cloudflare ones and not `127.0.0.1` or Docker
+network addresses (172.16.0.0/12). If many real users share one address (office
+or carrier NAT), raise `MAX_CONNECTIONS_PER_IP`.
+
 ## First-time setup
 
 1. Install the prerequisites above and create the project directory
@@ -142,6 +151,11 @@ without the "Deploy, verify and roll back on failure" step): its old script
 rewrites `.env` without the image names, runs `docker compose down` on the
 whole new stack including Redis, and prunes the sha-tagged images rollback
 needs.
+
+That first deploy also changes the socket protocol. Tabs still open on the old
+site keep sending the old events, which the new server ignores, so those users
+stay on "searching" until they reload the page. Deploy at a quiet time. From
+the second deploy on, the new client reconnects and re-queues by itself.
 
 ## What a deploy does on the host
 
@@ -211,6 +225,10 @@ docker compose logs -f gateway frontend redis
 docker compose up -d                           # re-apply after editing .env by hand (lost on the next deploy; set a secret)
 docker compose --profile turn up -d            # start coturn manually
 ```
+
+Every workflow deploy rewrites `.env` from the GitHub secrets, so a hand edit
+only lasts until the next push to `new-v`. To change a setting for good, set
+its secret.
 
 Container logs rotate at 10 MB x 3 files per container. Backend logs are JSON
 (pino) and never contain names, photos or chat text.

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ConfigError, loadConfig } from "../../src/config";
+import { originAllowed } from "../../src/realtime/socket";
 
 describe("loadConfig", () => {
   test("defaults outside production", () => {
@@ -54,6 +55,11 @@ describe("loadConfig", () => {
       ].sort(),
     );
     expect(() => loadConfig(env)).not.toThrow();
+    // The example says to copy it for local use, and the frontend dev server
+    // (`npm run dev` in new-frontend) runs on http://localhost:8080.
+    const { corsOrigins } = loadConfig(env);
+    expect(originAllowed("http://localhost:8080", corsOrigins)).toBe(true);
+    expect(originAllowed("http://localhost:5173", corsOrigins)).toBe(true);
   });
 
   test("TURN secret needs TURN_URLS; static credentials come in pairs", () => {

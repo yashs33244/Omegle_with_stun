@@ -35,6 +35,8 @@ jobs:
         run: sh scripts/check-pins.sh
       - name: Deploy script tests
         run: bash scripts/test-deploy.sh
+      - name: Every compose setting can be set through the deploy
+        run: sh scripts/check-deploy-env.sh
 
   backend:
     name: Backend

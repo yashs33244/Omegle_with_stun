@@ -9,7 +9,8 @@ Live: https://chizzy.itsyash.space (socket server: https://chizzyapi.itsyash.spa
 ## Features
 
 - Matchmaking on shared topics, with mutual gender and language filters.
-- Accept or pass on every match (5 second window), skip at any time.
+- Accept or pass on every match (30 second window by default, set by
+  MATCH_ACCEPT_TIMEOUT_MS), skip at any time.
 - Peer-to-peer audio and video (WebRTC). STUN by default, optional TURN relay
   with short-lived credentials issued by the backend.
 - Text chat with a typing indicator, and a text-only mode that really stops
