@@ -162,12 +162,13 @@ export const ChatSettings: React.FC<ChatSettingsProps> = ({
               <div>
                 <div className="flex items-center gap-2 mb-3">
                   <Users className="w-4 h-4 text-blue-400" />
-                  <label htmlFor="settings-gender" className="text-sm font-medium text-white">
+                  <label id="settings-gender-label" htmlFor="settings-gender" className="text-sm font-medium text-white">
                     Who do you want to meet?
                   </label>
                 </div>
                 <Select
                   id="settings-gender"
+                  labelId="settings-gender-label"
                   aria-label="Who do you want to meet?"
                   value={preferences.genderFilter}
                   onValueChange={handleGenderChange}
@@ -186,12 +187,13 @@ export const ChatSettings: React.FC<ChatSettingsProps> = ({
               <div>
                 <div className="flex items-center gap-2 mb-3">
                   <Globe className="w-4 h-4 text-green-400" />
-                  <label htmlFor="settings-language" className="text-sm font-medium text-white">
+                  <label id="settings-language-label" htmlFor="settings-language" className="text-sm font-medium text-white">
                     Preferred Language
                   </label>
                 </div>
                 <Select
                   id="settings-language"
+                  labelId="settings-language-label"
                   aria-label="Preferred Language"
                   value={preferences.languageFilter}
                   onValueChange={handleLanguageChange}
@@ -276,11 +278,12 @@ export const ChatSettings: React.FC<ChatSettingsProps> = ({
 
               <div className="space-y-4">
                 <div>
-                  <label htmlFor="report-reason" className="text-sm font-medium text-white mb-2 block">
+                  <label id="report-reason-label" htmlFor="report-reason" className="text-sm font-medium text-white mb-2 block">
                     Reason for reporting:
                   </label>
                   <Select
                     id="report-reason"
+                    labelId="report-reason-label"
                     aria-label="Reason for reporting"
                     value={selectedReportReason}
                     onValueChange={(v) => setSelectedReportReason(v as ReportReason)}
