@@ -1,39 +1,99 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 
+export type MediaErrorKind = 'denied' | 'not-found' | 'in-use' | 'unsupported' | 'unknown';
+
+export interface MediaAccessError {
+  kind: MediaErrorKind;
+  title: string;
+  message: string;
+}
+
+const MEDIA_ERRORS: Record<MediaErrorKind, Omit<MediaAccessError, 'kind'>> = {
+  denied: {
+    title: 'Camera access is blocked',
+    message: 'Allow camera and microphone access for this site in your browser settings, then try again.',
+  },
+  'not-found': {
+    title: 'No camera found',
+    message: 'Connect a camera and try again.',
+  },
+  'in-use': {
+    title: 'Camera is busy',
+    message: 'Another app or tab is using your camera. Close it and try again.',
+  },
+  unsupported: {
+    title: 'Camera not available',
+    message: 'This browser cannot use a camera on this page. Use a recent browser over https.',
+  },
+  unknown: {
+    title: 'Could not start the camera',
+    message: 'Check that your camera works and that this site may use it, then try again.',
+  },
+};
+
+function errorName(err: unknown): string {
+  return err instanceof DOMException || err instanceof Error ? err.name : '';
+}
+
+/** Maps a getUserMedia failure to its real cause instead of always blaming permissions. */
+export function describeMediaError(err: unknown): MediaAccessError {
+  let kind: MediaErrorKind;
+  switch (errorName(err)) {
+    case 'NotAllowedError':
+    case 'SecurityError':
+      kind = 'denied';
+      break;
+    case 'NotFoundError':
+    case 'OverconstrainedError':
+      kind = 'not-found';
+      break;
+    case 'NotReadableError':
+    case 'AbortError':
+      kind = 'in-use';
+      break;
+    case 'MediaDevicesUnavailable':
+      kind = 'unsupported';
+      break;
+    default:
+      kind = 'unknown';
+  }
+  return { kind, ...MEDIA_ERRORS[kind] };
+}
+
+const VIDEO_CONSTRAINTS: MediaTrackConstraints = { width: { ideal: 1280 }, height: { ideal: 720 } };
+
+async function openCamera(): Promise<MediaStream> {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new DOMException('mediaDevices is not available', 'MediaDevicesUnavailable');
+  }
+  try {
+    return await navigator.mediaDevices.getUserMedia({ video: VIDEO_CONSTRAINTS, audio: true });
+  } catch (err) {
+    // A camera without a microphone still works for video chat; retry without audio.
+    if (errorName(err) !== 'NotFoundError') throw err;
+    try {
+      return await navigator.mediaDevices.getUserMedia({ video: VIDEO_CONSTRAINTS, audio: false });
+    } catch {
+      throw err;
+    }
+  }
+}
+
 /**
  * Owns the camera and microphone. The live stream is kept in a ref so cleanup
  * always stops the current tracks (state captured by an old closure would be
  * stale). Mute and camera-off flip track.enabled, so the peer connection keeps
  * its senders and the partner simply receives silence or black frames.
+ *
+ * The camera is requested once on mount. Callers retry with getCam() (a user
+ * action), never from an effect, so a failure cannot turn into a retry loop.
  */
-/** A message that matches the actual cause instead of always blaming permissions. */
-export function mediaErrorMessage(err: unknown): string {
-  const name = err instanceof DOMException || err instanceof Error ? err.name : '';
-  switch (name) {
-    case 'NotAllowedError':
-    case 'SecurityError':
-      return 'Camera and microphone access was blocked. Allow it in your browser settings and try again.';
-    case 'NotFoundError':
-    case 'OverconstrainedError':
-      return 'No camera or microphone was found. Connect one and try again.';
-    case 'NotReadableError':
-    case 'AbortError':
-      return 'Your camera or microphone is being used by another app. Close it and try again.';
-    case 'MediaDevicesUnavailable':
-      return 'This browser cannot access a camera here. Use a recent browser over https.';
-    default:
-      return 'Unable to access camera and microphone. Please check permissions.';
-  }
-}
-
 export const useMediaStream = () => {
   const [stream, setStream] = useState<MediaStream | null>(null);
-  const [hasPermission, setHasPermission] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<MediaAccessError | null>(null);
   const [micEnabled, setMicEnabledState] = useState<boolean>(true);
   const [cameraEnabled, setCameraEnabledState] = useState<boolean>(true);
-  const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const mountedRef = useRef<boolean>(true);
   // Bumped on every start/stop so a slow getUserMedia from an older call is discarded.
@@ -45,7 +105,6 @@ export const useMediaStream = () => {
     streamRef.current = null;
     if (!mountedRef.current) return;
     setStream(null);
-    setHasPermission(false);
     setIsLoading(false);
   }, []);
 
@@ -55,13 +114,7 @@ export const useMediaStream = () => {
     setError(null);
 
     try {
-      if (!navigator.mediaDevices?.getUserMedia) {
-        throw new DOMException('mediaDevices is not available', 'MediaDevicesUnavailable');
-      }
-      const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: true,
-      });
+      const mediaStream = await openCamera();
       if (request !== requestRef.current || !mountedRef.current) {
         mediaStream.getTracks().forEach((track) => track.stop());
         return;
@@ -69,19 +122,21 @@ export const useMediaStream = () => {
       streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = mediaStream;
       setStream(mediaStream);
-      setHasPermission(true);
       setMicEnabledState(true);
       setCameraEnabledState(true);
     } catch (err) {
       if (request !== requestRef.current || !mountedRef.current) return;
       console.error('Error accessing media devices:', err);
-      setError(mediaErrorMessage(err));
-      setHasPermission(false);
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+      setStream(null);
+      setError(describeMediaError(err));
     } finally {
       if (request === requestRef.current && mountedRef.current) setIsLoading(false);
     }
   }, []);
 
+  /** Stops the current tracks and asks for a fresh camera stream. */
   const restartStream = useCallback(() => {
     stopStream();
     void getCam();
@@ -111,27 +166,14 @@ export const useMediaStream = () => {
     };
   }, [getCam, stopStream]);
 
-  // Update the preview element when the stream changes.
-  useEffect(() => {
-    if (videoRef.current && stream) {
-      videoRef.current.srcObject = stream;
-      videoRef.current.play().catch(() => {
-        // Autoplay of a muted preview can still be interrupted by a re-render; harmless.
-      });
-    }
-  }, [stream]);
-
   return {
-    localAudioTrack: stream?.getAudioTracks()[0] ?? null,
-    localVideoTrack: stream?.getVideoTracks()[0] ?? null,
-    videoRef,
-    hasPermission,
+    stream,
+    hasPermission: stream !== null,
     isLoading,
     error,
     getCam,
     stopStream,
     restartStream,
-    stream,
     micEnabled,
     cameraEnabled,
     setMicEnabled,
