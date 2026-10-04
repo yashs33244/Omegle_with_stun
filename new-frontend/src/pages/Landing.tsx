@@ -5,6 +5,7 @@ import { Room } from "./Room";
 import { Button } from "@/components/retroui/Button";
 import { Input } from "@/components/retroui/Input";
 import { Select, SelectItem } from "@/components/retroui/Select";
+import { closedASelect } from "@/components/retroui/selectDismissal";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { countries, getCountryByCode, getLanguageByCode, languages } from "../lib/data";
 import { LIMITS, TOPICS, type Gender, type Preferences, type Topic } from "../lib/protocol";
@@ -136,10 +137,15 @@ export const Landing = () => {
     }
   };
 
+  // The current photo stays until a new capture succeeds or the user skips the photo.
   const retakePhoto = () => {
-    setForm((prev) => ({ ...prev, photo: undefined }));
     setCaptureError(null);
     setSetupStep("capture");
+  };
+
+  const skipPhoto = () => {
+    setForm((prev) => ({ ...prev, photo: undefined }));
+    setSetupStep("details");
   };
 
   const beginChat = () => {
@@ -273,11 +279,12 @@ export const Landing = () => {
           {/* Settings */}
           <div className="space-y-3">
             <div className="space-y-2">
-              <label htmlFor="home-language" className="text-xs text-gray-300 block">
+              <label id="home-language-label" htmlFor="home-language" className="text-xs text-gray-300 block">
                 Language
               </label>
               <Select
                 id="home-language"
+                labelId="home-language-label"
                 aria-label="Language"
                 value={form.language}
                 onValueChange={(language) => setForm((prev) => ({ ...prev, language }))}
@@ -291,11 +298,12 @@ export const Landing = () => {
             </div>
 
             <div className="space-y-2">
-              <label htmlFor="home-country" className="text-xs text-gray-300 block">
+              <label id="home-country-label" htmlFor="home-country" className="text-xs text-gray-300 block">
                 Country
               </label>
               <Select
                 id="home-country"
+                labelId="home-country-label"
                 aria-label="Country"
                 value={form.country}
                 onValueChange={(country) => setForm((prev) => ({ ...prev, country }))}
@@ -351,6 +359,10 @@ export const Landing = () => {
         <DialogContent
           className="max-w-md w-[calc(100%-2rem)] bg-white text-black rounded-lg max-h-[90vh] overflow-y-auto"
           onEscapeKeyDown={keepOpenWhileDropdownOpen}
+          onPointerDownOutside={(e) => {
+            // Like Escape: a press outside while a dropdown is open closes only the dropdown.
+            if (closedASelect(e.detail.originalEvent)) e.preventDefault();
+          }}
         >
           <div className="space-y-6">
             <div className="text-center">
@@ -411,7 +423,7 @@ export const Landing = () => {
 
                 <button
                   type="button"
-                  onClick={() => setSetupStep("details")}
+                  onClick={skipPhoto}
                   data-testid="skip-photo"
                   className="w-full text-sm text-gray-600 underline hover:text-black"
                 >
@@ -467,19 +479,20 @@ export const Landing = () => {
                     }}
                     className="border-gray-300 text-black"
                   />
-                  {showNameError && (
-                    <p id="profile-name-error" className="text-xs text-red-600">
-                      {errors.name}
-                    </p>
-                  )}
+                  {/* Always rendered with a reserved line, so showing the error on blur does not
+                      move the controls below while a click on one of them is in progress. */}
+                  <p id="profile-name-error" className="min-h-4 text-xs text-red-600">
+                    {showNameError ? errors.name : null}
+                  </p>
                 </div>
 
                 <div className="space-y-2">
-                  <label htmlFor="profile-gender" className="text-sm font-medium text-black block">
+                  <label id="profile-gender-label" htmlFor="profile-gender" className="text-sm font-medium text-black block">
                     Gender
                   </label>
                   <Select
                     id="profile-gender"
+                    labelId="profile-gender-label"
                     aria-label="Gender"
                     data-testid="gender-select"
                     value={form.gender}
