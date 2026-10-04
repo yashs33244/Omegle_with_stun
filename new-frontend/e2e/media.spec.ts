@@ -1,6 +1,6 @@
 import type { BrowserContext, Page } from "@playwright/test";
 import { expect, test, type Stranger } from "./fixtures";
-import { expectRemoteVideoPlaying, expectWaiting, onboard } from "./helpers";
+import { expectRemoteVideoPlaying, expectWaiting, onboard, passGate } from "./helpers";
 
 /**
  * Instant mode, the safe-start blur, Next, Hide my IP, the face gate and the
@@ -104,7 +104,7 @@ test("Hide my IP is offered in the call when the server allows it, and says so w
   const fay = await openStranger("Fay");
   await allowPrivateMode(eve.context);
   // Fay asks for Hide my IP on the start screen; this e2e backend has no TURN relay to use.
-  await fay.page.goto("/");
+  await passGate(fay);
   await fay.page.getByTestId("hide-ip-toggle").click();
   await expect(fay.page.getByTestId("hide-ip-toggle")).toHaveAttribute("aria-checked", "true");
   await startInstantCall(eve, fay);

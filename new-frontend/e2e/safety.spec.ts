@@ -7,6 +7,7 @@ import {
   expectWaiting,
   onboard,
   openChat,
+  passGate,
   startCall,
 } from "./helpers";
 import { LIMITS, type ReportPayload } from "../src/lib/protocol";
@@ -42,7 +43,7 @@ function recordSocketEvents(page: Page) {
 test("the safety card shows once before the first match", async ({ openStranger }) => {
   const ada = await openStranger("Ada");
   const { page } = ada;
-  await page.goto("/");
+  await passGate(ada);
   await page.getByTestId("start-chat").click();
   await page.getByTestId("skip-photo").click();
   await page.getByTestId("name-input").fill(ada.name);
