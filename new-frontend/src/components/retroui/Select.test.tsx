@@ -107,4 +107,32 @@ describe("retroui Select", () => {
     expect(onOutside).toHaveBeenCalledTimes(1);
     expect(onChange).not.toHaveBeenCalled();
   });
+
+  it("with a visible label, names the trigger by the label and the selected value", async () => {
+    const user = userEvent.setup();
+    function Labelled() {
+      const [value, setValue] = useState("b");
+      return (
+        <>
+          <label id="letter-label" htmlFor="letter">
+            Letter
+          </label>
+          <Select id="letter" labelId="letter-label" aria-label="Letter" value={value} onValueChange={setValue}>
+            <SelectItem value="a">Alpha</SelectItem>
+            <SelectItem value="b">Bravo</SelectItem>
+            <SelectItem value="c">Charlie</SelectItem>
+          </Select>
+        </>
+      );
+    }
+    render(<Labelled />);
+
+    const trigger = screen.getByRole("button", { name: "Letter Bravo" });
+    expect(trigger).toHaveTextContent("Bravo");
+    await user.click(trigger);
+    expect(screen.getByRole("listbox", { name: "Letter" })).toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: "Charlie" }));
+
+    expect(trigger).toHaveAccessibleName("Letter Charlie");
+  });
 });

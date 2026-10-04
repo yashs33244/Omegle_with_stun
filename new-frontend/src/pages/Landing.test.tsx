@@ -128,11 +128,14 @@ describe("Landing profile validation", () => {
 
     const gender = within(dialog).getByTestId("gender-select");
     expect(gender).toHaveTextContent("Prefer not to say");
+    // Screen readers hear the current value with the label, not just "Gender".
+    expect(gender).toHaveAccessibleName("Gender Prefer not to say");
     await user.click(gender);
     const options = within(dialog).getAllByRole("option");
     expect(options.map((o) => o.textContent)).toEqual(["Male", "Female", "Other", "Prefer not to say"]);
     await user.click(within(dialog).getByRole("option", { name: "Female" }));
     expect(gender).toHaveTextContent("Female");
+    expect(gender).toHaveAccessibleName("Gender Female");
 
     await user.click(within(dialog).getByTestId("topic-music"));
     await user.click(within(dialog).getByTestId("begin-chat"));
@@ -248,6 +251,12 @@ describe("Landing photo capture", () => {
 });
 
 describe("Landing home settings", () => {
+  it("names the language and country pickers by label and current value", async () => {
+    render(<Landing />);
+    expect(await screen.findByRole("button", { name: "Language English" })).toHaveTextContent("English");
+    expect(screen.getByRole("button", { name: /^Country .*India$/ })).toHaveTextContent("India");
+  });
+
   it("closes an open dropdown when Start is clicked", async () => {
     const user = userEvent.setup();
     render(<Landing />);

@@ -11,6 +11,12 @@ interface SelectProps {
   className?: string;
   disabled?: boolean;
   id?: string;
+  /**
+   * Id of the visible label. The trigger is then named by that label plus the
+   * selected value ("Gender Female"), so screen readers announce the value.
+   * Without it the trigger is named by aria-label alone.
+   */
+  labelId?: string;
   "aria-label"?: string;
   "data-testid"?: string;
 }
@@ -48,6 +54,7 @@ const Select = React.forwardRef<HTMLDivElement, SelectProps>(
       className,
       disabled,
       id,
+      labelId,
       "aria-label": ariaLabel,
       "data-testid": testId,
     },
@@ -61,6 +68,7 @@ const Select = React.forwardRef<HTMLDivElement, SelectProps>(
     const containerRef = React.useRef<HTMLDivElement>(null);
     const triggerRef = React.useRef<HTMLButtonElement>(null);
     const listId = React.useId();
+    const valueId = React.useId();
     React.useImperativeHandle(ref, () => containerRef.current as HTMLDivElement);
 
     const items = React.Children.toArray(children).filter(
@@ -185,11 +193,12 @@ const Select = React.forwardRef<HTMLDivElement, SelectProps>(
           aria-haspopup="listbox"
           aria-expanded={isOpen}
           aria-controls={isOpen ? listId : undefined}
-          aria-label={ariaLabel}
+          aria-label={labelId ? undefined : ariaLabel}
+          aria-labelledby={labelId ? `${labelId} ${valueId}` : undefined}
           data-testid={testId}
           className="flex h-10 w-full items-center justify-between rounded-md border-2 border-black bg-white px-3 py-2 text-sm shadow-sm transition-all hover:shadow-md focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <span className={cn("truncate", selectedLabel ? "text-black" : "text-gray-500")}>
+          <span id={valueId} className={cn("truncate", selectedLabel ? "text-black" : "text-gray-500")}>
             {selectedLabel || placeholder}
           </span>
           <ChevronDown
