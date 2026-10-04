@@ -107,6 +107,21 @@ describe("malformed payloads", () => {
     expect(await sendHello(other, hello())).toMatchObject({ ok: true });
   });
 
+  test("binary packets close the connection instead of piling up attachments", async () => {
+    ts = await startServer();
+    const c = await ts.connect();
+    const closed = new Promise<void>((r) => c.once("disconnect", () => r()));
+    // A BINARY_EVENT header announcing a million attachments, then binary
+    // frames that each pass the per-packet size check.
+    const engine = c.io.engine;
+    engine.write('51000000-["chat:send",{"_placeholder":true,"num":0}]');
+    for (let i = 0; i < 5; i++) engine.write(new Uint8Array(64 * 1024));
+    const dropped = await Promise.race([closed.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), 1000))]);
+    expect(dropped).toBe(true);
+    const other = await ts.connect();
+    expect(await sendHello(other, hello())).toMatchObject({ ok: true });
+  });
+
   test("hello is rate limited", async () => {
     ts = await startServer();
     const c = await ts.connect();
