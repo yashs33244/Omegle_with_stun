@@ -219,10 +219,63 @@ site keep sending the old events, which the new server ignores, so those users
 stay on "searching" until they reload the page. Deploy at a quiet time. From
 the second deploy on, the new client reconnects and re-queues by itself.
 
+## First deploy of the launch build
+
+The launch build (session gate, admin console, evidence store, on-device
+moderation) needs new secrets and a few Cloudflare settings. In order:
+
+1. **Secrets** (GitHub -> Settings -> Secrets -> Actions):
+   - `SESSION_SECRET`, `ADMIN_TOKEN`, `PSEUDONYM_SALT`: three different values
+     from `openssl rand -hex 32`. Keep a copy of `PSEUDONYM_SALT` offline; it
+     must never change.
+   - `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET` from a Turnstile widget whose
+     hostname list has the SPA hostname (`chizzy.itsyash.space`).
+   - `TURN_PROVIDER=cloudflare`, `CF_TURN_KEY_ID`, `CF_TURN_API_TOKEN`.
+   - Check `CORS_ORIGINS` and `VITE_API_URL` name the real hostnames.
+   - Optional now, needed before launch: `SENTRY_DSN`, `SENTRY_DSN_FRONTEND`,
+     `POSTHOG_KEY`, `POSTHOG_HOST`, `CF_ACCOUNT_ID` and `CF_ANALYTICS_TOKEN`.
+2. **Evidence volume.** Nothing to create: the first `docker compose up`
+   makes the `evidence-data` volume, owned by the backend's `node` user. Check
+   the disk has room (`df -h /var/lib/docker`), never run
+   `docker volume prune`, and note that `scripts/backup-redis.sh` does not
+   copy this volume (docs/redis-backup.md). To use S3 instead, set
+   `EVIDENCE_S3_BUCKET` and `EVIDENCE_S3_REGION` (plus `EVIDENCE_S3_KMS_KEY_ID`
+   for SSE-KMS), give the instance role read, write and delete on the bucket
+   (and the KMS key), and set the metadata hop limit to 2 (Host
+   prerequisites).
+3. **Cloudflare** (see "Cloudflare in front"): both hostnames proxied, SSL
+   "Full (strict)", an Access application on `/admin/api/*` and `/admin`, and
+   a Cache Rule that makes `chizzy.itsyash.space/models/*` eligible for cache
+   (Cloudflare does not cache `.wasm` by default; the origin already sends a
+   one-year immutable `Cache-Control`). After the deploy works through
+   Cloudflare: `TRUST_CLOUDFLARE=true`, then the security group, then
+   `CLOUDFLARE_ONLY=true` (in that order; `CLOUDFLARE_ONLY` before the DNS is
+   proxied answers 403 to everyone).
+4. **Deploy** (push to `new-v`) at a quiet time, then check:
+   `https://chizzyapi.itsyash.space/api/config` shows a `turnstileSiteKey`;
+   the SPA shows the date of birth gate and passes it; `/admin` accepts
+   `ADMIN_TOKEN` and shows the queue; one test report reaches the queue with
+   its evidence.
+
+What happens when a secret is missing:
+
+| missing | result |
+|---|---|
+| `SESSION_SECRET`, `ADMIN_TOKEN`, `CORS_ORIGINS`, or `TURNSTILE_SECRET` / `TURNSTILE_SITE_KEY` (with `TURNSTILE_DISABLED` not `true`) | the deploy stops with "missing or too short: ..." before changing anything on the host; the running version keeps serving. If the value only goes missing in a hand-edited `.env`, the backend refuses to start, the health check fails and the deploy rolls back to the previous tag |
+| `EVIDENCE_S3_REGION` while `EVIDENCE_S3_BUCKET` is set | the deploy stops the same way |
+| `PSEUDONYM_SALT` | the deploy warns and continues; admin pseudonyms are derived from `ADMIN_TOKEN` and all change when it is rotated |
+| `CF_TURN_KEY_ID` / `CF_TURN_API_TOKEN` with `TURN_PROVIDER=cloudflare` | the backend refuses to start and the deploy rolls back |
+| `TURN_PROVIDER` | no relay: users behind strict NATs cannot connect, and Hide my IP cannot work |
+| `TRUST_CLOUDFLARE` | the country is unknown, so the `blocked_countries` blocklist does not apply |
+| `CF_ACCOUNT_ID` / `CF_ANALYTICS_TOKEN` | no TURN spend poller: nothing steps relay use down automatically; rely on the Cloudflare billing alert |
+| Sentry or PostHog keys | no error reports or product analytics; nothing else changes |
+
 ## What a deploy does on the host
 
 `deploy/deploy.sh <sha>` runs in `PROJECT_PATH`:
 
+0. Checks the secrets a production backend needs (see "First deploy of the
+   launch build") and stops, naming them, if any is missing.
 1. Moves the copied `.incoming/docker-compose.yml` and `.incoming/deploy/` into
    place, keeping the current ones in `.previous/` (when they belong to the
    verified tag, or on the first deploy when there is no saved copy yet).
