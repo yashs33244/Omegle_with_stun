@@ -191,6 +191,17 @@ describe("Landing photo capture", () => {
     expect(roomProps.current?.profile.photo).toBe(jpeg);
   });
 
+  it("binds the camera to the preview again after Take a Photo remounts it", async () => {
+    const { stream } = fakeStream();
+    getUserMedia.mockResolvedValueOnce(stream);
+    const { user, dialog } = await openDetails();
+
+    await user.click(within(dialog).getByRole("button", { name: "Take a Photo" }));
+
+    const video = within(dialog).getByLabelText("Camera preview") as HTMLVideoElement;
+    await waitFor(() => expect(video.srcObject).toBe(stream));
+  });
+
   it("shows why a capture failed instead of failing silently", async () => {
     const { user, dialog, video } = await openCapture();
     // loadeddata fired but the frame size is still unknown.
@@ -238,5 +249,8 @@ describe("Landing camera handling", () => {
     await waitFor(() => expect(screen.getByTestId("start-chat")).toBeEnabled());
     expect(getUserMedia).toHaveBeenCalledTimes(2);
     second.tracks.forEach((t) => expect(t.stop).not.toHaveBeenCalled());
+    // The remounted home background shows the new camera stream.
+    const background = document.querySelector("video") as HTMLVideoElement;
+    await waitFor(() => expect(background.srcObject).toBe(second.stream));
   });
 });
