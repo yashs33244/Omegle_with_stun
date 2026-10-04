@@ -1,60 +1,73 @@
-import { Socket } from "socket.io";
-import http from "http";
+/**
+ * Process bootstrap: config, store, server, signal handling. No domain logic here.
+ */
+import { ConfigError, loadConfig, type Config } from "./config";
+import { createLogger } from "./logger";
+import { createServer } from "./server";
+import { MemoryStore } from "./store/MemoryStore";
+import type { MatchStore } from "./store/MatchStore";
 
-import express from 'express';
-import { Server } from 'socket.io';
-import { UserManager } from "./managers/UserManger";
-
-const app = express();
-
-// Health check endpoint
-app.get('/health', (req, res) => {
-  res.status(200).json({
-    status: 'healthy',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime()
-  });
-});
-
-// CORS middleware for REST endpoints
-app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', process.env.CORS_ORIGIN || '*');
-  res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept');
-  next();
-});
-
-const server = http.createServer(app);
-
-const io = new Server(server, {
-  cors: {
-    origin: "*"
+function readConfig(): Config {
+  try {
+    return loadConfig();
+  } catch (err) {
+    if (err instanceof ConfigError) {
+      process.stderr.write(`${err.message}\n`);
+      process.exit(1);
+    }
+    throw err;
   }
-});
+}
 
-const userManager = new UserManager();
+async function main(): Promise<void> {
+  const config = readConfig();
+  const logger = createLogger(config.logLevel, config.instanceId);
 
-io.on('connection', (socket: Socket) => {
-  console.log(`User connected: ${socket.id}`);
+  let store: MatchStore;
+  if (config.redisUrl) {
+    // RedisStore is added by the backend-redis lane; until then refuse to
+    // pretend we share state across replicas.
+    logger.fatal("REDIS_URL is set but this build has no Redis store");
+    process.exit(1);
+  } else {
+    store = new MemoryStore();
+    logger.info("using in-memory store (single instance)");
+  }
 
-  userManager.addUser("randomName", socket);
+  const server = createServer(config, { store, logger });
+  const port = await server.listen(config.port);
+  logger.info({ port, env: config.nodeEnv }, "listening");
 
-  socket.on("disconnect", (reason) => {
-    console.log(`User disconnected: ${socket.id}, reason: ${reason}`);
-    userManager.removeUser(socket.id);
-  });
+  let shuttingDown = false;
+  const shutdown = (signal: string) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    logger.info({ signal }, "shutting down");
+    const force = setTimeout(() => {
+      logger.error("shutdown grace period exceeded, exiting");
+      process.exit(1);
+    }, config.shutdownGraceMs);
+    force.unref();
+    server
+      .close()
+      .then(() => store.close())
+      .then(
+        () => {
+          logger.info("shutdown complete");
+          process.exit(0);
+        },
+        (err: unknown) => {
+          logger.error({ err }, "shutdown failed");
+          process.exit(1);
+        },
+      );
+  };
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("unhandledRejection", (err) => logger.error({ err }, "unhandled rejection"));
+}
 
-  // Handle manual home navigation (when user clicks home button)
-  socket.on("leave-room", () => {
-    console.log(`User ${socket.id} manually left room`);
-    userManager.removeUser(socket.id);
-    userManager.addUser("randomName", socket); // Re-add to lobby
-  });
-});
-
-const PORT = process.env.PORT || 3004;
-
-server.listen(PORT, () => {
-  console.log(`Server listening on port ${PORT}`);
-  console.log(`Frontend should connect to: http://localhost:${PORT}`);
-  console.log(`Health check available at: http://localhost:${PORT}/health`);
+main().catch((err: unknown) => {
+  process.stderr.write(`fatal: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
+  process.exit(1);
 });
