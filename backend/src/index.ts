@@ -39,7 +39,7 @@ async function main(): Promise<void> {
   logger.info({ port, env: config.nodeEnv }, "listening");
 
   let shuttingDown = false;
-  const shutdown = (signal: string) => {
+  const shutdown = (signal: string, exitCode = 0) => {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info({ signal }, "shutting down");
@@ -54,7 +54,7 @@ async function main(): Promise<void> {
       .then(
         () => {
           logger.info("shutdown complete");
-          process.exit(0);
+          process.exit(exitCode);
         },
         (err: unknown) => {
           logger.error({ err }, "shutdown failed");
@@ -65,6 +65,12 @@ async function main(): Promise<void> {
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("unhandledRejection", (err) => logger.error({ err }, "unhandled rejection"));
+  // Backstop only: socket handlers never throw (see realtime/socket.ts). If
+  // something still does, the process state is unknown, so drain and exit.
+  process.on("uncaughtException", (err) => {
+    logger.fatal({ err }, "uncaught exception");
+    shutdown("uncaughtException", 1);
+  });
 }
 
 main().catch((err: unknown) => {
