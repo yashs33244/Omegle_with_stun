@@ -65,12 +65,20 @@ services:
       METRICS_TOKEN: ${METRICS_TOKEN:-}
       SHUTDOWN_GRACE_MS: ${SHUTDOWN_GRACE_MS:-10000}
       # Session gate. Every variable is listed in .env.example; an empty value
-      # means "use the backend default" (backend/src/config.ts).
+      # means "use the backend default" (backend/src/config.ts). In production
+      # the backend refuses to start without SESSION_SECRET, and without
+      # TURNSTILE_SECRET plus TURNSTILE_SITE_KEY unless TURNSTILE_DISABLED=true.
       SESSION_SECRET: ${SESSION_SECRET:-}
       SESSION_SECRET_PREVIOUS: ${SESSION_SECRET_PREVIOUS:-}
       TURNSTILE_SECRET: ${TURNSTILE_SECRET:-}
       TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
       TURNSTILE_DISABLED: ${TURNSTILE_DISABLED:-false}
+      # Per client IP and per /24 (or /48) network limits on POST /api/session,
+      # and hourly match caps per IP and per device.
+      SESSION_RATE_PER_IP_PER_MIN: ${SESSION_RATE_PER_IP_PER_MIN:-}
+      SESSION_RATE_PER_NETWORK_PER_MIN: ${SESSION_RATE_PER_NETWORK_PER_MIN:-}
+      MATCH_CAP_PER_DEVICE_PER_HOUR: ${MATCH_CAP_PER_DEVICE_PER_HOUR:-}
+      MATCH_CAP_PER_IP_PER_HOUR: ${MATCH_CAP_PER_IP_PER_HOUR:-}
       # true only when Cloudflare proxies the API hostname (CF-IPCountry is used
       # for the country blocklist). The gateway forwards CF-* headers only for
       # requests that really came from a Cloudflare address.
@@ -87,20 +95,30 @@ services:
       TURN_USERNAME: ${TURN_USERNAME:-}
       TURN_CREDENTIAL: ${TURN_CREDENTIAL:-}
       TURN_TTL_SECONDS: ${TURN_TTL_SECONDS:-}
+      # TURN credential cache and hourly caps, and the daily egress thresholds
+      # (GB) of the TURN spend poller.
+      TURN_CACHE_SECONDS: ${TURN_CACHE_SECONDS:-}
+      TURN_MAX_PER_DEVICE_HOUR: ${TURN_MAX_PER_DEVICE_HOUR:-}
+      TURN_MAX_PER_IP_HOUR: ${TURN_MAX_PER_IP_HOUR:-}
+      TURN_SPEND_DAILY_GB: ${TURN_SPEND_DAILY_GB:-}
       # Observability. Sentry DSNs and the PostHog key are public by design.
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_DSN_FRONTEND: ${SENTRY_DSN_FRONTEND:-}
       POSTHOG_KEY: ${POSTHOG_KEY:-}
       POSTHOG_HOST: ${POSTHOG_HOST:-}
-      # Admin API (/admin/api/*). Empty ADMIN_TOKEN leaves the admin API off.
+      # Admin API (/admin/api/*). The backend refuses to start in production
+      # without ADMIN_TOKEN. PSEUDONYM_SALT keys the device pseudonyms admins
+      # see; empty derives it from ADMIN_TOKEN (they change when it rotates).
       ADMIN_TOKEN: ${ADMIN_TOKEN:-}
       ADMIN_ALLOWED_IPS: ${ADMIN_ALLOWED_IPS:-}
+      PSEUDONYM_SALT: ${PSEUDONYM_SALT:-}
       # Evidence store. EVIDENCE_DIR is fixed to the evidence volume below;
       # set EVIDENCE_S3_BUCKET to use S3 instead (credentials come from the
       # EC2 instance role, never from this file).
       EVIDENCE_DIR: /data/evidence
       EVIDENCE_S3_BUCKET: ${EVIDENCE_S3_BUCKET:-}
-      AWS_REGION: ${AWS_REGION:-}
+      EVIDENCE_S3_REGION: ${EVIDENCE_S3_REGION:-}
+      EVIDENCE_S3_KMS_KEY_ID: ${EVIDENCE_S3_KMS_KEY_ID:-}
     volumes:
       # Shared by every replica on this host. The image creates /data/evidence
       # owned by the node user, and a new named volume copies that ownership.

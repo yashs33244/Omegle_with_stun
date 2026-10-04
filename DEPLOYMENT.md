@@ -41,11 +41,16 @@ workflow. Empty optional secrets fall back to the defaults shown.
 
 ### Required for the launch build
 
+The deploy stops before touching the host when `SESSION_SECRET`,
+`ADMIN_TOKEN` or the Turnstile pair is missing (see "First deploy of the
+launch build"); the backend itself also refuses to start without them.
+
 | secret | used for |
 |---|---|
-| `SESSION_SECRET` | HMAC key for session and age tokens (`openssl rand -hex 32`). Required in production |
-| `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET` | Cloudflare Turnstile widget for the SPA hostname. The site key is public (served by `/api/config`) |
-| `ADMIN_TOKEN` | bearer token for `/admin/api/*` (`openssl rand -hex 32`). Unset keeps the admin console's API off |
+| `SESSION_SECRET` | HMAC key for session and age tokens (`openssl rand -hex 32`, at least 32 characters) |
+| `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET` | Cloudflare Turnstile widget for the SPA hostname. The secret verifies both the session gate and the takedown form; the site key is public (served by `/api/config`) |
+| `ADMIN_TOKEN` | bearer token for `/admin/api/*` (`openssl rand -hex 32`, at least 24 characters) |
+| `PSEUDONYM_SALT` | salt for the pseudonymous device ids the admin console shows (`openssl rand -hex 32`). Strongly recommended: without it they are derived from `ADMIN_TOKEN` and all change when the token is rotated. Set it once and never change it; the deploy warns while it is empty |
 | `TURN_PROVIDER` | `cloudflare` |
 | `CF_TURN_KEY_ID`, `CF_TURN_API_TOKEN` | Cloudflare Realtime TURN key; the backend mints per-call credentials with it |
 | `TRUST_CLOUDFLARE` | `true` once both hostnames are proxied by Cloudflare (see "Cloudflare in front") |
@@ -55,12 +60,18 @@ workflow. Empty optional secrets fall back to the defaults shown.
 | secret | default | used for |
 |---|---|---|
 | `SESSION_SECRET_PREVIOUS` | unset | previous `SESSION_SECRET`, still accepted during a rotation; clear it after 180 days |
-| `TURNSTILE_DISABLED` | `false` | skips Turnstile. Staging and load tests only, never production |
+| `TURNSTILE_DISABLED` | `false` | skips Turnstile (session gate and takedown form). Staging and load tests only, never production |
+| `SESSION_RATE_PER_IP_PER_MIN`, `SESSION_RATE_PER_NETWORK_PER_MIN` | `10`, `60` | `POST /api/session` requests per minute per client IP and per /24 (IPv6 /48) network |
+| `MATCH_CAP_PER_DEVICE_PER_HOUR`, `MATCH_CAP_PER_IP_PER_HOUR` | `200`, `200` | matches per hour per device and per client IP |
 | `CF_ACCOUNT_ID`, `CF_ANALYTICS_TOKEN` | unset | TURN spend poller (read-only Analytics token) |
+| `TURN_SPEND_DAILY_GB` | `35,50,70` | daily TURN egress thresholds in GB: lower the relay bitrate, then turn off Hide my IP, then turn off TURN |
+| `TURN_CACHE_SECONDS` | `300` | how long a device reuses one set of TURN credentials |
+| `TURN_MAX_PER_DEVICE_HOUR`, `TURN_MAX_PER_IP_HOUR` | `20`, `100` | TURN credential sets per hour per device and per client IP |
 | `SENTRY_DSN`, `SENTRY_DSN_FRONTEND` | unset | Sentry projects for the backend and the SPA |
 | `POSTHOG_KEY`, `POSTHOG_HOST` | unset | PostHog Cloud project (cookieless) |
 | `ADMIN_ALLOWED_IPS` | unset | comma list of IPs or CIDRs allowed to call the admin API, on top of the token |
-| `EVIDENCE_S3_BUCKET`, `AWS_REGION` | unset | evidence in S3 instead of the `evidence-data` volume (credentials from the instance role) |
+| `EVIDENCE_S3_BUCKET`, `EVIDENCE_S3_REGION` | unset | evidence in S3 instead of the `evidence-data` volume (credentials from the instance role). The region is required with a bucket; the deploy stops without it |
+| `EVIDENCE_S3_KMS_KEY_ID` | unset (SSE-S3) | KMS key for SSE-KMS encryption of evidence objects |
 | `CLOUDFLARE_ONLY` | `false` | `true`: the gateway refuses requests that did not come through Cloudflare |
 | `BACKUP_S3_URI` | unset | `s3://bucket/prefix` for the nightly Redis snapshot (docs/redis-backup.md) |
 | `PROJECT_PATH` | `Omegle_with_stun` | directory on the host (relative to the SSH user's home, or absolute) that holds `docker-compose.yml` and `.env` |
@@ -71,9 +82,6 @@ workflow. Empty optional secrets fall back to the defaults shown.
 | `BACKEND_REPLICAS` | `2` | number of backend containers |
 | `BIND_ADDRESS` | `0.0.0.0` | host address the gateway (3004) and frontend (5173) ports bind to. Set `127.0.0.1` when the host proxy runs on the same host and connects via localhost, so the ports are not reachable around it |
 | `BACKEND_PORT`, `FRONTEND_PORT` | `3004`, `5173` | host ports of the gateway and the frontend (the host proxy must point at them) |
-| `MAX_CONNECTIONS_PER_IP` | `10` | sockets one client IP may hold on each backend replica |
-| `MATCH_ACCEPT_TIMEOUT_MS` | `30000` | how long both users have to accept a match |
-| `SHUTDOWN_GRACE_MS` | `10000` | graceful shutdown time of a replica; keep it under the 15 s compose `stop_grace_period` |
 | `REDIS_PASSWORD` | unset | optional Redis password, URL safe (`openssl rand -hex 32`) |
 | `METRICS_TOKEN` | unset | bearer token for `GET /metrics` on the replicas |
 | `LOG_LEVEL` | `info` | pino log level |
@@ -91,8 +99,9 @@ Repository **variable** (not a secret) and the canary secret:
 | `CANARY_TURNSTILE_BYPASS` | secret, optional | token the canary sends instead of Cloudflare's dummy test token (see "Synthetic canary") |
 
 Secrets nothing reads any more and that can be deleted: `JWT_SECRET`,
-`FRONTEND_URL`, `DB_URL`, `REDIS_URL` (Redis is part of the stack), and the
-coturn settings `RUN_COTURN`, `TURN_REALM`, `TURN_EXTERNAL_IP` (coturn was
+`FRONTEND_URL`, `DB_URL`, `REDIS_URL` (Redis is part of the stack),
+`AWS_REGION` (now `EVIDENCE_S3_REGION`), `TURNSTILE_SECRET_KEY` (now
+`TURNSTILE_SECRET`), and the coturn settings `RUN_COTURN`, `TURN_REALM`, `TURN_EXTERNAL_IP` (coturn was
 removed from the stack; the next deploy removes a running coturn container
 as an orphan).
 
