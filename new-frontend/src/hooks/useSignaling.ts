@@ -2,6 +2,7 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import { io, type Socket } from "socket.io-client";
 import { API_URL } from "@/lib/config";
 import { getDeviceId } from "@/lib/device";
+import { getSessionToken, invalidateSession, waitForSession } from "@/lib/session";
 import {
   LIMITS,
   PROTOCOL_VERSION,
@@ -382,6 +383,8 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 10000,
+      // Read at every (re)connect, so a refreshed session token is picked up.
+      auth: (cb) => cb({ sessionToken: getSessionToken() ?? "" }),
     });
     socketRef.current = socket;
     socket.onAny((event: string, ...args: unknown[]) => {
@@ -431,8 +434,18 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
       if (reason === "io server disconnect") socket.connect();
     });
 
-    socket.on("connect_error", () => {
-      if (!stopped) dispatch({ type: "connect-failed" });
+    socket.on("connect_error", (err: Error & { data?: { code?: string } }) => {
+      if (stopped) return;
+      dispatch({ type: "connect-failed" });
+      // The handshake refused the session: socket.io does not retry that by itself.
+      // The gate asks for a new session; connect again once it is saved.
+      const code = err.data?.code;
+      if (code === "session_required" || code === "region_blocked") {
+        invalidateSession(code);
+        void waitForSession().then(() => {
+          if (!stopped) socket.connect();
+        });
+      }
     });
 
     socket.on("queue:waiting", () => dispatch({ type: "queue-waiting" }));
