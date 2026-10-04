@@ -1,11 +1,13 @@
 /**
- * HTTP surface: health, readiness and Prometheus metrics. Everything else 404s.
+ * HTTP surface: health, readiness, Prometheus metrics and the session gate's
+ * /api routes. Everything else 404s.
  */
 import { createHash, timingSafeEqual } from "node:crypto";
-import express, { type ErrorRequestHandler, type Express } from "express";
+import express, { type ErrorRequestHandler, type Express, type Router } from "express";
 import helmet from "helmet";
 import type { Registry } from "prom-client";
 import type { Logger } from "../logger";
+import { captureError } from "../observability/sentry";
 import type { MatchStore } from "../store/MatchStore";
 
 export interface AppDeps {
@@ -15,6 +17,8 @@ export interface AppDeps {
   metricsToken?: string;
   /** How long /readyz waits for the store before answering 503. */
   readyTimeoutMs?: number;
+  /** /api/session, /api/config and CORS for /api (session gate). */
+  session?: Router;
 }
 
 /** Constant-time compare; hashing first also hides the token length. */
@@ -69,12 +73,15 @@ export function createApp(deps: AppDeps): Express {
     res.set("Content-Type", deps.registry.contentType).send(await deps.registry.metrics());
   });
 
+  if (deps.session) app.use(deps.session);
+
   app.use((_req, res) => {
     res.status(404).json({ error: "not_found" });
   });
 
   const onError: ErrorRequestHandler = (err, _req, res, _next) => {
     deps.logger.error({ err }, "http handler failed");
+    captureError(err);
     if (!res.headersSent) res.status(500).json({ error: "internal" });
   };
   app.use(onError);

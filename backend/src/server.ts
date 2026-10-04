@@ -11,6 +11,8 @@ import type { Logger } from "./logger";
 import { MatchService } from "./match/MatchService";
 import { createMetrics, type Metrics } from "./metrics";
 import { attachHandlers, createEmitter, createSocketServer, type AppServer } from "./realtime/socket";
+import { createSessionFeature, sessionWarnings, type RestrictionChecker } from "./session";
+import type { FetchLike } from "./session/turnstile";
 import type { MatchStore } from "./store/MatchStore";
 
 export interface ServerDeps {
@@ -26,6 +28,10 @@ export interface ServerDeps {
    * The caller owns and closes it.
    */
   redis?: Redis;
+  /** Outbound HTTP for Turnstile Siteverify. Tests inject a fake; defaults to global fetch. */
+  fetch?: FetchLike;
+  /** Active restriction lookup for POST /api/session (enforcement lane). No-op when unset. */
+  restrictions?: RestrictionChecker;
 }
 
 export interface ChizzyServer {
@@ -53,13 +59,45 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
   const { store, logger } = deps;
   const flags = new FlagsReader(deps.flags ?? new MemoryFlagsStore());
   const metrics = createMetrics(store);
-  const app = createApp({ store, registry: metrics.registry, logger, metricsToken: config.metricsToken });
+  const session = createSessionFeature({
+    config,
+    flags,
+    store,
+    logger,
+    registry: metrics.registry,
+    redis: deps.redis,
+    fetch: deps.fetch,
+    restrictions: deps.restrictions,
+  });
+  for (const warning of sessionWarnings(config)) logger.warn(`SESSION GATE WARNING: ${warning}`);
+  const app = createApp({
+    store,
+    registry: metrics.registry,
+    logger,
+    metricsToken: config.metricsToken,
+    session: session.router,
+  });
   const httpServer = createHttpServer(app);
   const io = createSocketServer(httpServer, config);
   deps.configureIo?.(io);
 
-  const service = new MatchService({ store, config, logger, metrics, flags, emitter: createEmitter(io) });
-  attachHandlers(io, { config, service, logger, metrics });
+  const service = new MatchService({
+    store,
+    config,
+    logger,
+    metrics,
+    flags,
+    emitter: createEmitter(io),
+    gate: session.gate,
+  });
+  attachHandlers(io, {
+    config,
+    service,
+    logger,
+    metrics,
+    handshake: config.requireSession ? session.handshake : undefined,
+  });
+  const stopBroadcast = session.startBroadcast(io);
   // listen() waits for this, so no client connects before the first heartbeat.
   const started = flags.start().then(() => service.start());
   started.catch(() => {}); // surfaced by listen(); avoid an unhandled rejection meanwhile
@@ -86,6 +124,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     close() {
       closing ??= (async () => {
         flags.stop();
+        stopBroadcast();
         try {
           await service.shutdown();
         } catch (err) {

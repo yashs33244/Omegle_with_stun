@@ -24,9 +24,39 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ NODE_ENV: "production", CORS_ORIGINS: "https://a.com,*" })).toThrow(/must not contain \*/);
   });
 
+  const PROD = {
+    NODE_ENV: "production",
+    CORS_ORIGINS: "https://a.com",
+    SESSION_SECRET: "s".repeat(32),
+    TURNSTILE_SECRET: "1x0000000000000000000000000000000AA",
+    TURNSTILE_SITE_KEY: "1x00000000000000000000AA",
+  };
+
   test("production with an allowlist", () => {
-    const c = loadConfig({ NODE_ENV: "production", CORS_ORIGINS: "https://a.com, https://b.com:8443" });
+    const c = loadConfig({ ...PROD, CORS_ORIGINS: "https://a.com, https://b.com:8443" });
     expect(c.corsOrigins).toEqual(["https://a.com", "https://b.com:8443"]);
+    expect(c.requireSession).toBe(true);
+    expect(c.sessionSecretGenerated).toBe(false);
+  });
+
+  test("production needs a long SESSION_SECRET and Turnstile (or an explicit opt-out)", () => {
+    expect(() => loadConfig({ ...PROD, SESSION_SECRET: undefined })).toThrow(/SESSION_SECRET: is required/);
+    expect(() => loadConfig({ ...PROD, SESSION_SECRET: "short" })).toThrow(/at least 32/);
+    expect(() => loadConfig({ ...PROD, TURNSTILE_SECRET: undefined })).toThrow(/TURNSTILE_SECRET/);
+    expect(() => loadConfig({ ...PROD, TURNSTILE_SITE_KEY: undefined })).toThrow(/TURNSTILE_SITE_KEY/);
+    const off = loadConfig({ ...PROD, TURNSTILE_SECRET: undefined, TURNSTILE_DISABLED: "true" });
+    expect(off.turnstileSecret).toBeUndefined();
+  });
+
+  test("outside production the session secret is generated and the gate stays on", () => {
+    const a = loadConfig({});
+    expect(a.sessionSecretGenerated).toBe(true);
+    expect(a.sessionSecret.length).toBeGreaterThanOrEqual(32);
+    expect(loadConfig({}).sessionSecret).not.toBe(a.sessionSecret);
+    expect(a.requireSession).toBe(true);
+    expect(a.trustCloudflare).toBe(false);
+    expect(a.matchCapPerDevicePerHour).toBe(200);
+    expect(a.matchCapPerIpPerHour).toBe(200);
   });
 
   test("rejects malformed origins and numbers", () => {
@@ -51,6 +81,10 @@ describe("loadConfig", () => {
         "NODE_ENV", "PORT", "CORS_ORIGINS", "REDIS_URL", "TRUST_PROXY", "MAX_CONNECTIONS_PER_IP",
         "MATCH_ACCEPT_TIMEOUT_MS", "STUN_URLS", "TURN_URLS", "TURN_SECRET", "TURN_USERNAME",
         "TURN_CREDENTIAL", "TURN_TTL_SECONDS", "LOG_LEVEL", "METRICS_TOKEN", "SHUTDOWN_GRACE_MS",
+        "SESSION_SECRET", "SESSION_SECRET_PREVIOUS", "TURNSTILE_SECRET", "TURNSTILE_SITE_KEY",
+        "TURNSTILE_DISABLED", "TRUST_CLOUDFLARE", "SESSION_RATE_PER_IP_PER_MIN",
+        "SESSION_RATE_PER_NETWORK_PER_MIN", "MATCH_CAP_PER_DEVICE_PER_HOUR", "MATCH_CAP_PER_IP_PER_HOUR",
+        "SENTRY_DSN", "SENTRY_DSN_FRONTEND", "POSTHOG_KEY", "POSTHOG_HOST",
       ].sort(),
     );
     expect(() => loadConfig(env)).not.toThrow();
