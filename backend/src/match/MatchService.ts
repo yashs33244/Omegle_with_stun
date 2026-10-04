@@ -11,6 +11,8 @@
  */
 import { randomUUID } from "node:crypto";
 import type { Config } from "../config";
+import type { EnforcementService, RestrictionSink } from "../enforcement/EnforcementService";
+import { parseEvidenceFrame, type EvidenceFrame } from "../enforcement/evidence";
 import type { FlagsReader } from "../flags/flags";
 import type { Logger } from "../logger";
 import type { Metrics } from "../metrics";
@@ -29,6 +31,7 @@ import type {
   PublicProfile,
   ReportAck,
   ReportPayload,
+  Restriction,
   RtcSignal,
   ServerToClientEvents,
   SimpleAck,
@@ -43,6 +46,8 @@ import { HELD, MAX_STEP, meetsPreferences, pairStep, relaxStep } from "./relax";
 
 /** How long a pair block record is remembered after it lapses, so repeated skips escalate. */
 const BLOCK_MEMORY_MS = 24 * 60 * 60_000;
+/** A permanent restriction is mirrored into the match store's ban with this horizon. */
+const PERMANENT_BAN_MS = 100 * 365 * 24 * 60 * 60_000;
 
 export interface Emitter {
   emit<E extends keyof ServerToClientEvents>(
@@ -72,6 +77,8 @@ export interface MatchServiceDeps {
   turn: TurnService;
   /** Risk score, early skips, low priority, nudge cooldowns. */
   safety: SafetySignals;
+  /** Reports, restrictions and appeals. Optional so a bare service can be built in tests. */
+  enforcement?: EnforcementService;
   /** Injectable clock for tests. */
   now?: () => number;
 }
@@ -97,8 +104,17 @@ export function publicProfile(profile: SessionProfile, photo: string | null): Pu
   return photo ? { ...rest, photo } : rest;
 }
 
-export class MatchService {
+/** The device the reporter can report: from the live room or the room that ended moments ago. */
+interface ReportTarget {
+  reportedDevice: string;
+  devices: [string, string];
+  activeSince: number | null;
+  endedAt: number | null;
+}
+
+export class MatchService implements RestrictionSink {
   private readonly store: MatchStore;
+  private readonly enforcement?: EnforcementService;
   private readonly config: Config;
   private readonly log: Logger;
   private readonly metrics: Metrics;
@@ -139,6 +155,8 @@ export class MatchService {
     this.turn = deps.turn;
     this.safety = deps.safety;
     this.now = deps.now ?? Date.now;
+    this.enforcement = deps.enforcement;
+    this.enforcement?.setSink(this);
   }
 
   /* ---------------------------------------------------------------- */
@@ -212,10 +230,15 @@ export class MatchService {
   async hello(socketId: string, payload: HelloPayload, reply: Reply<HelloAck>, ip?: string): Promise<void> {
     if (this.stopped) return reply({ ok: false, error: "internal", message: "server shutting down" });
     const { deviceId } = payload;
+    if (this.enforcement) {
+      const restriction = await this.enforcement.activeForDevice(deviceId);
+      if (restriction) return reply({ ok: false, error: "banned", restriction });
+    }
     if (await this.store.getBan(deviceId)) return reply({ ok: false, error: "banned" });
     if (ip) {
       await this.turn.rememberIp(deviceId, ip).catch((err: unknown) => this.log.warn({ err }, "remember ip failed"));
     }
+    await this.enforcement?.noteDeviceSeen(deviceId);
 
     await this.store.withLock(async () => {
       // The socket may have disconnected while we waited for the lock.
@@ -339,43 +362,127 @@ export class MatchService {
     });
   }
 
+  /**
+   * report:submit. Allowed while the room exists or within reportAfterEndMs after
+   * it ended, once per room per reporter, and rate limited per device (see
+   * EnforcementService.admitReport). A live call ends; the pair is blocked.
+   * The evidence and any automatic action are handled outside the match lock.
+   */
   async report(socketId: string, payload: ReportPayload, reply: Reply<ReportAck>): Promise<void> {
+    const session = await this.store.getSession(socketId);
+    if (!session) return reply({ ok: false, error: "bad_state", message: "send session:hello first" });
+    let frame: EvidenceFrame | null = null;
+    if (payload.evidence?.frame) {
+      frame = parseEvidenceFrame(payload.evidence.frame);
+      if (!frame) return reply({ ok: false, error: "invalid_payload", message: "evidence frame must be a JPEG" });
+    }
+    const target = await this.reportTarget(session, payload.roomId);
+    if (!target) return reply({ ok: false, error: "not_in_room" });
+    if (this.enforcement) {
+      const admitted = await this.enforcement.admitReport(session.deviceId, payload.roomId);
+      if (admitted === "rate_limited") return reply({ ok: false, error: "rate_limited" });
+      if (admitted === "duplicate") return reply({ ok: false, error: "bad_state", message: "already reported" });
+    }
+
     await this.store.withLock(async () => {
-      const session = await this.store.getSession(socketId);
-      if (!session) return reply({ ok: false, error: "bad_state", message: "send session:hello first" });
       const found = await this.memberRoomLocked(socketId, payload.roomId);
-      if (!found) return reply({ ok: false, error: "not_in_room" });
+      if (!found) {
+        await this.blockPairLocked(target, this.config.reportBlockMs, false);
+        return;
+      }
       const { room, index } = found;
-      const now = this.now();
-      const reportedSocket = room.members[1 - index]!;
-      const reportedDevice = room.devices[1 - index]!;
-
-      await this.store.addReport({
-        reporterDevice: session.deviceId,
-        reportedDevice,
-        roomId: room.id,
-        reason: payload.reason,
-        details: payload.details || undefined,
-        ts: now,
-      });
       await this.blockPairLocked(room, this.config.reportBlockMs, false);
-
-      const reporters = await this.store.countReporters(reportedDevice, now - this.config.reportWindowMs);
-      const banned = reporters >= this.config.reportsToBan;
-      if (banned) await this.store.setBan(reportedDevice, now + this.config.banMs);
-
-      reply({ ok: true, reportId: randomUUID() });
       // The reported side only learns that the partner moved on.
       await this.endRoomLocked(room, "reported", {
         [socketId]: "reported",
-        [reportedSocket]: "partner-skipped",
+        [room.members[1 - index]!]: "partner-skipped",
       });
-      if (banned) {
-        this.emitter.emit(reportedSocket, "server:error", { code: "banned" });
-        this.log.warn({ roomId: room.id, reporters }, "device banned after reports");
-      }
       await this.matchPassLocked();
     });
+
+    if (!this.enforcement) return reply({ ok: true, reportId: randomUUID() });
+    const { reportId } = await this.enforcement.submitReport({
+      roomId: payload.roomId,
+      reporterDevice: session.deviceId,
+      reportedDevice: target.reportedDevice,
+      reason: payload.reason,
+      details: payload.details,
+      frame,
+      chat: payload.evidence?.chat,
+      activeSince: target.activeSince,
+      endedAt: target.endedAt,
+    });
+    reply({ ok: true, reportId });
+  }
+
+  private async reportTarget(session: Session, roomId: string): Promise<ReportTarget | null> {
+    if (session.roomId === roomId) {
+      const room = await this.store.getRoom(roomId);
+      const index = room ? room.members.indexOf(session.socketId) : -1;
+      if (room && index >= 0) {
+        return {
+          reportedDevice: room.devices[1 - index]!,
+          devices: room.devices,
+          activeSince: room.state === "active" ? (room.activeSince ?? null) : null,
+          endedAt: null,
+        };
+      }
+    }
+    const last = await this.enforcement?.lastRoom(roomId);
+    if (!last) return null;
+    const index = last.devices.indexOf(session.deviceId);
+    if (index < 0 || this.now() - last.endedAt > this.config.reportAfterEndMs) return null;
+    return {
+      reportedDevice: last.devices[1 - index]!,
+      devices: last.devices,
+      activeSince: last.activeSince,
+      endedAt: last.endedAt,
+    };
+  }
+
+  /* ---------------------------------------------------------------- */
+  /* Restrictions (called by EnforcementService)                       */
+  /* ---------------------------------------------------------------- */
+
+  /**
+   * A pause or ban is mirrored into the match store's ban (match passes skip the
+   * device and it is never re-queued), any room of the device ends with
+   * "restricted" for it, and the device gets session:restricted. A warning is
+   * only announced.
+   */
+  async restrictionApplied(deviceId: string, restriction: Restriction): Promise<void> {
+    const blocking = restriction.kind !== "warning";
+    if (blocking) await this.store.setBan(deviceId, restriction.until ?? this.now() + PERMANENT_BAN_MS);
+    await this.store.withLock(async () => {
+      const socketId = await this.store.getDeviceSocket(deviceId);
+      const session = socketId ? await this.store.getSession(socketId) : null;
+      if (!socketId || !session) return;
+      if (blocking) {
+        if (session.roomId) {
+          const room = await this.store.getRoom(session.roomId);
+          if (room && room.members.includes(socketId)) {
+            const partner = room.members[0] === socketId ? room.members[1] : room.members[0];
+            await this.endRoomLocked(room, "restricted", { [socketId]: "restricted", [partner]: "partner-skipped" });
+          }
+        }
+        const fresh = await this.store.getSession(socketId);
+        if (fresh && fresh.state !== "idle") {
+          fresh.state = "idle";
+          fresh.roomId = undefined;
+          fresh.waitingSince = undefined;
+          await this.store.putSession(fresh);
+        }
+        await this.store.removeWaiting(socketId);
+      }
+      this.emitter.emit(socketId, "session:restricted", { restriction });
+      await this.matchPassLocked();
+    });
+  }
+
+  /** Re-mirrors the ban after a restriction was lifted early (appeal overturned, report dismissed). */
+  async restrictionLifted(deviceId: string, remaining: Restriction | null): Promise<void> {
+    const until = remaining && remaining.kind !== "warning" ? (remaining.until ?? this.now() + PERMANENT_BAN_MS) : 0;
+    await this.store.setBan(deviceId, until);
   }
 
   /** rtc:signal is relayed, unchanged, only to the other member of the sender's ACTIVE room. */
@@ -762,6 +869,7 @@ export class MatchService {
     reasons: Record<string, MatchEndReason | null>,
   ): Promise<void> {
     await this.store.deleteRoom(room.id);
+    await this.noteRoomEnded(room);
     this.metrics.matchEndTotal.inc({ reason: metricReason });
     this.log.info({ roomId: room.id, reason: metricReason }, "room ended");
     const sessions = await this.store.getSessions(room.members);
@@ -782,6 +890,21 @@ export class MatchService {
       } else {
         await this.enqueueLocked(s);
       }
+    }
+  }
+
+  /** Lets enforcement accept late reports and count completed calls. Never fails the caller. */
+  private async noteRoomEnded(room: Room): Promise<void> {
+    if (!this.enforcement) return;
+    try {
+      await this.enforcement.roomEnded({
+        roomId: room.id,
+        devices: room.devices,
+        activeSince: room.state === "active" ? (room.activeSince ?? null) : null,
+        endedAt: this.now(),
+      });
+    } catch (err) {
+      this.log.warn({ err, roomId: room.id }, "could not record the ended room");
     }
   }
 
@@ -813,7 +936,7 @@ export class MatchService {
    * Blocks the room's device pair. A skip escalates: skipBlockMs times the
    * pair's skip count. Other blocks last `durationMs`. A block never shortens.
    */
-  private async blockPairLocked(room: Room, durationMs: number, escalate: boolean): Promise<void> {
+  private async blockPairLocked(room: Pick<Room, "devices">, durationMs: number, escalate: boolean): Promise<void> {
     const [a, b] = room.devices;
     const now = this.now();
     const existing = await this.store.getBlock(a, b);

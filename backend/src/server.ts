@@ -5,8 +5,11 @@
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import type Redis from "ioredis";
 import type { Config } from "./config";
+import { createEnforcement, type EnforcementOptions, type EnforcementService } from "./enforcement";
 import { FlagsReader, MemoryFlagsStore, type FlagsStore } from "./flags/flags";
+import { adminApiRouter } from "./http/admin";
 import { createApp } from "./http/app";
+import { publicApiRouter } from "./http/public";
 import type { Logger } from "./logger";
 import { MatchService } from "./match/MatchService";
 import { createMetrics, type Metrics } from "./metrics";
@@ -39,6 +42,8 @@ export interface ServerDeps {
   fetch?: FetchFn;
   /** Active restriction lookup for POST /api/session (enforcement lane). No-op when unset. */
   restrictions?: RestrictionChecker;
+  /** Enforcement overrides (stores, Turnstile verifier, classifier) for tests and wiring. */
+  enforcement?: EnforcementOptions;
 }
 
 export interface ChizzyServer {
@@ -47,6 +52,8 @@ export interface ChizzyServer {
   service: MatchService;
   metrics: Metrics;
   flags: FlagsReader;
+  /** Reports, restrictions, appeals, takedowns. Also the session lane's restrictions dependency (activeForDevice). */
+  enforcement: EnforcementService;
   /** The deps this server was built with, for feature modules that need the shared Redis client. */
   deps: ServerDeps;
   /**
@@ -77,12 +84,27 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     restrictions: deps.restrictions,
   });
   for (const warning of sessionWarnings(config)) logger.warn(`SESSION GATE WARNING: ${warning}`);
+  const enforcement = createEnforcement(config, { logger, redis: deps.redis }, deps.enforcement);
   const app = createApp({
     store,
     registry: metrics.registry,
     logger,
     metricsToken: config.metricsToken,
     session: session.router,
+    routes: (a) => {
+      a.use(publicApiRouter({ enforcement, trustProxy: config.trustProxy, logger }));
+      a.use(
+        "/admin/api",
+        adminApiRouter({
+          enforcement,
+          flags,
+          logger,
+          adminToken: config.adminToken,
+          adminAllowedIps: config.adminAllowedIps,
+          trustProxy: config.trustProxy,
+        }),
+      );
+    },
   });
   const httpServer = createHttpServer(app);
   const io = createSocketServer(httpServer, config);
@@ -126,6 +148,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     flags,
     turn,
     safety,
+    enforcement,
     emitter: createEmitter(io),
     gate: session.gate,
   });
@@ -138,10 +161,13 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
   });
   const stopBroadcast = session.startBroadcast(io);
   // listen() waits for this, so no client connects before the first heartbeat.
-  const started = flags.start().then(() => {
-    spendPoller?.start();
-    return service.start();
-  });
+  const started = flags
+    .start()
+    .then(() => {
+      spendPoller?.start();
+      return service.start();
+    })
+    .then(() => enforcement.start());
   started.catch(() => {}); // surfaced by listen(); avoid an unhandled rejection meanwhile
 
   let closing: Promise<void> | undefined;
@@ -151,6 +177,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     service,
     metrics,
     flags,
+    enforcement,
     deps,
     async listen(port, host) {
       await started;
@@ -168,6 +195,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
         flags.stop();
         stopBroadcast();
         spendPoller?.stop();
+        await enforcement.stop();
         try {
           await service.shutdown();
         } catch (err) {

@@ -3,9 +3,13 @@
  * socket.io clients with small await helpers.
  */
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import Redis from "ioredis";
 import { io as ioClient, type Socket } from "socket.io-client";
 import { loadConfig, type Config } from "../src/config";
+import { RedisEnforcementStore } from "../src/enforcement/store";
 import { createLogger } from "../src/logger";
 import {
   PROTOCOL_VERSION,
@@ -42,6 +46,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     fullMatchPassIntervalMs: 40,
     coinIntervalMs: 150,
     friendAfterMs: 350,
+    evidenceDir: join(tmpdir(), `chizzy-test-evidence-${process.pid}`),
     ...overrides,
   };
 }
@@ -77,19 +82,26 @@ export interface TestServer {
 export async function startServer(
   overrides: Partial<Config> = {},
   store?: MatchStore,
-  deps: Pick<ServerDeps, "configureIo" | "fetch" | "restrictions" | "redis" | "flags"> = {},
+  deps: Pick<ServerDeps, "configureIo" | "fetch" | "restrictions" | "redis" | "flags" | "enforcement"> = {},
 ): Promise<TestServer> {
-  const config = testConfig(overrides);
-  const owned: { close(): Promise<void> }[] = [];
+  // Each server gets its own evidence directory, removed on close.
+  const evidenceDir = mkdtempSync(join(tmpdir(), "chizzy-evidence-"));
+  const config = testConfig({ evidenceDir, ...overrides });
+  const owned: { close(): Promise<void> }[] = [{ close: async () => rmSync(evidenceDir, { recursive: true, force: true }) }];
   if (!store && process.env.TEST_STORE === "redis" && process.env.REDIS_URL) {
     const redisUrl = process.env.REDIS_URL;
     const redisStore = await RedisStore.connect(redisUrl, { prefix: `test:${randomUUID()}:` });
     const adapter = await connectRedisAdapter(redisUrl, createLogger("silent"), `test:${randomUUID()}:socket.io`);
     // The shared feature-store client, as index.ts creates it in Redis mode.
-    const redis = new Redis(redisUrl);
+    const redis = new Redis(redisUrl, { maxRetriesPerRequest: 2 });
     owned.push(redisStore, adapter, { close: async () => void (await redis.quit()) });
     store = redisStore;
-    deps = { configureIo: adapter.install, redis, ...deps };
+    deps = {
+      configureIo: adapter.install,
+      redis,
+      ...deps,
+      enforcement: { store: new RedisEnforcementStore(redis, `test:${randomUUID()}:enf:`), ...deps.enforcement },
+    };
   }
   store ??= new MemoryStore();
   const server = createServer(config, { store, logger: createLogger("silent"), ...deps });

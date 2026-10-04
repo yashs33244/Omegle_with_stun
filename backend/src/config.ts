@@ -54,10 +54,25 @@ const envSchema = z
     POSTHOG_KEY: z.string().min(1).optional(),
     POSTHOG_HOST: z.string().url().optional(),
     ...MATCH_ENV,
+    ADMIN_TOKEN: z.string().min(24, "must be at least 24 characters").optional(),
+    ADMIN_ALLOWED_IPS: z.string().optional(),
+    EVIDENCE_DIR: z.string().default("./data/evidence"),
+    EVIDENCE_S3_BUCKET: z.string().min(3).optional(),
+    EVIDENCE_S3_REGION: z.string().min(1).optional(),
+    EVIDENCE_S3_KMS_KEY_ID: z.string().min(1).optional(),
+    PSEUDONYM_SALT: z.string().min(16).optional(),
+    TURNSTILE_SECRET_KEY: z.string().min(1).optional(),
   })
   .superRefine((env, ctx) => {
     refineMatchEnv(env, ctx);
     const origins = csv(env.CORS_ORIGINS);
+    if (env.NODE_ENV === "production" && !env.ADMIN_TOKEN) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ADMIN_TOKEN"],
+        message: "is required in production (the admin API stays closed without it)",
+      });
+    }
     if (env.NODE_ENV === "production") {
       if (origins.length === 0) {
         ctx.addIssue({
@@ -195,12 +210,24 @@ export interface Config extends MatchConfig {
   declineBlockMs: number;
   /** Pair block per skip; multiplied by the pair's skip count. */
   skipBlockMs: number;
-  /** Pair block after a report, and the window for counting reporters. */
+  /** Pair block after a report. */
   reportBlockMs: number;
-  reportWindowMs: number;
-  /** Distinct reporter devices within reportWindowMs that trigger a ban. */
-  reportsToBan: number;
-  banMs: number;
+  /** A report is accepted this long after its room ended. */
+  reportAfterEndMs: number;
+
+  /* Enforcement (src/enforcement). */
+  /** Bearer token for /admin/api. Unset: the admin API answers 503 (never open). */
+  adminToken?: string;
+  /** Exact client IPs allowed to use the admin API; empty allows any. */
+  adminAllowedIps: string[];
+  /** Local evidence directory, used when no S3 bucket is set. */
+  evidenceDir: string;
+  evidenceS3Bucket?: string;
+  evidenceS3Region?: string;
+  evidenceS3KmsKeyId?: string;
+  /** Salt for the pseudonymous device ids admins see. Defaults to one derived from ADMIN_TOKEN. */
+  pseudonymSalt?: string;
+  turnstileSecretKey?: string;
 }
 
 export class ConfigError extends Error {}
@@ -265,9 +292,15 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     declineBlockMs: 30_000,
     skipBlockMs: 5 * 60_000,
     reportBlockMs: 24 * 60 * 60_000,
-    reportWindowMs: 24 * 60 * 60_000,
-    reportsToBan: 3,
-    banMs: 24 * 60 * 60_000,
+    reportAfterEndMs: 60_000,
+    adminToken: e.ADMIN_TOKEN,
+    adminAllowedIps: csv(e.ADMIN_ALLOWED_IPS),
+    evidenceDir: e.EVIDENCE_DIR,
+    evidenceS3Bucket: e.EVIDENCE_S3_BUCKET,
+    evidenceS3Region: e.EVIDENCE_S3_REGION,
+    evidenceS3KmsKeyId: e.EVIDENCE_S3_KMS_KEY_ID,
+    pseudonymSalt: e.PSEUDONYM_SALT,
+    turnstileSecretKey: e.TURNSTILE_SECRET_KEY,
     ...matchConfigFromEnv(e),
   };
 }

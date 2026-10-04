@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { ConfigError, loadConfig } from "../../src/config";
 
+const ADMIN = "a".repeat(32);
+
 describe("loadConfig", () => {
   test("defaults outside production", () => {
     const c = loadConfig({});
@@ -30,6 +32,7 @@ describe("loadConfig", () => {
     SESSION_SECRET: "s".repeat(32),
     TURNSTILE_SECRET: "1x0000000000000000000000000000000AA",
     TURNSTILE_SITE_KEY: "1x00000000000000000000AA",
+    ADMIN_TOKEN: ADMIN,
   };
 
   test("production with an allowlist", () => {
@@ -59,6 +62,20 @@ describe("loadConfig", () => {
     expect(a.matchCapPerIpPerHour).toBe(200);
   });
 
+  test("production requires a long ADMIN_TOKEN", () => {
+    expect(() => loadConfig({ ...PROD, ADMIN_TOKEN: undefined })).toThrow(/ADMIN_TOKEN/);
+    expect(() => loadConfig({ ...PROD, ADMIN_TOKEN: "short" })).toThrow(/ADMIN_TOKEN: must be at least 24 characters/);
+    expect(loadConfig({}).adminToken).toBeUndefined();
+  });
+
+  test("enforcement settings", () => {
+    const c = loadConfig({ ADMIN_ALLOWED_IPS: "203.0.113.1, 2001:db8::1", EVIDENCE_S3_BUCKET: "chizzy-evidence" });
+    expect(c.adminAllowedIps).toEqual(["203.0.113.1", "2001:db8::1"]);
+    expect(c.evidenceDir).toBe("./data/evidence");
+    expect(c.evidenceS3Bucket).toBe("chizzy-evidence");
+    expect(c.reportAfterEndMs).toBe(60_000);
+  });
+
   test("rejects malformed origins and numbers", () => {
     expect(() => loadConfig({ CORS_ORIGINS: "a.com" })).toThrow(/invalid origin/);
     expect(() => loadConfig({ PORT: "abc" })).toThrow(/PORT/);
@@ -73,7 +90,7 @@ describe("loadConfig", () => {
     const text = await Bun.file(`${__dirname}/../../.env.example`).text();
     const env: Record<string, string> = {};
     for (const line of text.split("\n")) {
-      const m = /^([A-Z_]+)=(.*)$/.exec(line);
+      const m = /^([A-Z0-9_]+)=(.*)$/.exec(line);
       if (m) env[m[1]!] = m[2]!;
     }
     expect(Object.keys(env).sort()).toEqual(
@@ -87,6 +104,8 @@ describe("loadConfig", () => {
         "SENTRY_DSN", "SENTRY_DSN_FRONTEND", "POSTHOG_KEY", "POSTHOG_HOST",
         "TURN_PROVIDER", "CF_TURN_KEY_ID", "CF_TURN_API_TOKEN", "TURN_CACHE_SECONDS", "TURN_MAX_PER_DEVICE_HOUR",
         "TURN_MAX_PER_IP_HOUR", "CF_ACCOUNT_ID", "CF_ANALYTICS_TOKEN", "TURN_SPEND_DAILY_GB",
+        "ADMIN_TOKEN", "ADMIN_ALLOWED_IPS", "EVIDENCE_DIR", "EVIDENCE_S3_BUCKET", "EVIDENCE_S3_REGION",
+        "EVIDENCE_S3_KMS_KEY_ID", "PSEUDONYM_SALT", "TURNSTILE_SECRET_KEY",
       ].sort(),
     );
     expect(() => loadConfig(env)).not.toThrow();

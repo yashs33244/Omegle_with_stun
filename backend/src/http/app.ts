@@ -19,6 +19,8 @@ export interface AppDeps {
   readyTimeoutMs?: number;
   /** /api/session, /api/config and CORS for /api (session gate). */
   session?: Router;
+  /** Mounts feature routes (public API, admin API) before the 404 handler. */
+  routes?: (app: Express) => void;
 }
 
 /** Constant-time compare; hashing first also hides the token length. */
@@ -74,6 +76,7 @@ export function createApp(deps: AppDeps): Express {
   });
 
   if (deps.session) app.use(deps.session);
+  deps.routes?.(app);
 
   app.use((_req, res) => {
     res.status(404).json({ error: "not_found" });
