@@ -186,6 +186,22 @@ describe("useSignaling (socket wiring)", () => {
     expect(listener).toHaveBeenCalledWith(offer);
   });
 
+  it("report() targets the given room even after the call ended", async () => {
+    const { result } = renderHook(() => useSignaling(profile, preferences));
+    socket.fire("connect");
+    const ended = "00000000-0000-4000-8000-0000000000aa";
+    let ack: unknown;
+    await act(async () => {
+      const pending = result.current.report("nudity", "details", { chat: [] }, ended);
+      const sent = socket.emitted.find((e) => e.event === "report:submit");
+      sent?.ack?.({ ok: true, reportId: "r1" });
+      ack = await pending;
+    });
+    const sent = socket.emitted.find((e) => e.event === "report:submit");
+    expect(sent?.payload).toEqual({ roomId: ended, reason: "nudity", details: "details", evidence: { chat: [] } });
+    expect(ack).toEqual({ ok: true, reportId: "r1" });
+  });
+
   it("disconnects on unmount", () => {
     const { unmount } = renderHook(() => useSignaling(profile, preferences));
     unmount();
