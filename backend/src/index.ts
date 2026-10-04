@@ -5,6 +5,7 @@ import { ConfigError, loadConfig, type Config } from "./config";
 import { createLogger } from "./logger";
 import Redis from "ioredis";
 import { RedisFlagsStore } from "./flags/flags";
+import { closeSentry, initSentry } from "./observability/sentry";
 import { connectRedisAdapter, type RedisAdapterHandle } from "./realtime/redisAdapter";
 import { createServer } from "./server";
 import { MemoryStore } from "./store/MemoryStore";
@@ -26,6 +27,7 @@ function readConfig(): Config {
 async function main(): Promise<void> {
   const config = readConfig();
   const logger = createLogger(config.logLevel, config.instanceId);
+  if (await initSentry(config)) logger.info("sentry error reporting enabled");
 
   let store: MatchStore;
   let adapter: RedisAdapterHandle | undefined;
@@ -69,6 +71,7 @@ async function main(): Promise<void> {
       .then(() => store.close())
       .then(() => adapter?.close())
       .then(() => appRedis?.quit())
+      .then(() => closeSentry())
       .then(
         () => {
           logger.info("shutdown complete");
