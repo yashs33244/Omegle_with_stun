@@ -50,7 +50,9 @@ jobs:
         run: >-
           docker run --rm -v "$PWD:/mnt:ro" -w /mnt koalaman/shellcheck:v0.11.0
           deploy/deploy.sh deploy/cloudflare-ips.sh scripts/backup-redis.sh scripts/restore-redis.sh
-          scripts/check-lockfiles.sh scripts/sync-protocol.sh new-frontend/nginx-api-origin.envsh
+          scripts/check-lockfiles.sh scripts/sync-protocol.sh scripts/check-pins.sh
+          scripts/check-deploy-env.sh scripts/test-deploy.sh scripts/test-gateway-real-ip.sh
+          new-frontend/nginx-api-origin.envsh
 
   backend:
     name: Backend

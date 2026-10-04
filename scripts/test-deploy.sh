@@ -29,9 +29,9 @@ test_env_keys_cover_compose() {
   keys=" $(env_keys | tr '\n' ' ') "
   # Written by deploy.sh itself, or only used to build images (not on the host).
   local own=" BACKEND_IMAGE FRONTEND_IMAGE IMAGE_TAG GATEWAY_CONF_VERSION VITE_API_URL "
-  for key in $(grep -oE '(^|[^$])\$\{[A-Z_][A-Z0-9_]*' "$root/docker-compose.yml" | sed 's/.*{//' | sort -u); do
+  while IFS= read -r key; do
     case "$keys$own" in *" $key "*) ;; *) missing="$missing $key" ;; esac
-  done
+  done < <(grep -oE '(^|[^$])\$\{[A-Z_][A-Z0-9_]*' "$root/docker-compose.yml" | sed 's/.*{//' | sort -u)
   if [ -z "$missing" ]; then
     pass "every compose variable is in ENV_KEYS or written by deploy.sh"
   else
