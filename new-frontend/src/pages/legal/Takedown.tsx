@@ -226,7 +226,7 @@ export const TakedownForm: React.FC<{ api?: Api }> = ({ api = defaultApi }) => {
         </p>
       )}
 
-      <button type="submit" className="retro-button" disabled={sending || !config} data-testid="takedown-submit">
+      <button type="submit" className="retro-button" disabled={sending || !config || (siteKey !== null && !token)} data-testid="takedown-submit">
         {sending ? "Sending..." : "Send request"}
       </button>
     </form>
