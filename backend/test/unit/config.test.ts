@@ -39,6 +39,23 @@ describe("loadConfig", () => {
     expect(loadConfig({ PORT: "", REDIS_URL: "" }).port).toBe(3004);
   });
 
+  test(".env.example documents every variable and parses", async () => {
+    const text = await Bun.file(`${__dirname}/../../.env.example`).text();
+    const env: Record<string, string> = {};
+    for (const line of text.split("\n")) {
+      const m = /^([A-Z_]+)=(.*)$/.exec(line);
+      if (m) env[m[1]!] = m[2]!;
+    }
+    expect(Object.keys(env).sort()).toEqual(
+      [
+        "NODE_ENV", "PORT", "CORS_ORIGINS", "REDIS_URL", "TRUST_PROXY", "MAX_CONNECTIONS_PER_IP",
+        "MATCH_ACCEPT_TIMEOUT_MS", "STUN_URLS", "TURN_URLS", "TURN_SECRET", "TURN_USERNAME",
+        "TURN_CREDENTIAL", "TURN_TTL_SECONDS", "LOG_LEVEL", "METRICS_TOKEN", "SHUTDOWN_GRACE_MS",
+      ].sort(),
+    );
+    expect(() => loadConfig(env)).not.toThrow();
+  });
+
   test("TURN secret needs TURN_URLS; static credentials come in pairs", () => {
     expect(() => loadConfig({ TURN_SECRET: "x" })).toThrow(/TURN_URLS/);
     expect(() => loadConfig({ TURN_URLS: "turn:t:3478", TURN_USERNAME: "u" })).toThrow(/TURN_CREDENTIAL/);
