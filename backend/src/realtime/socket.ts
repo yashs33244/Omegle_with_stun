@@ -24,6 +24,7 @@ import {
   type ServerToClientEvents,
 } from "../protocol";
 import { SocketRateLimiter, type EventClass } from "../rateLimit";
+import { limitedParser } from "./limitedParser";
 
 export type AppServer = Server<ClientToServerEvents, ServerToClientEvents>;
 type AppSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
@@ -44,6 +45,7 @@ export function createSocketServer(httpServer: HttpServer, config: Config): AppS
   return new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
     cors: { origin: config.corsOrigins === "*" ? "*" : config.corsOrigins, methods: ["GET", "POST"] },
     maxHttpBufferSize: MAX_HTTP_BUFFER_SIZE,
+    parser: limitedParser(MAX_HTTP_BUFFER_SIZE),
     pingInterval: 20_000,
     pingTimeout: 20_000,
     connectTimeout: 10_000,
