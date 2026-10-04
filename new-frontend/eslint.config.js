@@ -28,7 +28,7 @@ export default tseslint.config(
   },
   {
     // Vendored shadcn/ui components are kept as generated upstream.
-    files: ["src/components/ui/**/*.{ts,tsx}", "src/hooks/use-toast.ts"],
+    files: ["src/components/ui/**/*.{ts,tsx}"],
     rules: {
       "@typescript-eslint/no-empty-object-type": "off",
       "react-refresh/only-export-components": "off",
