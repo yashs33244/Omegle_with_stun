@@ -16,6 +16,10 @@
 #   .deployed-tag  last tag that passed verification (the rollback target)
 #   .previous/     compose file and deploy/ that belong to that tag
 #
+# When .env has CLOUDFLARE_ONLY=true, every start refreshes the Cloudflare
+# ranges and makes the gateway refuse requests that did not come through
+# Cloudflare (deploy/cloudflare-ips.sh).
+#
 # Only dangling images are pruned. Volumes are never pruned (Redis data).
 
 set -Eeuo pipefail
@@ -24,7 +28,12 @@ set -Eeuo pipefail
 ENV_KEYS=(
   CORS_ORIGINS REDIS_PASSWORD BACKEND_REPLICAS BIND_ADDRESS
   STUN_URLS TURN_URLS TURN_SECRET TURN_USERNAME TURN_CREDENTIAL TURN_TTL_SECONDS
-  TURN_REALM TURN_EXTERNAL_IP METRICS_TOKEN LOG_LEVEL
+  METRICS_TOKEN LOG_LEVEL
+  SESSION_SECRET SESSION_SECRET_PREVIOUS TURNSTILE_SECRET TURNSTILE_SITE_KEY TURNSTILE_DISABLED
+  TRUST_CLOUDFLARE TURN_PROVIDER CF_TURN_KEY_ID CF_TURN_API_TOKEN CF_ACCOUNT_ID CF_ANALYTICS_TOKEN
+  SENTRY_DSN SENTRY_DSN_FRONTEND POSTHOG_KEY POSTHOG_HOST
+  ADMIN_TOKEN ADMIN_ALLOWED_IPS EVIDENCE_S3_BUCKET AWS_REGION
+  CLOUDFLARE_ONLY BACKUP_S3_URI
 )
 installed=0
 HEALTH_ATTEMPTS="${HEALTH_ATTEMPTS:-30}"
@@ -48,7 +57,6 @@ write_env() {
   {
     echo "# Written by deploy/deploy.sh from GitHub secrets. Edit the secrets, not this file."
     printf 'BACKEND_IMAGE=%s\nFRONTEND_IMAGE=%s\n' "$BACKEND_IMAGE" "$FRONTEND_IMAGE"
-    if [ "${RUN_COTURN:-}" = "true" ]; then echo "COMPOSE_PROFILES=turn"; fi
     for key in "${ENV_KEYS[@]}"; do
       val="${!key-}"
       # Single quotes keep compose from interpolating $ in values.
@@ -59,13 +67,28 @@ write_env() {
   log "wrote .env ($(grep -c '=' .env) entries, values not shown)"
 }
 
-# Records the image tag to run, plus a checksum of the gateway config: the
-# gateway bind-mounts that file, so a changed checksum (a compose label) makes
+# Value of KEY in .env (without the quotes write_env adds), or empty.
+env_value() {
+  sed -n "s/^$1=//p" .env | tail -n 1 | sed -e "s/^'//" -e "s/'\$//"
+}
+
+# Refreshes the Cloudflare ranges and writes the gateway rule for
+# CLOUDFLARE_ONLY from .env (true: refuse requests that did not come through
+# Cloudflare; anything else: no rule). The existing list is kept if the
+# download fails, so this never blocks a deploy or a rollback.
+refresh_cloudflare() {
+  CLOUDFLARE_ONLY="$(env_value CLOUDFLARE_ONLY)" sh deploy/cloudflare-ips.sh deploy/nginx ||
+    log "WARNING: cloudflare-ips.sh failed; the gateway keeps its current Cloudflare files"
+}
+
+# Records the image tag to run, plus a checksum of deploy/nginx/: the gateway
+# bind-mounts those files, so a changed checksum (a compose label) makes
 # compose recreate the container and nginx load the new config.
 set_release() {
   local tag=$1 tmp conf
   [ -f .env ] || die ".env is missing; run the deploy workflow once to create it"
-  conf=$(cksum <deploy/nginx/gateway.conf | cut -d ' ' -f 1)
+  refresh_cloudflare
+  conf=$(cat deploy/nginx/* | cksum | cut -d ' ' -f 1)
   tmp=$(mktemp "$PWD/.env.XXXXXX")
   chmod 600 "$tmp"
   grep -v -e '^IMAGE_TAG=' -e '^GATEWAY_CONF_VERSION=' .env >"$tmp" || true
@@ -85,6 +108,8 @@ install_incoming() {
   cp -p .incoming/docker-compose.yml docker-compose.yml
   rm -rf deploy
   cp -Rp .incoming/deploy deploy
+  # Host scripts (scripts/backup-redis.sh for cron). Not part of the rollback.
+  if [ -d .incoming/scripts ]; then rm -rf scripts && cp -Rp .incoming/scripts scripts; fi
   rm -rf .incoming
   installed=1
   log "installed new docker-compose.yml and deploy/"
