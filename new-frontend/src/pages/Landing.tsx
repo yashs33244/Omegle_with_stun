@@ -1,710 +1,170 @@
-import React, { useState, useRef, useEffect, useMemo } from "react";
-import { useMediaStream } from "../hooks/useMediaStream";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, Camera, Languages, Loader, User } from "lucide-react";
+import { useMediaStream, type MediaAccessError } from "../hooks/useMediaStream";
 import { Room } from "./Room";
-import { Camera, Loader, User, X, Languages, Globe } from "lucide-react";
 import { Button } from "@/components/retroui/Button";
 import { Input } from "@/components/retroui/Input";
 import { Select, SelectItem } from "@/components/retroui/Select";
+import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
+import { countries, getCountryByCode, getLanguageByCode, languages } from "../lib/data";
+import { LIMITS, TOPICS, type Gender, type Preferences, type Topic } from "../lib/protocol";
+import { PhotoCaptureError, captureVideoFrame } from "../lib/photo";
 import {
-  getCountryByCode,
-  getLanguageByCode,
-  languages,
-  countries,
-} from "../lib/data";
-import { UserProfile } from "../types";
-import {
-  LIMITS,
-  TOPICS,
-  type Preferences,
-  type Profile,
-  type Topic,
-} from "../lib/protocol";
+  GENDER_CHOICES,
+  TOPIC_LABELS,
+  hasErrors,
+  toProfile,
+  validateProfileForm,
+  type ProfileForm,
+} from "../lib/profileForm";
 
-const isTopic = (id: string): id is Topic => (TOPICS as readonly string[]).includes(id);
+const isGender = (v: string): v is Gender => GENDER_CHOICES.some((g) => g.value === v);
 
-/** The server only accepts small inline images; anything else is left out of the profile. */
-const PHOTO_DATA_URL = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/]+={0,2}$/;
-const usablePhoto = (photo?: string) =>
-  photo && photo.length <= LIMITS.photoMaxChars && PHOTO_DATA_URL.test(photo) ? photo : undefined;
-
-// Topics list
-const topics = [
-  { id: "general", name: "General Chat", emoji: "💬" },
-  { id: "gaming", name: "Gaming", emoji: "🎮" },
-  { id: "music", name: "Music", emoji: "🎵" },
-  { id: "movies", name: "Movies", emoji: "🎬" },
-  { id: "sports", name: "Sports", emoji: "⚽" },
-  { id: "technology", name: "Technology", emoji: "💻" },
-  { id: "art", name: "Art & Design", emoji: "🎨" },
-  { id: "travel", name: "Travel", emoji: "✈️" },
-  { id: "food", name: "Food", emoji: "🍕" },
-  { id: "books", name: "Books", emoji: "📚" },
-];
-
-// Enhanced face detection hook
-const useSimpleFaceDetection = (
-  videoRef: React.RefObject<HTMLVideoElement>,
-  stream: MediaStream | null
-) => {
-  const [faceDetected, setFaceDetected] = useState<boolean>(false);
-
+/**
+ * Callback ref that binds a MediaStream to whichever <video> is mounted right
+ * now. A remounted element (back from a chat, Retake Photo) is rebound too.
+ */
+function useStreamVideo(stream: MediaStream | null) {
+  const [video, setVideo] = useState<HTMLVideoElement | null>(null);
   useEffect(() => {
-    const interval = setInterval(() => {
-      if (videoRef.current && stream) {
-        const video = videoRef.current;
-        const hasVideo =
-          video.videoWidth > 0 &&
-          video.videoHeight > 0 &&
-          !video.paused &&
-          !video.ended &&
-          stream.active;
-        setFaceDetected(hasVideo);
-      } else {
-        setFaceDetected(false);
-      }
-    }, 1000); // Check every second
+    if (!video) return;
+    if (video.srcObject !== stream) video.srcObject = stream;
+    if (stream) {
+      video.play().catch(() => {
+        // Muted preview; a rejected play only means the element was replaced again.
+      });
+    }
+  }, [video, stream]);
+  return [setVideo, video] as const;
+}
 
-    return () => clearInterval(interval);
-  }, [videoRef, stream]);
+/** Keeps the dialog open when Escape is meant for an open dropdown inside it. */
+function keepOpenWhileDropdownOpen(e: KeyboardEvent) {
+  const target = e.target;
+  if (target instanceof Element && target.closest('[aria-expanded="true"], [role="listbox"]')) {
+    e.preventDefault();
+  }
+}
 
-  return { faceDetected };
-};
-
-// Simple Modal Component
-const Modal = ({
-  isOpen,
-  onClose,
-  children,
-}: {
-  isOpen: boolean;
-  onClose: () => void;
-  children: React.ReactNode;
-}) => {
-  if (!isOpen) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div
-        className="absolute inset-0 bg-black bg-opacity-80"
-        onClick={onClose}
-      />
-      <div className="relative bg-white rounded-lg p-6 max-w-md w-full mx-4 max-h-[90vh] overflow-y-auto">
-        <button
-          onClick={onClose}
-          className="absolute top-4 right-4 text-gray-500 hover:text-gray-700"
-        >
-          <X className="w-5 h-5" />
-        </button>
-        {children}
-      </div>
-    </div>
-  );
-};
+const CameraProblem: React.FC<{ error: MediaAccessError; onRetry: () => void; tone: "dark" | "light" }> = ({
+  error,
+  onRetry,
+  tone,
+}) => (
+  <div role="alert" className="text-center space-y-3 px-4" data-testid="camera-error">
+    <AlertTriangle className={`w-12 h-12 mx-auto ${tone === "dark" ? "text-yellow-400" : "text-red-500"}`} />
+    <p className={`text-xl font-bold ${tone === "dark" ? "text-white" : "text-black"}`}>{error.title}</p>
+    <p className={`text-sm ${tone === "dark" ? "text-gray-300" : "text-gray-600"}`}>{error.message}</p>
+    <Button onClick={onRetry} className="mx-auto bg-yellow-500 text-black hover:bg-yellow-400">
+      Try again
+    </Button>
+  </div>
+);
 
 export const Landing = () => {
-  const [step, setStep] = useState<"home" | "setup" | "chat">("home");
-  const [showSetupModal, setShowSetupModal] = useState(false);
+  const [step, setStep] = useState<"home" | "chat">("home");
+  const [setupOpen, setSetupOpen] = useState(false);
   const [setupStep, setSetupStep] = useState<"capture" | "details">("capture");
-  const [user, setUser] = useState<UserProfile>({
+  const [form, setForm] = useState<ProfileForm>({
     name: "",
-    profilePhoto: undefined,
-    language: "en",
     country: "IN",
-    coins: 100,
+    language: "en",
+    gender: "unspecified",
+    topics: ["general"],
   });
-  const [selectedTopics, setSelectedTopics] = useState<string[]>(["general"]);
+  const [nameTouched, setNameTouched] = useState(false);
   const [preferences, setPreferences] = useState<Preferences>({
     genderFilter: "all",
     languageFilter: "any",
   });
-  const [isCapturing, setIsCapturing] = useState<boolean>(false);
+  const [captureError, setCaptureError] = useState<string | null>(null);
+  const [previewReady, setPreviewReady] = useState(false);
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const captureButtonRef = useRef<HTMLButtonElement>(null);
 
   const {
-    videoRef,
+    stream,
     hasPermission,
     isLoading,
     error,
     getCam,
-    restartStream,
-    stream,
+    stopStream,
     micEnabled,
     setMicEnabled,
     setCameraEnabled,
   } = useMediaStream();
 
-  const profile = useMemo<Profile>(() => {
-    const photo = usablePhoto(user.profilePhoto);
-    return {
-      name: user.name.trim().slice(0, LIMITS.nameMax),
-      country: user.country,
-      language: user.language,
-      // The gender field arrives with the profile form update; until then it is not shared.
-      gender: "unspecified",
-      topics: selectedTopics.filter(isTopic).slice(0, LIMITS.topicsMax),
-      ...(photo ? { photo } : {}),
-    };
-  }, [user, selectedTopics]);
+  const [homeVideoRef] = useStreamVideo(stream);
+  const [modalVideoRef, modalVideo] = useStreamVideo(stream);
 
-  const { faceDetected } = useSimpleFaceDetection(videoRef, stream);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const modalVideoRef = useRef<HTMLVideoElement>(null);
-
-  // Sync modal video with main video stream
+  // A new preview element or stream has no frame until it fires loadeddata.
   useEffect(() => {
-    if (modalVideoRef.current && stream && showSetupModal) {
-      modalVideoRef.current.srcObject = stream;
+    setPreviewReady(!!modalVideo && !!stream && modalVideo.readyState >= 2);
+  }, [modalVideo, stream]);
 
-      // Set up event listeners for better video loading
-      const video = modalVideoRef.current;
-
-      const handleLoadedMetadata = () => {
-        console.log("Modal video metadata loaded:", {
-          videoWidth: video.videoWidth,
-          videoHeight: video.videoHeight,
-          readyState: video.readyState,
-        });
-      };
-
-      const handleCanPlay = () => {
-        console.log("Modal video can play");
-        video.play().catch((err) => {
-          console.log("Modal video play failed:", err);
-        });
-      };
-
-      video.addEventListener("loadedmetadata", handleLoadedMetadata);
-      video.addEventListener("canplay", handleCanPlay);
-
-      // Force load if needed
-      if (video.readyState >= 1) {
-        handleLoadedMetadata();
-      }
-      if (video.readyState >= 3) {
-        handleCanPlay();
-      }
-
-      return () => {
-        video.removeEventListener("loadedmetadata", handleLoadedMetadata);
-        video.removeEventListener("canplay", handleCanPlay);
-      };
-    }
-  }, [stream, showSetupModal]);
-
-  // Force camera re-initialization when modal opens
+  // Put focus where the current setup step starts (Radix keeps it inside the dialog).
   useEffect(() => {
-    if (showSetupModal && !stream) {
-      getCam();
-    }
-  }, [showSetupModal]);
+    if (!setupOpen) return;
+    const target = setupStep === "details" ? nameInputRef.current : captureButtonRef.current;
+    target?.focus();
+  }, [setupOpen, setupStep]);
 
-  // Ensure modal video gets the stream when it becomes available
-  useEffect(() => {
-    if (
-      modalVideoRef.current &&
-      stream &&
-      showSetupModal &&
-      !modalVideoRef.current.srcObject
-    ) {
-      console.log("Setting up modal video stream");
-      modalVideoRef.current.srcObject = stream;
-    }
-  }, [stream, showSetupModal]);
+  const errors = validateProfileForm(form);
+  const profile = useMemo(() => toProfile(form), [form]);
 
-  // Restart camera when returning to home page (step === "home")
-  useEffect(() => {
-    if (step === "home" && !stream && !isLoading && !error) {
-      console.log("Restarting camera stream on homepage return");
-      restartStream();
-    }
-  }, [step, stream, isLoading, error, restartStream]);
+  const retryCamera = useCallback(() => {
+    void getCam();
+  }, [getCam]);
 
-  // Coming back from the Room mounts a fresh home <video>; reattach the live stream.
-  useEffect(() => {
-    const video = videoRef.current;
-    if (step === "home" && hasPermission && video && stream && video.srcObject !== stream) {
-      video.srcObject = stream;
-      video.play().catch(() => {
-        // Muted preview; a rejected play here only means the element was replaced again.
-      });
-    }
-  }, [step, stream, hasPermission, videoRef]);
+  const openSetup = () => {
+    setSetupStep(form.photo ? "details" : "capture");
+    setCaptureError(null);
+    setSetupOpen(true);
+  };
 
   const capturePhoto = () => {
-    const videoElement = modalVideoRef.current;
-
-    if (videoElement && canvasRef.current && stream) {
-      setIsCapturing(true);
-
-      const attemptCapture = () => {
-        const canvas = canvasRef.current;
-        const video = videoElement;
-
-        if (!canvas || !video) {
-          setIsCapturing(false);
-          return;
-        }
-
-        // Use default dimensions if video dimensions aren't available yet
-        const width = video.videoWidth || 640;
-        const height = video.videoHeight || 480;
-
-        console.log("Attempting capture with dimensions:", {
-          width,
-          height,
-          readyState: video.readyState,
-        });
-
-        // Set canvas dimensions
-        canvas.width = width;
-        canvas.height = height;
-
-        const ctx = canvas.getContext("2d");
-        if (ctx) {
-          try {
-            // Clear canvas first
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-            // Save the context to flip horizontally (mirror effect)
-            ctx.save();
-            ctx.scale(-1, 1);
-            ctx.translate(-canvas.width, 0);
-
-            // Draw the video frame to canvas (mirrored)
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-            // Restore the context
-            ctx.restore();
-
-            // Convert to data URL with high quality
-            const photoDataUrl = canvas.toDataURL("image/jpeg", 0.9);
-
-            // Verify the photo was captured (check if it's not just black)
-            if (photoDataUrl && photoDataUrl.length > 5000) {
-              setUser((prev) => ({ ...prev, profilePhoto: photoDataUrl }));
-              setSetupStep("details");
-              console.log(
-                "Photo captured successfully!",
-                photoDataUrl.length,
-                "bytes"
-              );
-            } else {
-              console.error(
-                "Photo capture failed - image too small or black",
-                photoDataUrl.length
-              );
-            }
-          } catch (error) {
-            console.error("Error during photo capture:", error);
-          }
-        }
-
-        setIsCapturing(false);
-      };
-
-      // Try immediately first
-      attemptCapture();
-    } else {
-      console.log("Cannot capture photo:", {
-        videoElement: !!videoElement,
-        canvas: !!canvasRef.current,
-        stream: !!stream,
-      });
+    if (!modalVideo) return;
+    try {
+      const photo = captureVideoFrame(modalVideo);
+      setForm((prev) => ({ ...prev, photo }));
+      setCaptureError(null);
+      setSetupStep("details");
+    } catch (err) {
+      setCaptureError(
+        err instanceof PhotoCaptureError ? err.message : "Could not take the photo. Please try again.",
+      );
     }
   };
 
-  const handleStartClick = () => {
-    setShowSetupModal(true);
+  const retakePhoto = () => {
+    setForm((prev) => ({ ...prev, photo: undefined }));
+    setCaptureError(null);
+    setSetupStep("capture");
   };
 
-  const handleStartChatting = () => {
-    if (user.name.trim() && selectedTopics.length > 0) {
-      setShowSetupModal(false);
-      setStep("chat");
+  const beginChat = () => {
+    if (hasErrors(errors) || !hasPermission) {
+      setNameTouched(true);
+      return;
     }
+    setSetupOpen(false);
+    setStep("chat");
   };
 
-  const toggleTopic = (topicId: string) => {
-    setSelectedTopics((prev) =>
-      prev.includes(topicId)
-        ? prev.filter((id) => id !== topicId)
-        : [...prev, topicId]
-    );
+  // Release the camera with the call, then start a fresh one for the home screen.
+  const leaveRoom = useCallback(() => {
+    stopStream();
+    setStep("home");
+    void getCam();
+  }, [stopStream, getCam]);
+
+  const toggleTopic = (topic: Topic) => {
+    setForm((prev) => ({
+      ...prev,
+      topics: prev.topics.includes(topic) ? prev.topics.filter((t) => t !== topic) : [...prev.topics, topic],
+    }));
   };
 
-  const countryData = getCountryByCode(user.country);
-  const languageData = getLanguageByCode(user.language);
-
-  // Show error if there's one
-  if (error) {
-    return (
-      <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white">
-        <div className="text-center">
-          <h1 className="text-2xl font-bold mb-4">Camera Error</h1>
-          <p className="mb-4">{error}</p>
-          <Button onClick={getCam} className="bg-yellow-500 text-black">
-            Try Again
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  // Home page view with full-screen design
-  if (step === "home") {
-    return (
-      <div className="relative min-h-screen overflow-hidden">
-        {/* Full-screen video background */}
-        <div className="absolute inset-0 z-0">
-          {hasPermission ? (
-            <video
-              ref={videoRef}
-              autoPlay
-              playsInline
-              muted
-              className="w-full h-full object-cover"
-              style={{ transform: "scaleX(-1)" }} // Mirror effect
-            />
-          ) : (
-            <div className="w-full h-full bg-gray-900 flex items-center justify-center">
-              {isLoading ? (
-                <div className="text-center text-white space-y-4">
-                  <Loader className="w-12 h-12 animate-spin mx-auto" />
-                  <p>Accessing camera...</p>
-                </div>
-              ) : (
-                <div className="text-center text-white space-y-4">
-                  <Camera className="w-16 h-16 mx-auto text-gray-400" />
-                  <p className="text-xl">Camera access required</p>
-                  <Button
-                    onClick={getCam}
-                    className="bg-yellow-500 text-black hover:bg-yellow-400"
-                  >
-                    Enable Camera
-                  </Button>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Overlay content */}
-        <div className="relative z-10 min-h-screen bg-black bg-opacity-40 flex">
-          {/* Left sidebar */}
-          <div className="w-80 bg-black bg-opacity-60 backdrop-blur-sm p-6 flex flex-col justify-between text-white">
-            <div className="space-y-6">
-              {/* Logo */}
-              <div className="text-center">
-                <h1 className="text-3xl font-bold text-yellow-400">Chizzy</h1>
-              </div>
-
-              {/* User Profile Section */}
-              <div className="space-y-4">
-                <div className="flex items-center gap-3">
-                  <button
-                    onClick={() => setShowSetupModal(true)}
-                    className="w-12 h-12 rounded-full bg-yellow-500 flex items-center justify-center overflow-hidden hover:bg-yellow-400 transition-colors cursor-pointer"
-                  >
-                    {user.profilePhoto ? (
-                      <img
-                        src={user.profilePhoto}
-                        alt="Profile"
-                        className="w-full h-full object-cover"
-                        style={{ transform: "scaleX(-1)" }}
-                      />
-                    ) : (
-                      <User className="w-6 h-6 text-black" />
-                    )}
-                  </button>
-                  <div>
-                    <p className="font-medium">{user.name || "Guest User"}</p>
-                    <div className="flex items-center gap-2 text-sm text-gray-300">
-                      <span>{countryData?.flag}</span>
-                      <span>{countryData?.name}</span>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Language */}
-                <div className="flex items-center gap-2 text-sm">
-                  <Languages className="w-4 h-4" />
-                  <span>I speak: {languageData?.name}</span>
-                </div>
-
-                {/* Topics */}
-                <div className="space-y-2">
-                  <h3 className="font-medium text-sm">My topics:</h3>
-                  <div className="flex flex-wrap gap-2">
-                    {selectedTopics.slice(0, 3).map((topicId) => {
-                      const topic = topics.find((t) => t.id === topicId);
-                      return topic ? (
-                        <div
-                          key={topic.id}
-                          className="px-2 py-1 bg-white bg-opacity-20 rounded-full text-xs flex items-center gap-1"
-                        >
-                          <span>{topic.emoji}</span>
-                          <span>{topic.name}</span>
-                        </div>
-                      ) : null;
-                    })}
-                  </div>
-                  <button
-                    onClick={() => setShowSetupModal(true)}
-                    className="text-yellow-400 text-xs hover:underline"
-                  >
-                    Edit profile
-                  </button>
-                </div>
-
-                {/* Face Detection Status */}
-                <div className="flex items-center gap-2 text-sm">
-                  <div
-                    className={`w-2 h-2 rounded-full ${
-                      faceDetected ? "bg-green-400" : "bg-red-400"
-                    }`}
-                  />
-                  <span>
-                    {faceDetected ? "Camera ready" : "Initializing camera..."}
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Settings */}
-            <div className="space-y-3">
-              <div className="space-y-2">
-                <label className="text-xs text-gray-300">Language</label>
-                <Select
-                  value={user.language}
-                  onValueChange={(lang) =>
-                    setUser((prev) => ({ ...prev, language: lang }))
-                  }
-                >
-                  {languages.map((lang) => (
-                    <SelectItem key={lang.code} value={lang.code}>
-                      {lang.name}
-                    </SelectItem>
-                  ))}
-                </Select>
-              </div>
-
-              <div className="space-y-2">
-                <label className="text-xs text-gray-300">Country</label>
-                <Select
-                  value={user.country}
-                  onValueChange={(country) =>
-                    setUser((prev) => ({ ...prev, country }))
-                  }
-                >
-                  {countries.map((country) => (
-                    <SelectItem key={country.code} value={country.code}>
-                      {country.flag} {country.name}
-                    </SelectItem>
-                  ))}
-                </Select>
-              </div>
-            </div>
-          </div>
-
-          {/* Right side with start button */}
-          <div className="flex-1 flex items-end justify-center pb-20">
-            <div className="text-center space-y-4">
-              <Button
-                onClick={handleStartClick}
-                disabled={!hasPermission}
-                size="lg"
-                className="px-16 py-4 text-xl font-bold bg-yellow-500 text-black hover:bg-yellow-400 disabled:opacity-50 disabled:cursor-not-allowed border-2 border-black shadow-lg"
-              >
-                Start
-              </Button>
-
-              {!hasPermission && (
-                <p className="text-white text-sm">
-                  Please allow camera access to continue
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* Hidden canvas for photo capture */}
-        <canvas ref={canvasRef} className="hidden" />
-
-        {/* Setup Modal */}
-        <Modal isOpen={showSetupModal} onClose={() => setShowSetupModal(false)}>
-          <div className="space-y-6">
-            <div className="text-center">
-              <h2 className="text-xl font-bold text-black">
-                {setupStep === "capture"
-                  ? "Capture Your Photo"
-                  : "Complete Profile"}
-              </h2>
-              <p className="text-gray-600 mt-2">
-                {setupStep === "capture"
-                  ? "Take a real-time photo for your profile"
-                  : "Enter your details and select topics"}
-              </p>
-            </div>
-
-            {setupStep === "capture" ? (
-              <div className="space-y-6">
-                <div className="relative">
-                  <video
-                    ref={modalVideoRef}
-                    autoPlay
-                    playsInline
-                    muted
-                    className="w-full aspect-video rounded-lg object-cover bg-gray-900"
-                    style={{ transform: "scaleX(-1)" }} // Mirror effect
-                    onLoadedMetadata={() => {
-                      console.log("Modal video metadata loaded", {
-                        width: modalVideoRef.current?.videoWidth,
-                        height: modalVideoRef.current?.videoHeight,
-                        readyState: modalVideoRef.current?.readyState,
-                      });
-                    }}
-                    onCanPlay={() => {
-                      console.log("Modal video can play");
-                    }}
-                  />
-                  <div className="absolute inset-0 border-2 border-yellow-500 rounded-lg pointer-events-none" />
-
-                  {/* Video status indicator */}
-                  <div className="absolute top-2 right-2 bg-black bg-opacity-70 text-white px-2 py-1 rounded text-xs">
-                    {hasPermission && stream ? (
-                      <span className="text-green-400">● Ready</span>
-                    ) : (
-                      <span className="text-red-400">● Loading...</span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="text-center space-y-4">
-                  <p className="text-sm text-gray-600">
-                    Position your face in the frame and click capture
-                  </p>
-                  <Button
-                    onClick={capturePhoto}
-                    disabled={!hasPermission || isCapturing || !stream}
-                    className="w-full bg-yellow-500 text-black hover:bg-yellow-400 disabled:opacity-50"
-                  >
-                    {isCapturing ? "Capturing..." : "Capture Photo"}
-                  </Button>
-
-                  {/* Debug info */}
-                  <div className="text-xs text-gray-500 space-y-1">
-                    <p>Stream: {stream ? "✅" : "❌"}</p>
-                    <p>Permission: {hasPermission ? "✅" : "❌"}</p>
-                    <p>
-                      Video Element:{" "}
-                      {modalVideoRef.current?.srcObject ? "✅" : "❌"}
-                    </p>
-                    <p>
-                      Video Dimensions:{" "}
-                      {modalVideoRef.current?.videoWidth || "auto"} x{" "}
-                      {modalVideoRef.current?.videoHeight || "auto"}
-                    </p>
-                  </div>
-
-                  {(!stream || !hasPermission) && (
-                    <div className="text-center">
-                      <p className="text-xs text-red-500 mb-2">
-                        Camera not ready. Let's try again.
-                      </p>
-                      <Button
-                        onClick={getCam}
-                        size="sm"
-                        className="bg-blue-500 text-white hover:bg-blue-400"
-                      >
-                        Retry Camera
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                {/* Show captured photo */}
-                {user.profilePhoto && (
-                  <div className="flex flex-col items-center space-y-3">
-                    <img
-                      src={user.profilePhoto}
-                      alt="Profile"
-                      className="w-20 h-20 rounded-full object-cover border-2 border-yellow-500"
-                      style={{ transform: "scaleX(-1)" }} // Mirror the captured photo too
-                    />
-                    <Button
-                      onClick={() => {
-                        setUser((prev) => ({
-                          ...prev,
-                          profilePhoto: undefined,
-                        }));
-                        setSetupStep("capture");
-                      }}
-                      variant="outline"
-                      size="sm"
-                      className="text-xs border-gray-400 text-gray-600 hover:bg-gray-50"
-                    >
-                      Retake Photo
-                    </Button>
-                  </div>
-                )}
-
-                {/* Name input */}
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-black">
-                    Your Name
-                  </label>
-                  <Input
-                    type="text"
-                    placeholder="Enter your name"
-                    value={user.name}
-                    maxLength={LIMITS.nameMax}
-                    onChange={(e) =>
-                      setUser((prev) => ({ ...prev, name: e.target.value }))
-                    }
-                    className="border-gray-300 text-black"
-                  />
-                </div>
-
-                {/* Topic selection */}
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-black">
-                    Select Topics (Choose at least one)
-                  </label>
-                  <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
-                    {topics.map((topic) => (
-                      <button
-                        key={topic.id}
-                        onClick={() => toggleTopic(topic.id)}
-                        className={`p-2 text-left text-sm border-2 rounded-lg transition-all text-black ${
-                          selectedTopics.includes(topic.id)
-                            ? "border-yellow-500 bg-yellow-50"
-                            : "border-gray-300 hover:border-gray-400"
-                        }`}
-                      >
-                        <span className="mr-2">{topic.emoji}</span>
-                        {topic.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <Button
-                  onClick={handleStartChatting}
-                  disabled={!user.name.trim() || selectedTopics.length === 0}
-                  className="w-full bg-yellow-500 text-black hover:bg-yellow-400"
-                >
-                  Start Chatting
-                </Button>
-              </div>
-            )}
-          </div>
-        </Modal>
-      </div>
-    );
-  }
-
-  // Chat view
   if (step === "chat") {
     return (
       <Room
@@ -715,10 +175,377 @@ export const Landing = () => {
         micEnabled={micEnabled}
         onMicEnabledChange={setMicEnabled}
         onCameraEnabledChange={setCameraEnabled}
-        onBackToHome={() => setStep("home")}
+        onBackToHome={leaveRoom}
       />
     );
   }
 
-  return null;
+  const countryData = getCountryByCode(form.country);
+  const languageData = getLanguageByCode(form.language);
+  const showNameError = nameTouched && errors.name;
+
+  return (
+    <div className="relative min-h-screen overflow-hidden">
+      {/* Full-screen camera background */}
+      <div className="absolute inset-0 z-0 bg-gray-900">
+        {stream && (
+          <video
+            ref={homeVideoRef}
+            autoPlay
+            playsInline
+            muted
+            aria-hidden="true"
+            className="w-full h-full object-cover"
+            style={{ transform: "scaleX(-1)" }}
+          />
+        )}
+      </div>
+
+      {/* Overlay content */}
+      <div className="relative z-10 min-h-screen bg-black bg-opacity-40 flex flex-col md:flex-row">
+        {/* Left sidebar */}
+        <div className="w-full md:w-80 bg-black bg-opacity-60 backdrop-blur-sm p-6 flex flex-col justify-between gap-6 text-white">
+          <div className="space-y-6">
+            <div className="text-center">
+              <h1 className="text-3xl font-bold text-yellow-400">Chizzy</h1>
+            </div>
+
+            {/* Profile summary */}
+            <div className="space-y-4">
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={openSetup}
+                  aria-label="Edit profile photo and details"
+                  className="w-12 h-12 shrink-0 rounded-full bg-yellow-500 flex items-center justify-center overflow-hidden hover:bg-yellow-400 transition-colors cursor-pointer"
+                >
+                  {form.photo ? (
+                    <img src={form.photo} alt="" className="w-full h-full object-cover" />
+                  ) : (
+                    <User className="w-6 h-6 text-black" aria-hidden="true" />
+                  )}
+                </button>
+                <div className="min-w-0">
+                  <p className="font-medium truncate">{form.name.trim() || "Guest User"}</p>
+                  <div className="flex items-center gap-2 text-sm text-gray-300">
+                    <span aria-hidden="true">{countryData?.flag}</span>
+                    <span>{countryData?.name}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2 text-sm">
+                <Languages className="w-4 h-4" aria-hidden="true" />
+                <span>I speak: {languageData?.name}</span>
+              </div>
+
+              <div className="space-y-2">
+                <h2 className="font-medium text-sm">My topics:</h2>
+                <div className="flex flex-wrap gap-2">
+                  {form.topics.slice(0, 3).map((topic) => (
+                    <div
+                      key={topic}
+                      className="px-2 py-1 bg-white bg-opacity-20 rounded-full text-xs flex items-center gap-1"
+                    >
+                      <span aria-hidden="true">{TOPIC_LABELS[topic].emoji}</span>
+                      <span>{TOPIC_LABELS[topic].name}</span>
+                    </div>
+                  ))}
+                  {form.topics.length > 3 && (
+                    <span className="px-2 py-1 text-xs text-gray-300">+{form.topics.length - 3} more</span>
+                  )}
+                </div>
+                <button type="button" onClick={openSetup} className="text-yellow-400 text-xs hover:underline">
+                  Edit profile
+                </button>
+              </div>
+
+              <div className="flex items-center gap-2 text-sm" role="status">
+                <div
+                  aria-hidden="true"
+                  className={`w-2 h-2 rounded-full ${stream ? "bg-green-400" : "bg-red-400"}`}
+                />
+                <span>{stream ? "Camera ready" : isLoading ? "Starting camera..." : "Camera off"}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Settings */}
+          <div className="space-y-3">
+            <div className="space-y-2">
+              <label htmlFor="home-language" className="text-xs text-gray-300 block">
+                Language
+              </label>
+              <Select
+                id="home-language"
+                aria-label="Language"
+                value={form.language}
+                onValueChange={(language) => setForm((prev) => ({ ...prev, language }))}
+              >
+                {languages.map((lang) => (
+                  <SelectItem key={lang.code} value={lang.code}>
+                    {lang.name}
+                  </SelectItem>
+                ))}
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <label htmlFor="home-country" className="text-xs text-gray-300 block">
+                Country
+              </label>
+              <Select
+                id="home-country"
+                aria-label="Country"
+                value={form.country}
+                onValueChange={(country) => setForm((prev) => ({ ...prev, country }))}
+              >
+                {countries.map((country) => (
+                  <SelectItem key={country.code} value={country.code}>
+                    {country.flag} {country.name}
+                  </SelectItem>
+                ))}
+              </Select>
+            </div>
+          </div>
+        </div>
+
+        {/* Camera status and start button */}
+        <div className="flex-1 flex flex-col items-center justify-between gap-8 px-4 pb-20 pt-10">
+          <div className="flex-1 flex items-center justify-center">
+            {!stream &&
+              (isLoading ? (
+                <div className="text-center text-white space-y-4" role="status">
+                  <Loader className="w-12 h-12 animate-spin mx-auto" aria-hidden="true" />
+                  <p>Starting your camera...</p>
+                </div>
+              ) : error ? (
+                <CameraProblem error={error} onRetry={retryCamera} tone="dark" />
+              ) : (
+                <div className="text-center text-white space-y-4">
+                  <Camera className="w-16 h-16 mx-auto text-gray-400" aria-hidden="true" />
+                  <p className="text-xl">Camera access required</p>
+                  <Button onClick={retryCamera} className="mx-auto bg-yellow-500 text-black hover:bg-yellow-400">
+                    Enable Camera
+                  </Button>
+                </div>
+              ))}
+          </div>
+          <div className="text-center space-y-4">
+            <Button
+              onClick={openSetup}
+              disabled={!hasPermission}
+              size="lg"
+              data-testid="start-chat"
+              className="px-16 py-4 text-xl font-bold bg-yellow-500 text-black hover:bg-yellow-400 disabled:opacity-50 disabled:cursor-not-allowed border-2 border-black shadow-lg"
+            >
+              Start
+            </Button>
+            {!hasPermission && <p className="text-white text-sm">Please allow camera access to continue</p>}
+          </div>
+        </div>
+      </div>
+
+      {/* Profile setup */}
+      <Dialog open={setupOpen} onOpenChange={setSetupOpen}>
+        <DialogContent
+          className="max-w-md w-[calc(100%-2rem)] bg-white text-black rounded-lg max-h-[90vh] overflow-y-auto"
+          onEscapeKeyDown={keepOpenWhileDropdownOpen}
+        >
+          <div className="space-y-6">
+            <div className="text-center">
+              <DialogTitle className="text-xl font-bold text-black">
+                {setupStep === "capture" ? "Capture Your Photo" : "Complete Profile"}
+              </DialogTitle>
+              <DialogDescription className="text-gray-600 mt-2">
+                {setupStep === "capture"
+                  ? "Take a real-time photo for your profile"
+                  : "Enter your details and select topics"}
+              </DialogDescription>
+            </div>
+
+            {setupStep === "capture" ? (
+              <div className="space-y-6">
+                <div className="relative">
+                  <video
+                    ref={modalVideoRef}
+                    autoPlay
+                    playsInline
+                    muted
+                    aria-label="Camera preview"
+                    onLoadedData={() => setPreviewReady(true)}
+                    className="w-full aspect-video rounded-lg object-cover bg-gray-900"
+                    style={{ transform: "scaleX(-1)" }}
+                  />
+                  <div className="absolute inset-0 border-2 border-yellow-500 rounded-lg pointer-events-none" />
+                  <div className="absolute top-2 right-2 bg-black bg-opacity-70 text-white px-2 py-1 rounded text-xs">
+                    {previewReady ? (
+                      <span className="text-green-400">● Ready</span>
+                    ) : (
+                      <span className="text-red-400">● Loading...</span>
+                    )}
+                  </div>
+                </div>
+
+                {!stream && error ? (
+                  <CameraProblem error={error} onRetry={retryCamera} tone="light" />
+                ) : (
+                  <div className="text-center space-y-4">
+                    <p className="text-sm text-gray-600">Position your face in the frame and click capture</p>
+                    <Button
+                      ref={captureButtonRef}
+                      onClick={capturePhoto}
+                      disabled={!previewReady}
+                      data-testid="capture-photo"
+                      className="w-full justify-center bg-yellow-500 text-black hover:bg-yellow-400 disabled:opacity-50"
+                    >
+                      Capture Photo
+                    </Button>
+                    {captureError && (
+                      <p role="alert" className="text-sm text-red-600">
+                        {captureError}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  onClick={() => setSetupStep("details")}
+                  data-testid="skip-photo"
+                  className="w-full text-sm text-gray-600 underline hover:text-black"
+                >
+                  Continue without a photo
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex flex-col items-center space-y-3">
+                  {form.photo ? (
+                    <img
+                      src={form.photo}
+                      alt="Your profile photo"
+                      className="w-20 h-20 rounded-full object-cover border-2 border-yellow-500"
+                    />
+                  ) : (
+                    <div className="w-20 h-20 rounded-full bg-gray-200 flex items-center justify-center border-2 border-gray-300">
+                      <User className="w-8 h-8 text-gray-500" aria-hidden="true" />
+                    </div>
+                  )}
+                  <Button
+                    onClick={retakePhoto}
+                    variant="outline"
+                    size="sm"
+                    className="text-xs border-gray-400 text-gray-600 hover:bg-gray-50"
+                  >
+                    {form.photo ? "Retake Photo" : "Take a Photo"}
+                  </Button>
+                </div>
+
+                <div className="space-y-2">
+                  <label htmlFor="profile-name" className="text-sm font-medium text-black block">
+                    Your Name
+                  </label>
+                  <Input
+                    ref={nameInputRef}
+                    id="profile-name"
+                    type="text"
+                    placeholder="Enter your name"
+                    autoComplete="nickname"
+                    data-testid="name-input"
+                    value={form.name}
+                    maxLength={LIMITS.nameMax}
+                    aria-invalid={showNameError ? true : undefined}
+                    aria-describedby={showNameError ? "profile-name-error" : undefined}
+                    onChange={(e) => setForm((prev) => ({ ...prev, name: e.target.value }))}
+                    onBlur={() => setNameTouched(true)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                        e.preventDefault();
+                        beginChat();
+                      }
+                    }}
+                    className="border-gray-300 text-black"
+                  />
+                  {showNameError && (
+                    <p id="profile-name-error" className="text-xs text-red-600">
+                      {errors.name}
+                    </p>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <label htmlFor="profile-gender" className="text-sm font-medium text-black block">
+                    Gender
+                  </label>
+                  <Select
+                    id="profile-gender"
+                    aria-label="Gender"
+                    data-testid="gender-select"
+                    value={form.gender}
+                    onValueChange={(gender) => {
+                      if (isGender(gender)) setForm((prev) => ({ ...prev, gender }));
+                    }}
+                  >
+                    {GENDER_CHOICES.map((g) => (
+                      <SelectItem key={g.value} value={g.value}>
+                        {g.label}
+                      </SelectItem>
+                    ))}
+                  </Select>
+                  <p className="text-xs text-gray-500">Only used for matching filters. It is never shown to anyone.</p>
+                </div>
+
+                <fieldset className="space-y-2" aria-describedby={errors.topics ? "profile-topics-error" : undefined}>
+                  <legend className="text-sm font-medium text-black">Select Topics (Choose at least one)</legend>
+                  <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
+                    {TOPICS.map((topic) => {
+                      const selected = form.topics.includes(topic);
+                      return (
+                        <button
+                          type="button"
+                          key={topic}
+                          onClick={() => toggleTopic(topic)}
+                          aria-pressed={selected}
+                          data-testid={`topic-${topic}`}
+                          className={`p-2 text-left text-sm border-2 rounded-lg transition-all text-black ${
+                            selected ? "border-yellow-500 bg-yellow-50" : "border-gray-300 hover:border-gray-400"
+                          }`}
+                        >
+                          <span className="mr-2" aria-hidden="true">
+                            {TOPIC_LABELS[topic].emoji}
+                          </span>
+                          {TOPIC_LABELS[topic].name}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {errors.topics && (
+                    <p id="profile-topics-error" className="text-xs text-red-600">
+                      {errors.topics}
+                    </p>
+                  )}
+                </fieldset>
+
+                {!hasPermission && (
+                  <p role="alert" className="text-xs text-red-600">
+                    Your camera is not ready yet. Close this window and allow camera access.
+                  </p>
+                )}
+
+                <Button
+                  onClick={beginChat}
+                  disabled={hasErrors(errors) || !hasPermission}
+                  data-testid="begin-chat"
+                  className="w-full justify-center bg-yellow-500 text-black hover:bg-yellow-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Start Chatting
+                </Button>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+    </div>
+  );
 };
