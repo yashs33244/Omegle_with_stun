@@ -1,0 +1,6 @@
+{
+  "name": "chizzy-loadtest",
+  "private": true,
+  "type": "module",
+  "description": "Load test and canary, run with Node 22 type stripping. No dependencies of its own: socket.io-client and the TypeScript compiler come from backend/node_modules (cd backend && bun install)."
+}

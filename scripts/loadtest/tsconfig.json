@@ -1,0 +1,24 @@
+{
+  "//": "Typecheck only: backend/node_modules/.bin/tsc -p scripts/loadtest. Node runs the .ts files directly (type stripping).",
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM"],
+    "module": "preserve",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "skipLibCheck": true,
+    "types": ["node"],
+    "typeRoots": ["../../backend/node_modules/@types"],
+    "paths": {
+      "socket.io-client": ["../../backend/node_modules/socket.io-client/build/esm/index.d.ts"],
+      "zod": ["../../backend/node_modules/zod"]
+    }
+  },
+  "include": ["*.ts"]
+}
