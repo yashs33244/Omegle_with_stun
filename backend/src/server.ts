@@ -3,7 +3,9 @@
  * for production; tests call it with short timers and listen on port 0.
  */
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
+import type Redis from "ioredis";
 import type { Config } from "./config";
+import { FlagsReader, MemoryFlagsStore, type FlagsStore } from "./flags/flags";
 import { createApp } from "./http/app";
 import type { Logger } from "./logger";
 import { MatchService } from "./match/MatchService";
@@ -16,6 +18,14 @@ export interface ServerDeps {
   logger: Logger;
   /** Optional hook to install a cross-instance adapter (Redis) before handlers attach. */
   configureIo?: (io: AppServer) => void;
+  /** Operator flags storage. Defaults to memory (single instance, tests). */
+  flags?: FlagsStore;
+  /**
+   * Shared Redis client for feature stores (session, enforcement, ...) in Redis mode.
+   * Undefined means single-instance memory mode: feature stores must fall back to memory.
+   * The caller owns and closes it.
+   */
+  redis?: Redis;
 }
 
 export interface ChizzyServer {
@@ -23,6 +33,9 @@ export interface ChizzyServer {
   io: AppServer;
   service: MatchService;
   metrics: Metrics;
+  flags: FlagsReader;
+  /** The deps this server was built with, for feature modules that need the shared Redis client. */
+  deps: ServerDeps;
   /**
    * Starts listening once the instance heartbeat is stored; resolves with the
    * bound port (use 0 for a random port). Rejects if the store is unreachable.
@@ -38,16 +51,17 @@ export interface ChizzyServer {
 
 export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
   const { store, logger } = deps;
+  const flags = new FlagsReader(deps.flags ?? new MemoryFlagsStore());
   const metrics = createMetrics(store);
   const app = createApp({ store, registry: metrics.registry, logger, metricsToken: config.metricsToken });
   const httpServer = createHttpServer(app);
   const io = createSocketServer(httpServer, config);
   deps.configureIo?.(io);
 
-  const service = new MatchService({ store, config, logger, metrics, emitter: createEmitter(io) });
+  const service = new MatchService({ store, config, logger, metrics, flags, emitter: createEmitter(io) });
   attachHandlers(io, { config, service, logger, metrics });
   // listen() waits for this, so no client connects before the first heartbeat.
-  const started = service.start();
+  const started = flags.start().then(() => service.start());
   started.catch(() => {}); // surfaced by listen(); avoid an unhandled rejection meanwhile
 
   let closing: Promise<void> | undefined;
@@ -56,6 +70,8 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     io,
     service,
     metrics,
+    flags,
+    deps,
     async listen(port, host) {
       await started;
       return new Promise((resolve, reject) => {
@@ -69,6 +85,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     },
     close() {
       closing ??= (async () => {
+        flags.stop();
         try {
           await service.shutdown();
         } catch (err) {

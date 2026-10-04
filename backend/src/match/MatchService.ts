@@ -11,6 +11,7 @@
  */
 import { randomUUID } from "node:crypto";
 import type { Config } from "../config";
+import type { FlagsReader } from "../flags/flags";
 import type { Logger } from "../logger";
 import type { Metrics } from "../metrics";
 import type {
@@ -55,6 +56,8 @@ export interface MatchServiceDeps {
   logger: Logger;
   metrics: Metrics;
   emitter: Emitter;
+  /** Operator flags (kill switch, staffed hours, bitrate caps). */
+  flags: FlagsReader;
   /** Injectable clock for tests. */
   now?: () => number;
 }
