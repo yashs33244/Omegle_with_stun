@@ -7,7 +7,14 @@ import { Input } from "@/components/retroui/Input";
 import { Select, SelectItem } from "@/components/retroui/Select";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/components/ui/dialog";
 import { countries, getCountryByCode, getLanguageByCode, languages } from "../lib/data";
-import { LIMITS, TOPICS, type Gender, type Preferences, type Topic } from "../lib/protocol";
+import { FLAG_DEFAULTS, LIMITS, TOPICS, type Gender, type MatchMode, type Preferences, type Topic } from "../lib/protocol";
+import { MatchModeToggle } from "@/components/MatchModeToggle";
+import { HideIpToggle } from "@/components/room/HideIpToggle";
+import { InAppBrowserNotice } from "@/components/room/InAppBrowserNotice";
+import { PreflightCheck } from "@/components/room/PreflightCheck";
+import { useStartOptions } from "@/hooks/useStartOptions";
+import { detectInAppBrowser, runningOnMobile } from "@/lib/mobile";
+import { preloadModels } from "@/moderation/modelClient";
 import { PhotoCaptureError, captureVideoFrame } from "../lib/photo";
 import {
   GENDER_CHOICES,
@@ -61,8 +68,34 @@ const CameraProblem: React.FC<{ error: MediaAccessError; onRetry: () => void; to
   </div>
 );
 
-export const Landing = () => {
+export interface LandingProps {
+  /** Server default for the match mode (GET /api/config defaultMode). */
+  defaultMode?: MatchMode;
+  /** Hide my IP is offered at all (GET /api/config privateModeEnabled). */
+  privateModeEnabled?: boolean;
+}
+
+/** In-app browsers (Instagram, WhatsApp...) get the "open in your browser" notice first. */
+export const Landing: React.FC<LandingProps> = (props) => {
+  const [inAppApp, setInAppApp] = useState(() =>
+    typeof navigator === "undefined" ? null : detectInAppBrowser(navigator.userAgent),
+  );
+  if (inAppApp) return <InAppBrowserNotice app={inAppApp} onContinue={() => setInAppApp(null)} />;
+  return <LandingScreen {...props} />;
+};
+
+const LandingScreen: React.FC<LandingProps> = ({
+  defaultMode = FLAG_DEFAULTS.default_mode,
+  privateModeEnabled = FLAG_DEFAULTS.private_mode_enabled,
+}) => {
   const [step, setStep] = useState<"home" | "chat">("home");
+  const startOptions = useStartOptions(defaultMode);
+  const [isPhone] = useState(runningOnMobile);
+
+  // Download and compile the moderation models while the user sets up.
+  useEffect(() => {
+    preloadModels();
+  }, []);
   const [setupOpen, setSetupOpen] = useState(false);
   const [setupStep, setSetupStep] = useState<"capture" | "details">("capture");
   const [form, setForm] = useState<ProfileForm>({
@@ -92,6 +125,8 @@ export const Landing = () => {
     micEnabled,
     setMicEnabled,
     setCameraEnabled,
+    facingMode,
+    flipCamera,
   } = useMediaStream();
 
   const [homeVideoRef] = useStreamVideo(stream);
@@ -176,6 +211,11 @@ export const Landing = () => {
         onMicEnabledChange={setMicEnabled}
         onCameraEnabledChange={setCameraEnabled}
         onBackToHome={leaveRoom}
+        mode={startOptions.mode}
+        hideIp={startOptions.hideIp}
+        onHideIpChange={startOptions.setHideIp}
+        onFlipCamera={isPhone ? () => void flipCamera() : undefined}
+        frontCamera={facingMode === "user"}
       />
     );
   }
@@ -267,6 +307,8 @@ export const Landing = () => {
                 />
                 <span>{stream ? "Camera ready" : isLoading ? "Starting camera..." : "Camera off"}</span>
               </div>
+
+              {stream && <PreflightCheck stream={stream} />}
             </div>
           </div>
 
@@ -331,7 +373,13 @@ export const Landing = () => {
                 </div>
               ))}
           </div>
-          <div className="text-center space-y-4">
+          <div className="text-center space-y-4 flex flex-col items-center">
+            <MatchModeToggle mode={startOptions.mode} onChange={startOptions.setMode} />
+            {privateModeEnabled && (
+              <div className="text-left text-white bg-black bg-opacity-60 rounded-lg p-3 max-w-sm">
+                <HideIpToggle checked={startOptions.hideIp} onChange={startOptions.setHideIp} />
+              </div>
+            )}
             <Button
               onClick={openSetup}
               disabled={!hasPermission}
