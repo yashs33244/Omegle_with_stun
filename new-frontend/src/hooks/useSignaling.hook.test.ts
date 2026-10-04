@@ -211,6 +211,46 @@ describe("useSignaling (socket wiring)", () => {
     expect(connectedReports()).toEqual([{ event: "call:connected", payload: { roomId: room }, ack: undefined }]);
   });
 
+  it("sends one skip per call, and only during a call", () => {
+    const { result } = renderHook(() => useSignaling(profile, preferences));
+    const room = "11111111-1111-4111-8111-111111111111";
+    const next = "22222222-2222-4222-8222-222222222222";
+    socket.connected = true;
+    socket.fire("connect");
+    const skips = () => socket.emitted.filter((e) => e.event === "call:skip");
+    const startCall = (roomId: string) => {
+      const serverNow = Date.now();
+      socket.fire("match:found", {
+        roomId,
+        isFriend: false,
+        expiresAt: serverNow + 30_000,
+        serverNow,
+        partner: { name: "Bo", country: "IN", language: "en", topics: ["music"] },
+      });
+      act(() => result.current.accept());
+      socket.fire("call:start", { roomId, initiator: true });
+    };
+
+    act(() => result.current.skip());
+    expect(skips()).toHaveLength(0);
+
+    startCall(room);
+    // A double click, or the overlay button racing the auto-skip timer.
+    act(() => result.current.skip());
+    act(() => result.current.skip());
+    expect(skips()).toHaveLength(1);
+
+    // After match:ended the user is waiting: a late click must not skip the next match.
+    socket.fire("match:ended", { roomId: room, reason: "skipped" });
+    act(() => result.current.skip());
+    expect(skips()).toHaveLength(1);
+
+    // A later call can be skipped again.
+    startCall(next);
+    act(() => result.current.skip());
+    expect(skips()).toHaveLength(2);
+  });
+
   it("disconnects on unmount", () => {
     const { unmount } = renderHook(() => useSignaling(profile, preferences));
     unmount();

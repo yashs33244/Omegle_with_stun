@@ -117,6 +117,17 @@ describe("signalingReducer", () => {
     expect(s.reconnecting).toBe(false);
   });
 
+  it("a failed hello after a reconnect stops showing reconnecting", () => {
+    const dropped = run([hello, found, start, { type: "socket-disconnected" }]);
+    expect(dropped.reconnecting).toBe(true);
+    const banned = run([{ type: "hello-failed", error: "banned" }], dropped);
+    expect(banned.status).toBe("banned");
+    expect(banned.reconnecting).toBe(false);
+    const failed = run([{ type: "hello-failed", error: "unsupported_version" }], dropped);
+    expect(failed.status).toBe("error");
+    expect(failed.reconnecting).toBe(false);
+  });
+
   it("banned hello is terminal", () => {
     const s = run([{ type: "hello-failed", error: "banned" }]);
     expect(s.status).toBe("banned");
