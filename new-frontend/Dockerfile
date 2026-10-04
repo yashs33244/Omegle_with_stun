@@ -10,14 +10,15 @@ RUN npm ci --no-audit --no-fund
 COPY . .
 # Socket server origin baked into the bundle.
 ARG VITE_API_URL=https://chizzyapi.itsyash.space
-ENV VITE_API_URL=${VITE_API_URL}
+# An empty build arg falls back like config.ts does, so the bundle and the CSP agree.
+ENV VITE_API_URL=${VITE_API_URL:-https://chizzyapi.itsyash.space}
 RUN npm run build
 
 FROM nginxinc/nginx-unprivileged:1.28.2-alpine3.23 AS runtime
 # The CSP connect-src is derived from this at container start (see
 # nginx-api-origin.envsh). Defaults to the URL the bundle was built with.
 ARG VITE_API_URL=https://chizzyapi.itsyash.space
-ENV API_ORIGIN=${VITE_API_URL}
+ENV API_ORIGIN=${VITE_API_URL:-https://chizzyapi.itsyash.space}
 # The image entrypoint renders /etc/nginx/templates/*.template with envsubst.
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 COPY nginx-security-headers.conf /etc/nginx/templates/security-headers.inc.template
