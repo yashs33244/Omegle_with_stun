@@ -122,11 +122,20 @@ jobs:
     needs: [backend, frontend]
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Inherited by the backends Playwright starts. Test-only values, not
-    # secrets: the e2e browsers cannot solve a real Turnstile challenge.
+    # Inherited by the backends Playwright starts (its backendEnv wins where
+    # both set a variable). Test-only values, not secrets. Turnstile is real:
+    # backendEnv in playwright.config.ts sets Cloudflare's always-pass test
+    # site key and secret, the browsers get a stub widget that returns the
+    # dummy token, and the backend verifies it with Cloudflare's siteverify.
+    # Every e2e client comes from 127.0.0.1, so the per-IP session and match
+    # caps are raised far above what the suite uses.
     env:
       SESSION_SECRET: ci-e2e-session-secret-not-used-in-production
-      TURNSTILE_DISABLED: "true"
+      ADMIN_TOKEN: ci-e2e-admin-token-not-used-in-production
+      SESSION_RATE_PER_IP_PER_MIN: "10000"
+      SESSION_RATE_PER_NETWORK_PER_MIN: "10000"
+      MATCH_CAP_PER_DEVICE_PER_HOUR: "10000"
+      MATCH_CAP_PER_IP_PER_HOUR: "10000"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -210,6 +219,21 @@ jobs:
       BACKEND_REPLICAS: "2"
       CORS_ORIGINS: http://localhost:5173
       VITE_API_URL: http://localhost:3004
+      # The stack runs with NODE_ENV=production, so the backend refuses to
+      # start without these. Test-only values, not secrets. Turnstile uses
+      # Cloudflare's always-pass test keys: the real widget loads in the
+      # browser (under the production CSP) and the backend verifies its dummy
+      # token with Cloudflare.
+      SESSION_SECRET: ci-stack-session-secret-not-used-in-production
+      ADMIN_TOKEN: ci-stack-admin-token-not-used-in-production
+      PSEUDONYM_SALT: ci-stack-pseudonym-salt
+      TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+      TURNSTILE_SECRET: 1x0000000000000000000000000000000AA
+      # Every browser reaches the gateway from the same Docker bridge address.
+      SESSION_RATE_PER_IP_PER_MIN: "10000"
+      SESSION_RATE_PER_NETWORK_PER_MIN: "10000"
+      MATCH_CAP_PER_DEVICE_PER_HOUR: "10000"
+      MATCH_CAP_PER_IP_PER_HOUR: "10000"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
