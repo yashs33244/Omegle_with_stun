@@ -71,11 +71,6 @@ jobs:
       PROJECT_PATH: ${{ secrets.PROJECT_PATH || 'Omegle_with_stun' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          sparse-checkout: |
-            docker-compose.yml
-            deploy
-          sparse-checkout-cone-mode: false
 
       # The host always runs the compose file and deploy/ from this commit. They
       # land in .incoming/ and deploy.sh installs them (keeping the previous
