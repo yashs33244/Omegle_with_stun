@@ -69,15 +69,19 @@ test("the sweeper's recheck keeps /healthz fast with 4000 unmatchable waiters", 
   ts = await startServer({ sweepIntervalMs: 100, recheckIntervalMs: 100 }, store);
   await fillUnmatchable(store, ts.config.instanceId, 4000);
   const deadline = performance.now() + 1500;
-  let worst = 0;
-  let requests = 0;
+  const latencies: number[] = [];
   while (performance.now() < deadline) {
     const started = performance.now();
     const res = await fetch(`${ts.url}/healthz`);
     expect(res.status).toBe(200);
-    worst = Math.max(worst, performance.now() - started);
-    requests++;
+    latencies.push(performance.now() - started);
   }
-  expect(requests).toBeGreaterThan(10);
-  expect(worst).toBeLessThan(100);
+  latencies.sort((x, y) => x - y);
+  const p99 = latencies[Math.floor(latencies.length * 0.99)]!;
+  const worst = latencies[latencies.length - 1]!;
+  // Before the fix: about 5 requests in 1.5 s, each waiting out a 700 ms pass.
+  // Loose bounds for the worst case leave room for a GC pause on a busy CI core.
+  expect(latencies.length).toBeGreaterThan(100);
+  expect(p99).toBeLessThan(50);
+  expect(worst).toBeLessThan(300);
 });
