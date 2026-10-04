@@ -178,22 +178,29 @@ Empty values mean "use the default". Compose passes every variable below.
 | MAX_CONNECTIONS_PER_IP | 10 | per instance |
 | MATCH_ACCEPT_TIMEOUT_MS | 30000 | Preview mode accept window |
 | LOG_LEVEL / METRICS_TOKEN / SHUTDOWN_GRACE_MS | info / unset / 10000 | |
-| SESSION_SECRET | unset | HMAC key for session and age tokens; required in production |
+| SESSION_SECRET | unset | HMAC key for session and age tokens; required in production (32+ characters) |
 | SESSION_SECRET_PREVIOUS | unset | old key still accepted during a rotation |
-| TURNSTILE_SITE_KEY / TURNSTILE_SECRET | unset | Cloudflare Turnstile (served to the SPA via `/api/config`) |
+| TURNSTILE_SITE_KEY / TURNSTILE_SECRET | unset | Cloudflare Turnstile for the session gate and the takedown form (the site key is served to the SPA via `/api/config`); required in production unless TURNSTILE_DISABLED |
 | TURNSTILE_DISABLED | false | load tests and local stacks only |
+| SESSION_RATE_PER_IP_PER_MIN / SESSION_RATE_PER_NETWORK_PER_MIN | 10 / 60 | `POST /api/session` per client IP and per /24 (IPv6 /48); raise for e2e and load tests |
+| MATCH_CAP_PER_DEVICE_PER_HOUR / MATCH_CAP_PER_IP_PER_HOUR | 200 / 200 | hourly match caps |
 | TRUST_CLOUDFLARE | false | read the country from `CF-IPCountry` (only when Cloudflare proxies the API) |
 | TURN_PROVIDER | backend default | `cloudflare` (production), or `static` / `secret` with the TURN_* vars |
 | CF_TURN_KEY_ID / CF_TURN_API_TOKEN | unset | Cloudflare Realtime TURN key |
 | CF_ACCOUNT_ID / CF_ANALYTICS_TOKEN | unset | TURN spend poller (Cloudflare GraphQL analytics) |
+| TURN_SPEND_DAILY_GB | 35,50,70 | daily TURN egress thresholds: lower relay bitrate, then Hide my IP off, then TURN off |
+| TURN_CACHE_SECONDS | 300 | per-device TURN credential cache |
+| TURN_MAX_PER_DEVICE_HOUR / TURN_MAX_PER_IP_HOUR | 20 / 100 | TURN credential sets per hour |
 | STUN_URLS | Google public STUN | comma list |
 | TURN_URLS, TURN_SECRET, TURN_USERNAME, TURN_CREDENTIAL, TURN_TTL_SECONDS | unset | self-hosted TURN only (not part of this stack) |
 | SENTRY_DSN / SENTRY_DSN_FRONTEND | unset | backend DSN / DSN handed to the SPA |
 | POSTHOG_KEY / POSTHOG_HOST | unset | handed to the SPA (cookieless, IP capture off) |
-| ADMIN_TOKEN | unset | bearer token for `/admin/api/*`; unset keeps the admin API off |
+| ADMIN_TOKEN | unset | bearer token for `/admin/api/*` (24+ characters); required in production, unset elsewhere keeps the admin API off |
 | ADMIN_ALLOWED_IPS | unset | optional comma list of IPs or CIDRs for the admin API |
+| PSEUDONYM_SALT | derived from ADMIN_TOKEN | salt for the device pseudonyms admins see (16+ characters); set it once in production |
 | EVIDENCE_DIR | compose: `/data/evidence` | the `evidence-data` volume, shared by the replicas |
-| EVIDENCE_S3_BUCKET / AWS_REGION | unset | store evidence in S3 instead (instance role credentials) |
+| EVIDENCE_S3_BUCKET / EVIDENCE_S3_REGION | unset | store evidence in S3 instead (instance role credentials); the region is required with a bucket |
+| EVIDENCE_S3_KMS_KEY_ID | unset | SSE-KMS key for evidence objects (SSE-S3 without it) |
 
 ### Frontend build
 
