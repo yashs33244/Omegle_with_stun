@@ -8,33 +8,54 @@ interface SelectProps {
   children: React.ReactNode;
   placeholder?: string;
   className?: string;
+  disabled?: boolean;
+  id?: string;
+  "aria-label"?: string;
+  "data-testid"?: string;
 }
 
 interface SelectItemProps {
   value: string;
   children: React.ReactNode;
   onSelect?: () => void;
+  selected?: boolean;
 }
 
+/**
+ * Usage: <Select value onValueChange><SelectItem value="x">Label</SelectItem>...</Select>.
+ * There is no `options` prop; render one SelectItem per option.
+ */
 const Select = React.forwardRef<HTMLDivElement, SelectProps>(
-  ({ value, onValueChange, children, placeholder, className }, ref) => {
+  (
+    {
+      value,
+      onValueChange,
+      children,
+      placeholder,
+      className,
+      disabled,
+      id,
+      "aria-label": ariaLabel,
+      "data-testid": testId,
+    },
+    ref
+  ) => {
     const [isOpen, setIsOpen] = React.useState(false);
-    const [selectedLabel, setSelectedLabel] = React.useState<string>("");
     const [dropdownPosition, setDropdownPosition] = React.useState<
       "bottom" | "top"
     >("bottom");
     const containerRef = React.useRef<HTMLDivElement>(null);
+    React.useImperativeHandle(ref, () => containerRef.current as HTMLDivElement);
 
-    React.useEffect(() => {
-      // Find the selected item's label from children
-      React.Children.forEach(children, (child) => {
-        if (React.isValidElement(child) && child.props.value === value) {
-          setSelectedLabel(child.props.children);
-        }
-      });
-    }, [value, children]);
+    const items = React.Children.toArray(children).filter(
+      (child): child is React.ReactElement<SelectItemProps> =>
+        React.isValidElement<SelectItemProps>(child)
+    );
+    const selectedLabel = items.find((child) => child.props.value === value)
+      ?.props.children;
 
     const handleToggle = () => {
+      if (disabled) return;
       if (!isOpen && containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
         const spaceBelow = window.innerHeight - rect.bottom;
@@ -54,8 +75,14 @@ const Select = React.forwardRef<HTMLDivElement, SelectProps>(
       <div ref={containerRef} className={cn("relative", className)}>
         <button
           type="button"
+          id={id}
           onClick={handleToggle}
-          className="flex h-10 w-full items-center justify-between rounded-md border-2 border-black bg-white px-3 py-2 text-sm shadow-sm transition-all hover:shadow-md focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
+          disabled={disabled}
+          aria-haspopup="listbox"
+          aria-expanded={isOpen}
+          aria-label={ariaLabel}
+          data-testid={testId}
+          className="flex h-10 w-full items-center justify-between rounded-md border-2 border-black bg-white px-3 py-2 text-sm shadow-sm transition-all hover:shadow-md focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <span className={selectedLabel ? "text-black" : "text-gray-500"}>
             {selectedLabel || placeholder}
@@ -77,18 +104,16 @@ const Select = React.forwardRef<HTMLDivElement, SelectProps>(
                 : "bottom-full mb-1"
             )}
           >
-            <div className="max-h-60 overflow-auto p-1">
-              {React.Children.map(children, (child) => {
-                if (React.isValidElement(child)) {
-                  return React.cloneElement(child, {
-                    onSelect: () => {
-                      onValueChange(child.props.value);
-                      setIsOpen(false);
-                    },
-                  } as any);
-                }
-                return child;
-              })}
+            <div className="max-h-60 overflow-auto p-1" role="listbox" aria-label={ariaLabel}>
+              {items.map((child) =>
+                React.cloneElement(child, {
+                  selected: child.props.value === value,
+                  onSelect: () => {
+                    onValueChange(child.props.value);
+                    setIsOpen(false);
+                  },
+                })
+              )}
             </div>
           </div>
         )}
@@ -106,11 +131,20 @@ const Select = React.forwardRef<HTMLDivElement, SelectProps>(
 Select.displayName = "Select";
 
 const SelectItem = React.forwardRef<HTMLDivElement, SelectItemProps>(
-  ({ value, children, onSelect }, ref) => {
+  ({ children, onSelect, selected }, ref) => {
     return (
       <div
         ref={ref}
+        role="option"
+        aria-selected={selected ?? false}
+        tabIndex={0}
         onClick={onSelect}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onSelect?.();
+          }
+        }}
         className="flex cursor-pointer items-center rounded-sm px-2 py-1.5 text-sm text-black hover:bg-gray-100 hover:text-black focus:bg-gray-100 focus:text-black"
       >
         {children}
