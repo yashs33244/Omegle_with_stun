@@ -16,7 +16,9 @@ import {
   type ServerToClientEvents,
 } from "../src/protocol";
 import { createServer, type ChizzyServer, type ServerDeps } from "../src/server";
+import { connectRedisAdapter } from "../src/realtime/redisAdapter";
 import { MemoryStore } from "../src/store/MemoryStore";
+import { RedisStore } from "../src/store/RedisStore";
 import type { MatchStore } from "../src/store/MatchStore";
 
 export type Client = Socket<ServerToClientEvents, ClientToServerEvents>;
@@ -57,12 +59,28 @@ export interface TestServer {
   close(): Promise<void>;
 }
 
+/**
+ * Boots a server on a random port. Without an explicit store it uses a
+ * MemoryStore, or, when TEST_STORE=redis and REDIS_URL are set, a RedisStore
+ * on a fresh key prefix plus the Redis adapter (so every integration test can
+ * also run against Redis; both are closed with the server).
+ */
 export async function startServer(
   overrides: Partial<Config> = {},
-  store: MatchStore = new MemoryStore(),
+  store?: MatchStore,
   deps: Pick<ServerDeps, "configureIo"> = {},
 ): Promise<TestServer> {
   const config = testConfig(overrides);
+  const owned: { close(): Promise<void> }[] = [];
+  if (!store && process.env.TEST_STORE === "redis" && process.env.REDIS_URL) {
+    const redisUrl = process.env.REDIS_URL;
+    const redisStore = await RedisStore.connect(redisUrl, { prefix: `test:${randomUUID()}:` });
+    const adapter = await connectRedisAdapter(redisUrl, createLogger("silent"), `test:${randomUUID()}:socket.io`);
+    owned.push(redisStore, adapter);
+    store = redisStore;
+    deps = { configureIo: adapter.install, ...deps };
+  }
+  store ??= new MemoryStore();
   const server = createServer(config, { store, logger: createLogger("silent"), ...deps });
   const port = await server.listen(0, "127.0.0.1");
   const url = `http://127.0.0.1:${port}`;
@@ -90,6 +108,7 @@ export async function startServer(
     async close() {
       for (const c of clients) c.disconnect();
       await server.close();
+      for (const o of owned) await o.close();
     },
   };
 }

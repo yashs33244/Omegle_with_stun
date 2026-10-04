@@ -274,7 +274,8 @@ describe("ending a match", () => {
     ca.disconnect();
     expect(await end).toEqual({ roomId, reason: "partner-left" });
     await wait;
-    const stats = await ts.store.stats();
+    // Under the lock: events can reach the client before the handler that sent them finishes.
+    const stats = await ts.store.withLock(() => ts!.store.stats());
     expect(stats).toEqual({ sessions: 1, waiting: 1, pendingRooms: 0, activeRooms: 0 });
 
     const c = await ts.connect();
