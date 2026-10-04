@@ -1,23 +1,49 @@
 # Chizzy
 
-Chizzy is an anonymous, topic-based video chat: pick a name, a few topics and
-(optionally) who you want to meet, and get matched with a stranger for a
-peer-to-peer WebRTC call with text chat on the side.
+Chizzy is an anonymous, topic-based video chat for adults (18+): pass a short
+age and Terms gate, pick a name, a few topics and (optionally) who you want to
+meet, and get matched with a stranger for a peer-to-peer WebRTC call with
+text chat on the side.
 
-Live: https://chizzy.itsyash.space (socket server: https://chizzyapi.itsyash.space)
+Live: https://chizzy.itsyash.space (API and socket server: https://chizzyapi.itsyash.space)
 
-## Features
+## Features (v1 launch build)
 
-- Matchmaking on shared topics, with mutual gender and language filters.
-- Accept or pass on every match (5 second window), skip at any time.
-- Peer-to-peer audio and video (WebRTC). STUN by default, optional TURN relay
-  with short-lived credentials issued by the backend.
-- Text chat with a typing indicator, and a text-only mode that really stops
-  sending your camera.
-- Reporting: reports are stored, the pair is blocked, and a device reported by
-  three different devices within 24 hours is banned for 24 hours.
-- Coins (+5 per full minute in a call) and Friends (after 5 minutes together),
-  stored on the server per anonymous device.
+The scope and the owner decisions behind it are in `.planning/BUILD_V1.md`
+(local planning notes) and [docs/safety-decision-log.md](docs/safety-decision-log.md).
+
+- **Session gate** before the camera: date of birth (the server computes 18+
+  and does not store the date), 18+ attestation, Terms acceptance, Cloudflare
+  Turnstile, a country blocklist and an under-18 device lockout. The server
+  returns a signed session token that the socket handshake requires.
+- **Matching** on shared topics and language, with the gender and language
+  filters as hard constraints and a relaxation ladder for topics. Instant mode
+  by default (the call starts blurred), Preview mode (an accept card) as an
+  option; free, unlimited Next.
+- **Peer-to-peer audio and video** (WebRTC) with Cloudflare TURN for networks
+  that need a relay. TURN credentials are issued per matched call only.
+  "Hide my IP" forces the relay so the partner does not see your IP address.
+- **On-device moderation**: the partner's video starts blurred and unblurs
+  after the receiver's classifier sees several safe frames; the sender's
+  video is paused when no face is visible. Models are self-hosted under
+  `/models/`. These checks reduce exposure; they do not catch everything.
+- **Safety UX**: links, handles and phone numbers in chat are hidden for the
+  first 2 minutes, display names go through a name guard, safety nudges and a
+  first-use safety card with helplines, a faint session watermark on the
+  remote video.
+- **Reports with evidence** (one tap on the video, the match card and a 60 s
+  post-call screen), reporter weighting, a graduated restriction ladder,
+  a restriction screen with the reason and a free appeal, NCII takedown
+  tickets, and a CSAM escalation path that builds a report packet without
+  anyone opening the image.
+- **Admin console** at `/admin` (a lazy part of the SPA) over `/admin/api/*`
+  on the API origin: the review queue with SLA timers, appeals, takedowns,
+  the flags editor and the audit log.
+- **Operator flags**: a kill switch for matching and new sessions, staffed
+  hours, a banner, the country blocklist, TURN and bitrate caps, the default
+  match mode. Changed in the admin console, cached 2 s per instance.
+- Text chat with a typing indicator, a text-only mode, coins and Friends
+  (kept as built, owner decision D-2).
 - Horizontal scaling: N backend replicas share state through Redis.
 
 ## Architecture
@@ -26,49 +52,71 @@ Live: https://chizzy.itsyash.space (socket server: https://chizzyapi.itsyash.spa
 flowchart LR
   SPA["Browser: React SPA"]
   PEER["Partner browser"]
+  CF["Cloudflare: proxy, Turnstile, TURN"]
   subgraph Host["Docker host (EC2)"]
     HP["Host proxy (TLS)"]
-    FE["frontend: nginx, static SPA, host :5173"]
+    FE["frontend: nginx, static SPA + /models, host :5173"]
     GW["gateway: nginx least_conn, host :3004"]
     B1["backend replica 1: Node 22, Express, Socket.IO"]
     B2["backend replica N"]
-    R[("Redis 7: state and pub/sub")]
-    T["coturn (optional, profile turn)"]
+    R[("Redis 7: state, flags, pub/sub")]
+    EV[("evidence volume")]
   end
-  SPA -->|HTTPS| HP
-  SPA -.->|"wss /socket.io, websocket transport only"| HP
+  OBS["Sentry, PostHog (cookieless), Better Stack"]
+  SPA -->|"HTTPS, wss"| CF
+  CF --> HP
   HP --> FE
-  HP --> GW
+  HP -->|"/api/, /admin/api/, /socket.io/"| GW
   GW --> B1
   GW --> B2
   B1 <--> R
   B2 <--> R
+  B1 --> EV
+  B2 --> EV
   SPA <-->|"WebRTC media, peer to peer"| PEER
-  SPA -.->|"relay when P2P fails"| T
+  SPA -.->|"relay when needed or Hide my IP"| CF
+  SPA -.-> OBS
+  B1 -.-> OBS
 ```
 
-- The SPA connects to the socket server with the **websocket transport only**.
-  Socket.IO needs sticky sessions only for HTTP long-polling, so without polling
-  the gateway can use `least_conn` with no stickiness. (`ip_hash` would pin every
-  client to one replica, because behind the host proxy all traffic arrives from
-  one address.)
-- Matchmaking state (sessions, the waiting queue, rooms, blocks, reports, bans,
-  coins, friends) lives in Redis. The `@socket.io/redis-adapter` delivers events
-  to sockets connected to other replicas. Without `REDIS_URL` the backend uses an
-  in-memory store and no adapter (single instance: local dev and tests).
-- Media never touches the servers unless a TURN relay is needed.
+- **Cloudflare in front of both hostnames.** The SPA and the API are proxied
+  by Cloudflare. The country blocklist reads Cloudflare's `CF-IPCountry`
+  header (`TRUST_CLOUDFLARE=true`), and the gateway believes the `CF-*`
+  headers only from Cloudflare's published ranges. With `CLOUDFLARE_ONLY=true`
+  the gateway also refuses requests that did not come through Cloudflare, so
+  nobody can skip the blocklist by calling the origin directly
+  ([DEPLOYMENT.md](DEPLOYMENT.md#cloudflare-in-front)).
+- **Session gate.** `POST /api/session` -> signed session token ->
+  Socket.IO handshake with `auth.sessionToken`. `GET /api/config` gives the
+  SPA its public runtime settings (Turnstile site key, Sentry DSN, PostHog
+  key, banner, staffed hours, default mode).
+- **Gateway.** Clients use the websocket transport only, so the gateway uses
+  `least_conn` with no stickiness. REST (`/api/`, `/admin/api/`) goes to the
+  same upstream with a 64 KB body cap. Report evidence travels inside the
+  socket, never as REST.
+- **TURN provider.** Cloudflare Realtime TURN (`TURN_PROVIDER=cloudflare`).
+  Nothing relays media on the app host; the old coturn service was removed
+  (a vulnerable image, and a relay that saturates the NIC takes signaling
+  down with it).
+- **State.** Sessions, the queue, rooms, flags, restrictions, reports
+  metadata, appeals, takedowns and the audit log live in Redis; the
+  `@socket.io/redis-adapter` delivers events across replicas. Evidence frames
+  live on the `evidence-data` volume (or S3). Without `REDIS_URL` the backend
+  runs in memory (single instance: local dev and tests).
 
 ## Repository layout
 
 | path | what |
 |---|---|
-| `backend/` | Socket.IO signaling and matchmaking server (TypeScript; bun for install, build and tests; Node 22 in production) |
-| `backend/src/protocol.ts` | the socket protocol: event names, payload schemas (zod), limits. Source of truth |
-| `new-frontend/` | React + Vite SPA (npm) |
+| `backend/` | API, signaling and matchmaking server (TypeScript; bun for install, build and tests; Node 22 in production) |
+| `backend/src/protocol.ts` | protocol v3: socket events, REST schemas, admin types, flags. Source of truth |
+| `new-frontend/` | React + Vite SPA (npm), including the admin console |
 | `new-frontend/src/lib/protocol.ts` | byte-for-byte copy of the protocol, kept in sync by `scripts/sync-protocol.sh` |
-| `docker-compose.yml` | production stack: redis, backend replicas, gateway, frontend, optional coturn |
-| `deploy/` | gateway nginx config and the host deploy script |
-| `.github/workflows/` | CI (`ci.yml`) and the EC2 deploy (`deploy.yml`) |
+| `docker-compose.yml` | production stack: redis, backend replicas, gateway, frontend |
+| `deploy/` | gateway nginx configs, the Cloudflare IP script and the host deploy script |
+| `scripts/` | protocol sync, lockfile check, Redis backup and restore, `loadtest/` (load test and canary) |
+| `docs/` | runbooks, capacity, retention, risk assessment, safety decision log, launch checklist |
+| `.github/workflows/` | CI (`ci.yml`), the EC2 deploy (`deploy.yml`), the synthetic canary (`canary.yml`) |
 
 ## Quick start (local development)
 
@@ -89,7 +137,9 @@ npm run dev        # open the URL Vite prints
 In development the frontend talks to `http://localhost:3004` unless
 `VITE_API_URL` is set (for example in `new-frontend/.env.local`). Two browser
 windows (one in a private window, so each gets its own device id) can match
-each other.
+each other. For a local Turnstile widget use Cloudflare's test keys: site key
+`1x00000000000000000000AA` with secret `1x0000000000000000000000000000000AA`
+(always passes) or `2x0000000000000000000000000000000AA` (always fails).
 
 To run the backend against Redis locally:
 
@@ -101,51 +151,64 @@ REDIS_URL=redis://localhost:6379 bun run dev
 ## Full stack with Docker Compose
 
 ```sh
-cp .env.example .env          # defaults work for localhost
+cp .env.example .env          # set SESSION_SECRET (openssl rand -hex 32); add Turnstile test keys or TURNSTILE_DISABLED=true
 docker compose up --build     # redis, 2 backend replicas, gateway, frontend
 ```
 
-- Frontend: http://localhost:5173
-- Socket server (gateway): http://localhost:3004, health at `/healthz` and `/readyz`
+- Frontend: http://localhost:5173 (admin console at http://localhost:5173/admin)
+- API and socket server (gateway): http://localhost:3004, health at `/healthz` and `/readyz`
 - Scale the backend: `BACKEND_REPLICAS=4 docker compose up -d` (the gateway
   re-resolves the replicas every 10 seconds, no reload needed).
-- Optional TURN relay: `docker compose --profile turn up -d` (see below).
 
 ## Configuration
 
 ### Backend environment
 
-Parsed and validated at startup (`backend/src/config.ts`); an invalid value
-stops the process with a clear message. Empty values mean "use the default".
+Parsed and validated at startup (`backend/src/config.ts`, the source of
+truth for defaults); an invalid value stops the process with a clear message.
+Empty values mean "use the default". Compose passes every variable below.
 
 | var | default | notes |
 |---|---|---|
-| NODE_ENV | development | |
+| NODE_ENV | development | compose sets production |
 | PORT | 3004 | |
 | CORS_ORIGINS | `*` outside production | comma list; REQUIRED in production, `*` rejected in production |
-| REDIS_URL | unset | set -> RedisStore + redis adapter |
+| REDIS_URL | unset | set -> RedisStore + redis adapter + Redis feature stores |
 | TRUST_PROXY | false | true -> client IP from `X-Real-IP` (set by our gateway) |
 | MAX_CONNECTIONS_PER_IP | 10 | per instance |
-| MATCH_ACCEPT_TIMEOUT_MS | 30000 | how long both users have to press Accept |
-| STUN_URLS | stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302 | comma list |
-| TURN_URLS | unset | comma list, e.g. turn:turn.example.com:3478?transport=udp,turns:turn.example.com:5349 |
-| TURN_SECRET | unset | coturn `use-auth-secret` shared secret: issue `username = <expiry>:<deviceId>`, `credential = base64(HMAC-SHA1(secret, username))` |
-| TURN_USERNAME / TURN_CREDENTIAL | unset | static alternative to TURN_SECRET |
-| TURN_TTL_SECONDS | 43200 | |
-| LOG_LEVEL | info | pino |
-| METRICS_TOKEN | unset | |
-| SHUTDOWN_GRACE_MS | 10000 | |
+| MATCH_ACCEPT_TIMEOUT_MS | 30000 | Preview mode accept window |
+| LOG_LEVEL / METRICS_TOKEN / SHUTDOWN_GRACE_MS | info / unset / 10000 | |
+| SESSION_SECRET | unset | HMAC key for session and age tokens; required in production |
+| SESSION_SECRET_PREVIOUS | unset | old key still accepted during a rotation |
+| TURNSTILE_SITE_KEY / TURNSTILE_SECRET | unset | Cloudflare Turnstile (served to the SPA via `/api/config`) |
+| TURNSTILE_DISABLED | false | load tests and local stacks only |
+| TRUST_CLOUDFLARE | false | read the country from `CF-IPCountry` (only when Cloudflare proxies the API) |
+| TURN_PROVIDER | backend default | `cloudflare` (production), or `static` / `secret` with the TURN_* vars |
+| CF_TURN_KEY_ID / CF_TURN_API_TOKEN | unset | Cloudflare Realtime TURN key |
+| CF_ACCOUNT_ID / CF_ANALYTICS_TOKEN | unset | TURN spend poller (Cloudflare GraphQL analytics) |
+| STUN_URLS | Google public STUN | comma list |
+| TURN_URLS, TURN_SECRET, TURN_USERNAME, TURN_CREDENTIAL, TURN_TTL_SECONDS | unset | self-hosted TURN only (not part of this stack) |
+| SENTRY_DSN / SENTRY_DSN_FRONTEND | unset | backend DSN / DSN handed to the SPA |
+| POSTHOG_KEY / POSTHOG_HOST | unset | handed to the SPA (cookieless, IP capture off) |
+| ADMIN_TOKEN | unset | bearer token for `/admin/api/*`; unset keeps the admin API off |
+| ADMIN_ALLOWED_IPS | unset | optional comma list of IPs or CIDRs for the admin API |
+| EVIDENCE_DIR | compose: `/data/evidence` | the `evidence-data` volume, shared by the replicas |
+| EVIDENCE_S3_BUCKET / AWS_REGION | unset | store evidence in S3 instead (instance role credentials) |
 
 ### Frontend build
 
 | var | default | notes |
 |---|---|---|
-| VITE_API_URL | `http://localhost:3004` in dev, `https://chizzyapi.itsyash.space` in production builds | socket server origin, baked in at build time (`--build-arg VITE_API_URL=...` for the image). The frontend nginx derives its CSP `connect-src` from the same value. |
+| VITE_API_URL | `http://localhost:3004` in dev, `https://chizzyapi.itsyash.space` in production builds | API and socket origin, baked in at build time (`--build-arg VITE_API_URL=...` for the image). The frontend nginx derives its CSP `connect-src` from the same value. |
+
+Everything else the SPA needs at runtime (Turnstile site key, Sentry DSN,
+PostHog key, banner, staffed hours) comes from `GET /api/config`.
 
 ### Compose and deploy
 
-`docker-compose.yml` reads `.env` next to it. Every variable is listed with its
-default in [`.env.example`](.env.example). The ones that matter most:
+`docker-compose.yml` reads `.env` next to it. Every variable is listed with
+its default in [`.env.example`](.env.example). Besides the backend variables
+above:
 
 | var | default | notes |
 |---|---|---|
@@ -153,15 +216,37 @@ default in [`.env.example`](.env.example). The ones that matter most:
 | IMAGE_TAG | latest | the deploy pins the commit sha |
 | BACKEND_REPLICAS | 2 | backend instances behind the gateway |
 | BACKEND_PORT / FRONTEND_PORT | 3004 / 5173 | host ports of the gateway and the frontend |
-| BIND_ADDRESS | 0.0.0.0 | set `127.0.0.1` when a host proxy terminates TLS in front, so nobody can reach the containers around it |
-| CORS_ORIGINS | http://localhost:5173 | the public frontend origin in production |
-| REDIS_PASSWORD | unset | optional, URL safe; Redis is only on the internal network either way |
-| TURN_REALM, TURN_EXTERNAL_IP, TURN_MIN_PORT, TURN_MAX_PORT | chizzy, unset, 49160, 49200 | coturn service (profile `turn`) |
+| BIND_ADDRESS | 0.0.0.0 | `127.0.0.1` when a host proxy terminates TLS in front |
+| REDIS_PASSWORD | unset | optional, URL safe |
+| CLOUDFLARE_ONLY | false | host only: the gateway refuses requests that did not come through Cloudflare |
+| BACKUP_S3_URI | unset | host only: where `scripts/backup-redis.sh` uploads snapshots |
 
 Inside compose the backend always runs with `NODE_ENV=production`,
-`TRUST_PROXY=true` (the gateway sets `X-Real-IP` to the real client address,
-taken from `X-Forwarded-For` only when the request comes from a private
-address such as the host proxy) and `REDIS_URL` pointing at the redis service.
+`TRUST_PROXY=true` and `REDIS_URL` pointing at the redis service. Backend,
+gateway and frontend run with `nofile` 65535; both nginx configs use
+`worker_connections 16384` and `worker_rlimit_nofile 65535`.
+
+## Operations
+
+- **Kill switch and flags**: `/admin` -> Flags. `matching_enabled` off stops
+  matching (live calls continue), `new_sessions_enabled` off stops new
+  sessions, `banner_message` shows a banner, `default_mode` switches Instant
+  and Preview, `turn_enabled`, `private_mode_enabled`, `video_max_kbps` and
+  `relay_video_max_kbps` control relay cost, `blocked_countries` is the
+  country blocklist. Changes reach every replica within about 2 s.
+- **Staffed hours**: `staffed_hours` (for example `20:00-24:00 Asia/Kolkata`)
+  opens matching only in that window, so the review queue's legal clocks can
+  be met by the people on duty. Empty means always open.
+- **Runbooks**: [docs/runbooks/](docs/runbooks/) (CSAM escalation, law
+  enforcement, NCII takedown, CERT-In incident, TURN cost spike, abuse wave,
+  host down).
+- **Backups**: nightly `scripts/backup-redis.sh` to S3, restore with
+  `scripts/restore-redis.sh` ([docs/redis-backup.md](docs/redis-backup.md)).
+- **Capacity**: [docs/capacity.md](docs/capacity.md) and the load test in
+  `scripts/loadtest/`.
+- **Canary**: `.github/workflows/canary.yml`, opt-in with the `CANARY_URL`
+  repository variable.
+- **Launch tasks for the owner**: [docs/launch-checklist.md](docs/launch-checklist.md).
 
 ## Scripts
 
@@ -181,8 +266,14 @@ address such as the host proxy) and `REDIS_URL` pointing at the redis service.
 | `test` | Vitest |
 | `test:e2e` | Playwright: pairs of fake-media Chromium users against the built backend |
 
-`scripts/sync-protocol.sh` copies the protocol to the frontend;
-`scripts/sync-protocol.sh --check` fails when the copies differ (CI runs it).
+| repo scripts | |
+|---|---|
+| `scripts/sync-protocol.sh [--check]` | copy the protocol to the frontend / fail when the copies differ (CI) |
+| `scripts/check-lockfiles.sh` | lockfiles must only reference the public npm registry (CI) |
+| `node scripts/loadtest/loadtest.ts` | signaling load test ([docs/capacity.md](docs/capacity.md)) |
+| `node scripts/loadtest/canary.ts` | two-client synthetic canary (`CANARY_URL`) |
+| `scripts/backup-redis.sh`, `scripts/restore-redis.sh` | Redis snapshot to S3 and restore |
+| `deploy/cloudflare-ips.sh` | refresh the gateway's Cloudflare ranges and the optional origin lock |
 
 ## Testing
 
@@ -192,91 +283,86 @@ cd backend && REDIS_URL=redis://localhost:6379 bun test    # plus the Redis stor
 cd backend && bun run build && bun run test:node
 cd new-frontend && npm run typecheck && npm run lint && npm test && npm run build
 cd new-frontend && npx playwright install chromium && npm run test:e2e
+backend/node_modules/.bin/tsc -p scripts/loadtest              # load test and canary typecheck
 ```
 
 The end-to-end suite (`new-frontend/e2e/`) drives two separate Chromium
-contexts with fake camera and microphone through the real flows: onboarding,
-match and countdown, accept with remote video actually playing on both sides,
-chat with typing and server acks, text-only mode, Skip, Pass, the accept
-timeout, Report, a partner closing the tab, and Home releasing the camera.
-Every test also fails on uncaught page errors, console errors and CSP
-violations. By default Playwright builds and starts the backend on Node
-(ports 3104 and 3105, the latter with a 3 s accept window for the timeout
-test) and serves production builds of the frontend with `vite preview` on
-ports 4173 and 4174, with the same security headers nginx sends in
-production. To test a running stack instead, set `E2E_BASE_URL` (and
-optionally `E2E_TIMEOUT_BASE_URL` and `E2E_ACCEPT_TIMEOUT_MS`); no servers are
-started then. The HTML report lands in `new-frontend/playwright-report/`.
+contexts with fake camera and microphone through the real flows. Every test
+also fails on uncaught page errors, console errors and CSP violations. By
+default Playwright builds and starts the backend on Node and serves
+production builds of the frontend with `vite preview`, with the same security
+headers nginx sends in production (`new-frontend/nginx-security-headers.conf`).
+To test a running stack instead, set `E2E_BASE_URL` (and optionally
+`E2E_TIMEOUT_BASE_URL` and `E2E_ACCEPT_TIMEOUT_MS`). The HTML report lands in
+`new-frontend/playwright-report/`.
 
 CI (`.github/workflows/ci.yml`) runs all of the above on every pull request
-and push, with a Redis service container, plus the protocol sync check, both
-Docker image builds, `docker compose config` and `nginx -t` on the gateway
-config.
+and push, with a Redis service container, plus the protocol sync and lockfile
+checks, actionlint and shellcheck, both Docker image builds,
+`docker compose config` and `nginx -t` on the gateway and frontend configs.
 
-## Socket protocol
+## Protocol (v3)
 
-All events, payload schemas and limits are in
+All socket events, REST schemas, limits and flags are in
 [`backend/src/protocol.ts`](backend/src/protocol.ts). Every client payload is
-validated with zod; the server derives everything it can itself (room
-membership, timestamps, coins). In short:
+validated with zod; the server derives everything it can itself. In short:
 
-- `session:hello` (profile + preferences + deviceId) -> ack with coins and ICE
-  servers, then the client is queued. Sent again on every reconnect.
-- `match:found` -> `match:accept` / `match:decline` -> `call:start` (exactly
-  one side is the initiator) -> `rtc:signal` relays offer, answer and ICE
-  candidates between the two members of an active room only.
-- `chat:send` / `chat:message`, `chat:typing`, `call:skip`, `report:submit`,
-  `session:preferences`.
-- Server notices: `match:ended` (with a reason), `coins:update`, `friends:new`,
-  `session:replaced`, `server:shutdown`, `server:error`.
+- `POST /api/session` (Turnstile token, device id, date of birth or age token,
+  ToS version) -> session token; `GET /api/config` for public settings.
+- Socket handshake with `auth.sessionToken`, then `session:hello` (profile,
+  preferences, mode) -> `queue:waiting` (relaxation step, online count when
+  above the threshold) -> `match:found` -> accept (Preview) or the server
+  accepts (Instant) -> `call:start` (per-call ICE servers and bitrate caps)
+  -> `rtc:signal` relay -> `match:ended` -> re-queued.
+- `chat:send` / `chat:message` (with `redacted`), `report:submit` with
+  evidence, `call:failed`, `call:telemetry`, `moderation:signal`,
+  `safety:nudge`, `server:banner`, `matching:status`, `session:restricted`.
+- REST: `/api/appeals`, `/api/takedowns`, `/api/restrictions/:id`; admin API
+  under `/admin/api/*` with `Authorization: Bearer ADMIN_TOKEN`.
 
 ## Scaling notes
 
 - Run more replicas with `BACKEND_REPLICAS`. Any replica can serve any client:
-  sessions and rooms are in Redis, cross-replica events go through the Redis
-  adapter, and each replica heartbeats so sessions of a dead replica are
-  cleaned up and their partners notified.
-- No sticky sessions: clients use the websocket transport only. If you put
-  another load balancer in front and need long-polling, it must hash on
-  something stable per client (not the source IP, which is the proxy's).
-- Readiness: `GET /readyz` answers 503 when the store (Redis) is unreachable.
-  Liveness: `GET /healthz` (alias `/health`).
+  state is in Redis, cross-replica events go through the Redis adapter, and
+  each replica heartbeats so sessions of a dead replica are cleaned up.
+- No sticky sessions: clients use the websocket transport only.
+- Readiness: `GET /readyz` answers 503 when Redis is unreachable. Liveness:
+  `GET /healthz` (alias `/health`).
 - Metrics: `GET /metrics` on each replica (Prometheus text, optional bearer
-  token `METRICS_TOKEN`). The gateway does not expose `/metrics`; scrape the
-  replicas on the compose network.
-- Redis runs with append-only persistence on the `redis-data` volume.
-
-## TURN setup
-
-STUN is enough for most home networks, but users behind symmetric NAT,
-carrier-grade NAT or UDP-blocking firewalls need a TURN relay.
-
-1. Pick a secret: `openssl rand -hex 32`.
-2. Set `TURN_SECRET`, `TURN_URLS` (for example
-   `turn:<host>:3478?transport=udp,turn:<host>:3478?transport=tcp`) and, on
-   EC2, `TURN_EXTERNAL_IP=<public-ip>/<private-ip>` in `.env` (or the GitHub
-   secrets, see DEPLOYMENT.md).
-3. Open 3478 tcp+udp and the relay range `TURN_MIN_PORT`-`TURN_MAX_PORT` udp
-   (default 49160-49200) in the security group.
-4. `docker compose --profile turn up -d`.
-
-The backend then returns short-lived credentials (`TURN_TTL_SECONDS`) in the
-`session:hello` ack. The coturn service refuses to relay to private, loopback
-and link-local addresses, so it cannot be used to reach the host's network.
-TLS (`turns:` on 5349 or 443) needs certificates mounted into coturn and is
-not set up by default.
+  token `METRICS_TOKEN`); not exposed through the gateway.
+- Redis runs with append-only persistence on the `redis-data` volume and a
+  nightly snapshot to S3.
 
 ## Known limitations
 
-- Identity is an anonymous device id stored in the browser. It is easy to
-  reset or spoof, so bans, coins and friends are best-effort per browser. Real
-  enforcement needs accounts.
-- A deploy restarts the backend replicas, which drops live calls; clients show
-  "Reconnecting" and are re-queued automatically.
-- Moderation is report-based only; there is no content scanning.
-- Without a TURN relay some users on restrictive networks cannot connect.
+Honest list; the risk assessment ([docs/risk-assessment.md](docs/risk-assessment.md)) has the detail.
+
+- **Age is self-declared.** The date-of-birth gate stops honest children
+  only. There is no age estimation or verification in v1; verified adults
+  are planned for v1.1.
+- **Your partner sees your IP address by default.** Calls are peer to peer;
+  "Hide my IP" relays the call so the partner sees the relay instead, and it
+  can be switched off by the operator to control cost.
+- **Moderation of video happens on the devices**, not the server. The
+  classifiers miss some content, a modified client can switch off its own
+  checks (the receiver-side blur is the one that does not depend on the
+  sender), and there is no server-side frame sampling or hash matching of
+  live video.
+- **Profile photos are not checked on the server** (only blurred on the
+  receiver until the receiver's on-device check passes).
+- **Anyone can record their screen.** The watermark helps trace a recording;
+  it does not prevent it.
+- **Identity is an anonymous device id**, so restrictions are easy to evade
+  with a new browser or device.
+- **One operator**: matching may be limited to staffed hours.
+- **Logs are not yet kept for 180 days in India** (CERT-In); container logs
+  rotate at 10 MB x 3 files.
+- A deploy restarts the backend replicas, which drops live calls; clients
+  reconnect and are re-queued automatically.
+- Legal pages are drafts pending legal review.
 
 ## More
 
-- [DEPLOYMENT.md](DEPLOYMENT.md): CI/CD, GitHub secrets, host setup, rollback.
+- [DEPLOYMENT.md](DEPLOYMENT.md): CI/CD, GitHub secrets, Cloudflare, host setup, rollback.
 - [SECURITY.md](SECURITY.md): reporting vulnerabilities and the security model.
+- [docs/](docs/): runbooks, capacity, retention, risk assessment, decision log, launch checklist.

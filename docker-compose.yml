@@ -1,7 +1,11 @@
 # Chizzy production stack (also works locally: `docker compose up --build`).
 #
-#   browser --> frontend (static SPA, host :5173)
-#   browser --> gateway (nginx, host :3004) --least_conn--> backend x N --> redis
+#   browser --> Cloudflare --> host proxy (TLS) --> frontend (static SPA, host :5173)
+#   browser --> Cloudflare --> host proxy (TLS) --> gateway (nginx, host :3004)
+#                                   --least_conn--> backend x N --> redis
+#
+# TURN is a hosted provider (Cloudflare Realtime TURN, TURN_PROVIDER=cloudflare).
+# Nothing relays media on this host.
 #
 # Every variable is documented in .env.example. The deploy workflow copies this
 # file and deploy/ to the host and writes .env next to it.
@@ -57,15 +61,55 @@ services:
       TRUST_PROXY: "true"
       MAX_CONNECTIONS_PER_IP: ${MAX_CONNECTIONS_PER_IP:-10}
       MATCH_ACCEPT_TIMEOUT_MS: ${MATCH_ACCEPT_TIMEOUT_MS:-30000}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      METRICS_TOKEN: ${METRICS_TOKEN:-}
+      SHUTDOWN_GRACE_MS: ${SHUTDOWN_GRACE_MS:-10000}
+      # Session gate. Every variable is listed in .env.example; an empty value
+      # means "use the backend default" (backend/src/config.ts).
+      SESSION_SECRET: ${SESSION_SECRET:-}
+      SESSION_SECRET_PREVIOUS: ${SESSION_SECRET_PREVIOUS:-}
+      TURNSTILE_SECRET: ${TURNSTILE_SECRET:-}
+      TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
+      TURNSTILE_DISABLED: ${TURNSTILE_DISABLED:-false}
+      # true only when Cloudflare proxies the API hostname (CF-IPCountry is used
+      # for the country blocklist). The gateway forwards CF-* headers only for
+      # requests that really came from a Cloudflare address.
+      TRUST_CLOUDFLARE: ${TRUST_CLOUDFLARE:-false}
+      # ICE servers. TURN credentials are issued per matched call.
+      TURN_PROVIDER: ${TURN_PROVIDER:-}
+      CF_TURN_KEY_ID: ${CF_TURN_KEY_ID:-}
+      CF_TURN_API_TOKEN: ${CF_TURN_API_TOKEN:-}
+      CF_ACCOUNT_ID: ${CF_ACCOUNT_ID:-}
+      CF_ANALYTICS_TOKEN: ${CF_ANALYTICS_TOKEN:-}
       STUN_URLS: ${STUN_URLS:-}
       TURN_URLS: ${TURN_URLS:-}
       TURN_SECRET: ${TURN_SECRET:-}
       TURN_USERNAME: ${TURN_USERNAME:-}
       TURN_CREDENTIAL: ${TURN_CREDENTIAL:-}
-      TURN_TTL_SECONDS: ${TURN_TTL_SECONDS:-43200}
-      LOG_LEVEL: ${LOG_LEVEL:-info}
-      METRICS_TOKEN: ${METRICS_TOKEN:-}
-      SHUTDOWN_GRACE_MS: ${SHUTDOWN_GRACE_MS:-10000}
+      TURN_TTL_SECONDS: ${TURN_TTL_SECONDS:-}
+      # Observability. Sentry DSNs and the PostHog key are public by design.
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_DSN_FRONTEND: ${SENTRY_DSN_FRONTEND:-}
+      POSTHOG_KEY: ${POSTHOG_KEY:-}
+      POSTHOG_HOST: ${POSTHOG_HOST:-}
+      # Admin API (/admin/api/*). Empty ADMIN_TOKEN leaves the admin API off.
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      ADMIN_ALLOWED_IPS: ${ADMIN_ALLOWED_IPS:-}
+      # Evidence store. EVIDENCE_DIR is fixed to the evidence volume below;
+      # set EVIDENCE_S3_BUCKET to use S3 instead (credentials come from the
+      # EC2 instance role, never from this file).
+      EVIDENCE_DIR: /data/evidence
+      EVIDENCE_S3_BUCKET: ${EVIDENCE_S3_BUCKET:-}
+      AWS_REGION: ${AWS_REGION:-}
+    volumes:
+      # Shared by every replica on this host. The image creates /data/evidence
+      # owned by the node user, and a new named volume copies that ownership.
+      - evidence-data:/data/evidence
+    # Each websocket is one file descriptor; the default limit can be 1024.
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     deploy:
       replicas: ${BACKEND_REPLICAS:-2}
     healthcheck:
@@ -87,12 +131,19 @@ services:
   gateway:
     image: nginxinc/nginx-unprivileged:1.28.2-alpine3.23
     volumes:
-      - ./deploy/nginx/gateway.conf:/etc/nginx/conf.d/default.conf:ro
-    # deploy/deploy.sh sets this to a checksum of gateway.conf, so a changed
-    # config recreates the container (a file bind mount does not see the new
-    # file once it is replaced on disk).
+      # nginx.conf (worker limits) includes /etc/nginx/chizzy/gateway.conf.
+      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./deploy/nginx:/etc/nginx/chizzy:ro
+    # deploy/deploy.sh sets this to a checksum of deploy/nginx/, so a changed
+    # config recreates the container (a bind mount does not see new files once
+    # the directory is replaced on disk).
     labels:
       chizzy.gateway-conf-version: ${GATEWAY_CONF_VERSION:-local}
+    # Each proxied websocket uses two file descriptors (client and upstream).
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     # Set BIND_ADDRESS=127.0.0.1 when a host proxy (TLS) is in front, so the
     # stack cannot be reached around it.
     ports:
@@ -117,51 +168,17 @@ services:
         VITE_API_URL: ${VITE_API_URL:-http://localhost:3004}
     ports:
       - "${BIND_ADDRESS:-0.0.0.0}:${FRONTEND_PORT:-5173}:8080"
-    restart: unless-stopped
-    logging: *logging
-
-  # Optional TURN relay for users behind symmetric NAT or strict firewalls.
-  # Start with: docker compose --profile turn up -d
-  # Host networking because TURN needs a wide UDP relay port range. Open on the
-  # host firewall / security group: 3478 tcp+udp and TURN_MIN_PORT-TURN_MAX_PORT udp.
-  coturn:
-    image: coturn/coturn:4.7.0-alpine
-    profiles: ["turn"]
-    network_mode: host
-    environment:
-      TURN_SECRET: ${TURN_SECRET:-}
-      TURN_REALM: ${TURN_REALM:-chizzy}
-      TURN_EXTERNAL_IP: ${TURN_EXTERNAL_IP:-}
-      TURN_MIN_PORT: ${TURN_MIN_PORT:-49160}
-      TURN_MAX_PORT: ${TURN_MAX_PORT:-49200}
-    entrypoint: ["sh", "-c"]
-    # use-auth-secret: the backend issues short-lived HMAC credentials with the
-    # same TURN_SECRET. Relaying to private, loopback and link-local addresses
-    # (including the EC2 metadata endpoint) is denied so the relay cannot be
-    # used to reach the host's internal network.
-    command:
-      - |
-        if [ -z "$$TURN_SECRET" ]; then echo "coturn: TURN_SECRET is required" >&2; exit 1; fi
-        exec turnserver -n --log-file=stdout --no-cli --fingerprint \
-          --use-auth-secret --static-auth-secret="$$TURN_SECRET" --realm="$$TURN_REALM" \
-          --listening-port=3478 --min-port="$$TURN_MIN_PORT" --max-port="$$TURN_MAX_PORT" \
-          $${TURN_EXTERNAL_IP:+--external-ip="$$TURN_EXTERNAL_IP"} \
-          --no-multicast-peers --user-quota=12 --total-quota=1200 --stale-nonce=600 \
-          --denied-peer-ip=0.0.0.0-0.255.255.255 \
-          --denied-peer-ip=10.0.0.0-10.255.255.255 \
-          --denied-peer-ip=100.64.0.0-100.127.255.255 \
-          --denied-peer-ip=127.0.0.0-127.255.255.255 \
-          --denied-peer-ip=169.254.0.0-169.254.255.255 \
-          --denied-peer-ip=172.16.0.0-172.31.255.255 \
-          --denied-peer-ip=192.0.0.0-192.0.0.255 \
-          --denied-peer-ip=192.168.0.0-192.168.255.255 \
-          --denied-peer-ip=198.18.0.0-198.19.255.255 \
-          --denied-peer-ip=::1 \
-          --denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff \
-          --denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
     restart: unless-stopped
     logging: *logging
 
 volumes:
-  # Holds Redis data (coins, friends, bans). Never prune volumes on the host.
+  # Holds Redis data (coins, friends, flags, sessions, reports). Never prune
+  # volumes on the host.
   redis-data:
+  # Report evidence (frames and chat lines) when EVIDENCE_S3_BUCKET is unset.
+  # Retention is enforced by the backend (docs/retention.md). Never prune.
+  evidence-data:

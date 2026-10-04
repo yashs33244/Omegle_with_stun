@@ -18,6 +18,8 @@ FROM nginxinc/nginx-unprivileged:1.28.2-alpine3.23 AS runtime
 # nginx-api-origin.envsh). Defaults to the URL the bundle was built with.
 ARG VITE_API_URL=https://chizzyapi.itsyash.space
 ENV API_ORIGIN=${VITE_API_URL}
+# Worker and file descriptor limits (main context).
+COPY nginx-main.conf /etc/nginx/nginx.conf
 # The image entrypoint renders /etc/nginx/templates/*.template with envsubst.
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 COPY nginx-security-headers.conf /etc/nginx/templates/security-headers.inc.template
