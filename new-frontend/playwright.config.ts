@@ -14,10 +14,10 @@ import type { E2EOptions } from "./e2e/fixtures";
 const EXTERNAL_URL = process.env.E2E_BASE_URL;
 const CI = !!process.env.CI;
 
-const API_PORT = 3104;
-const WEB_PORT = 4173;
-const TIMEOUT_API_PORT = 3105;
-const TIMEOUT_WEB_PORT = 4174;
+const API_PORT = Number(process.env.E2E_API_PORT || 3104);
+const WEB_PORT = Number(process.env.E2E_WEB_PORT || 4173);
+const TIMEOUT_API_PORT = API_PORT + 1;
+const TIMEOUT_WEB_PORT = WEB_PORT + 1;
 /** Accept window of the dedicated accept-timeout backend. */
 const SHORT_ACCEPT_TIMEOUT_MS = 3000;
 
