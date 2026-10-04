@@ -321,6 +321,8 @@ export class MatchService {
   async disconnect(socketId: string): Promise<void> {
     this.local.delete(socketId);
     await this.store.withLock(async () => {
+      // Again under the lock: a hello that held the lock may have re-added it.
+      this.local.delete(socketId);
       const session = await this.store.getSession(socketId);
       if (!session) return;
       await this.removeSessionLocked(session, "partner-left");
