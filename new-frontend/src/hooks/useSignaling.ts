@@ -13,9 +13,12 @@ import {
   type HelloAck,
   type IceServer,
   type MatchEndReason,
+  type MatchMode,
   type Preferences,
   type Profile,
   type PublicProfile,
+  type ReportAck,
+  type ReportPayload,
   type ReportReason,
   type RtcSignal,
   type ServerToClientEvents,
@@ -304,6 +307,18 @@ const NOTICE_TTL_MS = 4000;
 
 export type SignalListener = (signal: RtcSignal) => void;
 
+/** Client events other hooks may send without touching this file. */
+export type ExtraClientEvent = "call:failed" | "call:telemetry" | "moderation:signal";
+type ExtraPayload<E extends ExtraClientEvent> = Parameters<ClientToServerEvents[E]>[0];
+
+export type ServerEvent = keyof ServerToClientEvents;
+type ServerHandler<E extends ServerEvent> = ServerToClientEvents[E];
+
+export interface SignalingOptions {
+  /** Requested match mode, read at every (re)connect. Defaults to "preview". */
+  mode?: MatchMode;
+}
+
 export interface Signaling {
   state: SignalingState;
   accept: () => void;
@@ -312,13 +327,20 @@ export interface Signaling {
   sendChat: (text: string) => Promise<ChatAck>;
   /** Call on every keystroke with whether the input has text. */
   setTyping: (typing: boolean) => void;
-  report: (reason: ReportReason, details?: string) => Promise<SimpleAck>;
+  report: (reason: ReportReason, details?: string, evidence?: ReportPayload["evidence"]) => Promise<ReportAck>;
   updatePreferences: (preferences: Preferences) => Promise<SimpleAck>;
   sendSignal: (signal: RtcSignal) => void;
   /** Subscribe to rtc:signal for a room. Signals that arrived before subscribing are replayed. */
   subscribeSignals: (roomId: string, listener: SignalListener) => () => void;
   /** Drop the socket and connect again (after an error). */
   retry: () => void;
+  /**
+   * Listen to any server event (also across reconnects) without editing this hook.
+   * Returns an unsubscribe function. Handlers run after this hook's own reducer handling.
+   */
+  subscribe: <E extends ServerEvent>(event: E, handler: ServerHandler<E>) => () => void;
+  /** Send telemetry, call-failed and moderation signals for the current connection. */
+  send: <E extends ExtraClientEvent>(event: E, payload: ExtraPayload<E>) => void;
 }
 
 function notConnected<T extends object>(): Promise<Ack<T>> {
@@ -327,8 +349,12 @@ function notConnected<T extends object>(): Promise<Ack<T>> {
 
 const MAX_PENDING_SIGNALS = 200;
 
-export function useSignaling(profile: Profile, preferences: Preferences): Signaling {
+export function useSignaling(profile: Profile, preferences: Preferences, options: SignalingOptions = {}): Signaling {
   const [state, dispatch] = useReducer(signalingReducer, initialSignalingState);
+  const modeRef = useRef<MatchMode>(options.mode ?? "preview");
+  modeRef.current = options.mode ?? "preview";
+  // Listeners registered through subscribe(), dispatched from socket.onAny so they survive reconnects.
+  const extraListeners = useRef(new Map<string, Set<(...args: unknown[]) => void>>());
 
   const socketRef = useRef<AppSocket | null>(null);
   const stateRef = useRef(state);
@@ -358,6 +384,9 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
       reconnectionDelayMax: 10000,
     });
     socketRef.current = socket;
+    socket.onAny((event: string, ...args: unknown[]) => {
+      extraListeners.current.get(event)?.forEach((handler) => handler(...args));
+    });
     let connectionSeq = 0;
     // Set on unmount, ban or replacement: never reconnect after that.
     let stopped = false;
@@ -373,6 +402,7 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
         deviceId: getDeviceId(),
         profile: profileRef.current,
         preferences: preferencesRef.current,
+        mode: modeRef.current,
       } as const;
       const valid = helloSchema.safeParse(payload);
       if (!valid.success) {
@@ -540,7 +570,7 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
     [setTyping],
   );
 
-  const report = useCallback(async (reason: ReportReason, details?: string): Promise<SimpleAck> => {
+  const report = useCallback(async (reason: ReportReason, details?: string, evidence?: ReportPayload["evidence"]): Promise<ReportAck> => {
     const { roomId } = stateRef.current;
     const socket = connectedSocket();
     if (!socket || !roomId) return notConnected();
@@ -548,7 +578,12 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
     try {
       return await socket
         .timeout(ACK_TIMEOUT_MS)
-        .emitWithAck("report:submit", { roomId, reason, ...(trimmed ? { details: trimmed } : {}) });
+        .emitWithAck("report:submit", {
+          roomId,
+          reason,
+          ...(trimmed ? { details: trimmed } : {}),
+          ...(evidence ? { evidence } : {}),
+        });
     } catch {
       return { ok: false, error: "internal", message: "The server did not answer" };
     }
@@ -580,6 +615,22 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
     };
   }, []);
 
+  const subscribe = useCallback(<E extends ServerEvent>(event: E, handler: ServerHandler<E>) => {
+    const set = extraListeners.current.get(event) ?? new Set();
+    const fn = handler as unknown as (...args: unknown[]) => void;
+    set.add(fn);
+    extraListeners.current.set(event, set);
+    return () => {
+      set.delete(fn);
+    };
+  }, []);
+
+  const send = useCallback(<E extends ExtraClientEvent>(event: E, payload: ExtraPayload<E>) => {
+    const socket = connectedSocket();
+    if (!socket) return;
+    (socket.emit as (e: string, p: unknown) => void)(event, payload);
+  }, []);
+
   const retry = useCallback(() => {
     const socket = socketRef.current;
     if (!socket || TERMINAL.includes(stateRef.current.status)) return;
@@ -599,5 +650,7 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
     sendSignal,
     subscribeSignals,
     retry,
+    subscribe,
+    send,
   };
 }

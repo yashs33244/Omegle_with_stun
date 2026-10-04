@@ -7,6 +7,7 @@ type Handler = (...args: unknown[]) => void;
 /** Just enough of a socket.io client socket for the hook. */
 class FakeSocket {
   handlers = new Map<string, Handler[]>();
+  anyHandlers: Handler[] = [];
   emitted: { event: string; payload: unknown; ack?: Handler }[] = [];
   connected = false;
   connect = vi.fn(() => {
@@ -19,6 +20,10 @@ class FakeSocket {
   });
   on(event: string, handler: Handler) {
     this.handlers.set(event, [...(this.handlers.get(event) ?? []), handler]);
+    return this;
+  }
+  onAny(handler: Handler) {
+    this.anyHandlers.push(handler);
     return this;
   }
   removeAllListeners() {
@@ -40,6 +45,7 @@ class FakeSocket {
   fire(event: string, ...args: unknown[]) {
     act(() => {
       (this.handlers.get(event) ?? []).forEach((h) => h(...args));
+      this.anyHandlers.forEach((h) => h(event, ...args));
     });
   }
   hellos() {
@@ -76,7 +82,7 @@ describe("useSignaling (socket wiring)", () => {
     const { result } = renderHook(() => useSignaling(profile, preferences));
     socket.fire("connect");
     expect(socket.hellos()).toHaveLength(1);
-    expect(socket.hellos()[0].payload).toMatchObject({ protocolVersion: 2, profile, preferences });
+    expect(socket.hellos()[0].payload).toMatchObject({ protocolVersion: 3, profile, preferences, mode: "preview" });
 
     act(() => socket.hellos()[0].ack?.(null, { ok: true, coins: 120, iceServers: [] }));
     expect(result.current.state.status).toBe("waiting");
@@ -89,6 +95,43 @@ describe("useSignaling (socket wiring)", () => {
     socket.fire("connect");
     expect(socket.hellos()).toHaveLength(2);
     expect(socket.hellos()[1].payload).toEqual(socket.hellos()[0].payload);
+  });
+
+  it("sends the requested match mode in hello", () => {
+    renderHook(() => useSignaling(profile, preferences, { mode: "instant" }));
+    socket.fire("connect");
+    expect(socket.hellos()[0].payload).toMatchObject({ mode: "instant" });
+  });
+
+  it("subscribe() receives server events across reconnects until unsubscribed", () => {
+    const { result } = renderHook(() => useSignaling(profile, preferences));
+    const seen: unknown[] = [];
+    let off = () => {};
+    act(() => {
+      off = result.current.subscribe("safety:nudge", (p) => seen.push(p));
+    });
+    socket.fire("connect");
+    socket.fire("safety:nudge", { roomId: "r1", kind: "contact-sharing" });
+    socket.fire("disconnect", "transport close");
+    socket.fire("connect");
+    socket.fire("safety:nudge", { roomId: "r1", kind: "link-hidden" });
+    act(() => off());
+    socket.fire("safety:nudge", { roomId: "r1", kind: "solicitation" });
+    expect(seen).toEqual([
+      { roomId: "r1", kind: "contact-sharing" },
+      { roomId: "r1", kind: "link-hidden" },
+    ]);
+  });
+
+  it("send() emits extra client events only while connected", () => {
+    const { result } = renderHook(() => useSignaling(profile, preferences));
+    socket.connected = false;
+    act(() => result.current.send("moderation:signal", { roomId: "00000000-0000-4000-8000-000000000000", kind: "no-face" }));
+    expect(socket.emitted.some((e) => e.event === "moderation:signal")).toBe(false);
+    socket.connected = true;
+    socket.fire("connect");
+    act(() => result.current.send("moderation:signal", { roomId: "00000000-0000-4000-8000-000000000000", kind: "no-face" }));
+    expect(socket.emitted.filter((e) => e.event === "moderation:signal")).toHaveLength(1);
   });
 
   it("reconnects by itself after a server-initiated disconnect", () => {

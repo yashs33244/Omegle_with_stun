@@ -24,6 +24,8 @@ const END_REASON_TEXT: Record<MatchEndReason, string> = {
   "partner-left": "Your chat partner has disconnected",
   reported: "User reported. Thank you for helping keep our community safe.",
   "partner-unavailable": "Your chat partner is no longer available.",
+  "connection-failed": "Couldn't connect the video. Finding someone new...",
+  restricted: "Your access has been restricted.",
 };
 
 const Shell: React.FC<{ children: React.ReactNode; testId?: string }> = ({ children, testId }) => (
