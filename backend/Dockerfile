@@ -18,8 +18,9 @@ RUN sed -i -E 's#https://registry\.npmjs\.org/#https://registry.npmjs.org/#g' bu
 # All dependencies, used to compile.
 FROM base AS build
 RUN bun install --frozen-lockfile
-COPY tsconfig.json ./
-COPY src ./src
+# Everything the build script may need (tsconfig*.json, src/); tests and local
+# artifacts are excluded by .dockerignore.
+COPY . .
 RUN bun run build
 
 # Production dependencies only.

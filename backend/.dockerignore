@@ -14,5 +14,6 @@ package-lock.json
 # Tests are not part of the image
 test
 tests
+test-node
 **/*.test.ts
 **/*.spec.ts
