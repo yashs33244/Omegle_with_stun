@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { ConfigError, loadConfig } from "../../src/config";
 
+const ADMIN = "a".repeat(32);
+
 describe("loadConfig", () => {
   test("defaults outside production", () => {
     const c = loadConfig({});
@@ -25,8 +27,24 @@ describe("loadConfig", () => {
   });
 
   test("production with an allowlist", () => {
-    const c = loadConfig({ NODE_ENV: "production", CORS_ORIGINS: "https://a.com, https://b.com:8443" });
+    const c = loadConfig({ NODE_ENV: "production", CORS_ORIGINS: "https://a.com, https://b.com:8443", ADMIN_TOKEN: ADMIN });
     expect(c.corsOrigins).toEqual(["https://a.com", "https://b.com:8443"]);
+  });
+
+  test("production requires a long ADMIN_TOKEN", () => {
+    expect(() => loadConfig({ NODE_ENV: "production", CORS_ORIGINS: "https://a.com" })).toThrow(/ADMIN_TOKEN/);
+    expect(() => loadConfig({ NODE_ENV: "production", CORS_ORIGINS: "https://a.com", ADMIN_TOKEN: "short" })).toThrow(
+      /ADMIN_TOKEN: must be at least 24 characters/,
+    );
+    expect(loadConfig({}).adminToken).toBeUndefined();
+  });
+
+  test("enforcement settings", () => {
+    const c = loadConfig({ ADMIN_ALLOWED_IPS: "203.0.113.1, 2001:db8::1", EVIDENCE_S3_BUCKET: "chizzy-evidence" });
+    expect(c.adminAllowedIps).toEqual(["203.0.113.1", "2001:db8::1"]);
+    expect(c.evidenceDir).toBe("./data/evidence");
+    expect(c.evidenceS3Bucket).toBe("chizzy-evidence");
+    expect(c.reportAfterEndMs).toBe(60_000);
   });
 
   test("rejects malformed origins and numbers", () => {
@@ -43,7 +61,7 @@ describe("loadConfig", () => {
     const text = await Bun.file(`${__dirname}/../../.env.example`).text();
     const env: Record<string, string> = {};
     for (const line of text.split("\n")) {
-      const m = /^([A-Z_]+)=(.*)$/.exec(line);
+      const m = /^([A-Z0-9_]+)=(.*)$/.exec(line);
       if (m) env[m[1]!] = m[2]!;
     }
     expect(Object.keys(env).sort()).toEqual(
@@ -51,6 +69,8 @@ describe("loadConfig", () => {
         "NODE_ENV", "PORT", "CORS_ORIGINS", "REDIS_URL", "TRUST_PROXY", "MAX_CONNECTIONS_PER_IP",
         "MATCH_ACCEPT_TIMEOUT_MS", "STUN_URLS", "TURN_URLS", "TURN_SECRET", "TURN_USERNAME",
         "TURN_CREDENTIAL", "TURN_TTL_SECONDS", "LOG_LEVEL", "METRICS_TOKEN", "SHUTDOWN_GRACE_MS",
+        "ADMIN_TOKEN", "ADMIN_ALLOWED_IPS", "EVIDENCE_DIR", "EVIDENCE_S3_BUCKET", "EVIDENCE_S3_REGION",
+        "EVIDENCE_S3_KMS_KEY_ID", "PSEUDONYM_SALT", "TURNSTILE_SECRET_KEY",
       ].sort(),
     );
     expect(() => loadConfig(env)).not.toThrow();
