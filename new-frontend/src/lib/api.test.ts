@@ -52,7 +52,7 @@ describe("api client", () => {
   });
 
   it("returns null for a restriction that does not exist", async () => {
-    const fetchImpl = vi.fn(async () => jsonResponse(404, { error: "not_found" }));
+    const fetchImpl = vi.fn(async (_url: string) => jsonResponse(404, { error: "not_found" }));
     const api = createApi(fetchImpl, "");
     await expect(api.getRestriction("abc", "dev 1")).resolves.toBeNull();
     expect(fetchImpl.mock.calls[0]?.[0]).toBe("/api/restrictions/abc?deviceId=dev%201");
