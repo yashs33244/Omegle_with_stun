@@ -21,6 +21,8 @@ test("two strangers onboard, match, accept and see each other's video", async ({
   await expectMatchPrompt(ava.page, "Ben", acceptTimeoutMs);
   await expectMatchPrompt(ben.page, "Ava", acceptTimeoutMs);
   await expect(ben.page.getByRole("img", { name: "Ava's photo" }), "Ava's captured photo reaches Ben").toBeVisible();
+  // Blurred on Ben's device until the on-device classifier passes it.
+  await expect(ben.page.getByRole("img", { name: "Ava's photo" })).toHaveAttribute("data-photo-check", "safe");
   await expect(ben.page.getByTestId("match-prompt")).toContainText("Interested in");
 
   // The countdown runs.

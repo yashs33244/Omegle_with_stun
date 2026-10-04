@@ -56,7 +56,9 @@ const backendEnv = (port: number, acceptTimeoutMs: number) => ({
 const frontendServer = (port: number, apiPort: number) => ({
   command: `npx vite build --outDir dist-e2e/${port} --emptyOutDir && npx vite preview --config e2e/vite.preview.config.ts --outDir dist-e2e/${port} --port ${port} --strictPort`,
   url: web(port),
-  env: { VITE_API_URL: api(apiPort), BROWSERSLIST_IGNORE_OLD_DATA: "1" },
+  // VITE_E2E enables the moderation test switches (src/moderation/testHooks.ts);
+  // an empty VITE_PROBE_STUN_URLS keeps the pre-flight probe off third-party STUN servers.
+  env: { VITE_API_URL: api(apiPort), BROWSERSLIST_IGNORE_OLD_DATA: "1", VITE_E2E: "1", VITE_PROBE_STUN_URLS: "" },
   reuseExistingServer: false,
   timeout: 120_000,
   stdout: "ignore" as const,

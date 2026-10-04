@@ -170,7 +170,7 @@ describe("Landing photo capture", () => {
     const drawImage = vi.fn();
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
       drawImage,
-    } as unknown as CanvasRenderingContext2D);
+    } as never); // getContext has WebGPU overloads once TFJS types are loaded
     const toDataURL = vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(jpeg);
 
     const { user, dialog, video } = await openCapture();

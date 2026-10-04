@@ -77,6 +77,18 @@ describe("signalingReducer", () => {
     expect(s.status).toBe("in-call");
   });
 
+  it("keeps the match mode and the per-call media until the room ends", () => {
+    const media = { iceServers: [{ urls: "turn:t", username: "u", credential: "c" }], maxBitrateKbps: 900, relayMaxBitrateKbps: 500, privateModeAllowed: true };
+    let s = run([hello, { ...found, mode: "instant" }]);
+    expect(s.matchMode).toBe("instant");
+    s = run([{ ...start, media }], s);
+    expect(s.callMedia).toEqual(media);
+    expect(s.matchMode).toBe("instant");
+    s = run([{ type: "match-ended", roomId: ROOM, reason: "skipped" }], s);
+    expect(s.callMedia).toBeNull();
+    expect(s.matchMode).toBeNull();
+  });
+
   it("ignores events for another room", () => {
     const base = run([hello, found]);
     expect(run([{ type: "partner-accepted", roomId: OTHER_ROOM }], base)).toBe(base);

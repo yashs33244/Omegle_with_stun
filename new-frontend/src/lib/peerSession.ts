@@ -1,3 +1,4 @@
+import { rtcConfiguration } from "./connectivity";
 import type { IceServer, RtcSignal } from "./protocol";
 
 export type ConnectionQuality = "EXCELLENT" | "GOOD" | "FAIR" | "POOR" | "DISCONNECTED";
@@ -6,6 +7,8 @@ export interface PeerSessionOptions {
   roomId: string;
   initiator: boolean;
   iceServers: IceServer[];
+  /** "Hide my IP": relay-only ICE (iceTransportPolicy "relay"). */
+  privateMode?: boolean;
   localStream: MediaStream | null;
   sendSignal: (signal: RtcSignal) => void;
   onRemoteStream: (stream: MediaStream) => void;
@@ -30,11 +33,16 @@ export class PeerSession {
   private chain: Promise<void> = Promise.resolve();
   private remoteStream: MediaStream | null = null;
   private closed = false;
+  private videoSender: RTCRtpSender | null = null;
+  private audioSender: RTCRtpSender | null = null;
+  private cameraTrack: MediaStreamTrack | null = null;
+  private paused = false;
+  private placeholder: MediaStreamTrack | null = null;
 
   constructor(opts: PeerSessionOptions) {
     this.opts = opts;
     const create = opts.createPeerConnection ?? ((config) => new RTCPeerConnection(config));
-    this.pc = create({ iceServers: opts.iceServers as RTCIceServer[] });
+    this.pc = create(rtcConfiguration(opts.iceServers, opts.privateMode ?? false));
 
     this.pc.onicecandidate = (e) => {
       if (!e.candidate || this.closed) return;
@@ -67,7 +75,15 @@ export class PeerSession {
     };
 
     const stream = opts.localStream;
-    stream?.getTracks().forEach((track) => this.pc.addTrack(track, stream));
+    stream?.getTracks().forEach((track) => {
+      const sender = this.pc.addTrack(track, stream) as RTCRtpSender | undefined;
+      if (track.kind === "video") {
+        this.videoSender = sender ?? null;
+        this.cameraTrack = track;
+      } else if (track.kind === "audio") {
+        this.audioSender = sender ?? null;
+      }
+    });
     // Still ask for the partner's media of any kind we have none to send
     // (no stream at all, or a camera-only stream when there is no microphone).
     if (!stream || stream.getAudioTracks().length === 0) {
@@ -95,6 +111,58 @@ export class PeerSession {
       if (signal.description) await this.handleDescription(signal.description);
       else if (signal.candidate) await this.handleCandidate(signal.candidate);
     });
+  }
+
+  /**
+   * ICE restart. Only the initiator sends offers, so only it restarts; the
+   * other side answers the restart offer with fresh credentials on its own.
+   */
+  restartIce(): Promise<void> {
+    if (!this.opts.initiator) return Promise.resolve();
+    return this.enqueue(async () => {
+      if (this.pc.signalingState !== "stable") return;
+      const offer = await this.pc.createOffer({ iceRestart: true });
+      if (this.closed) return;
+      await this.pc.setLocalDescription(offer);
+      this.sendDescription(offer);
+    });
+  }
+
+  /** The sender of our camera, for bitrate limits. */
+  get video(): RTCRtpSender | null {
+    return this.videoSender;
+  }
+
+  /**
+   * The face gate's pause: send the placeholder (or nothing) instead of the
+   * camera while paused, the camera again afterwards.
+   */
+  setVideoPaused(paused: boolean, placeholder: MediaStreamTrack | null): void {
+    this.paused = paused;
+    this.placeholder = placeholder;
+    this.syncVideo();
+  }
+
+  /**
+   * The local camera or microphone was replaced (camera flip, iOS recovery
+   * after backgrounding): swap the tracks without renegotiating.
+   */
+  setLocalStream(stream: MediaStream | null): void {
+    if (!stream || this.closed) return;
+    const audio = stream.getAudioTracks()[0];
+    if (audio && this.audioSender && this.audioSender.track !== audio) {
+      this.audioSender.replaceTrack(audio).catch((err) => console.warn("Could not replace the audio track", err));
+    }
+    const video = stream.getVideoTracks()[0];
+    if (video) this.cameraTrack = video;
+    this.syncVideo();
+  }
+
+  private syncVideo(): void {
+    if (this.closed || !this.videoSender) return;
+    const wanted = this.paused ? this.placeholder : this.cameraTrack;
+    if (this.videoSender.track === wanted) return;
+    this.videoSender.replaceTrack(wanted).catch((err) => console.warn("Could not replace the video track", err));
   }
 
   /** Candidates waiting for the remote description (exposed for tests). */

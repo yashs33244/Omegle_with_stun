@@ -103,6 +103,37 @@ describe("useSignaling (socket wiring)", () => {
     expect(socket.hellos()[0].payload).toMatchObject({ mode: "instant" });
   });
 
+  it("accepts an instant-mode match by itself and keeps the call:start media", () => {
+    const roomId = "00000000-0000-4000-8000-000000000001";
+    const { result } = renderHook(() => useSignaling(profile, preferences, { mode: "instant" }));
+    socket.fire("connect");
+    const match = { roomId, partner: { ...profile, gender: undefined }, isFriend: false, expiresAt: 2, serverNow: 1, sharedTopics: [] };
+    socket.fire("match:found", { ...match, mode: "instant" });
+    expect(socket.emitted.filter((e) => e.event === "match:accept")).toEqual([{ event: "match:accept", payload: { roomId }, ack: undefined }]);
+    expect(result.current.state.status).toBe("starting-call");
+    expect(result.current.state.matchMode).toBe("instant");
+
+    const media = { iceServers: [{ urls: "turn:t", username: "u", credential: "c" }], maxBitrateKbps: 900, relayMaxBitrateKbps: 500, privateModeAllowed: true };
+    socket.fire("call:start", { roomId, initiator: true, ...media });
+    expect(result.current.state.status).toBe("in-call");
+    expect(result.current.state.callMedia).toEqual(media);
+  });
+
+  it("leaves a preview-mode match to the user", () => {
+    renderHook(() => useSignaling(profile, preferences, { mode: "preview" }));
+    socket.fire("connect");
+    socket.fire("match:found", {
+      roomId: "00000000-0000-4000-8000-000000000002",
+      partner: profile,
+      isFriend: false,
+      expiresAt: 2,
+      serverNow: 1,
+      sharedTopics: [],
+      mode: "preview",
+    });
+    expect(socket.emitted.some((e) => e.event === "match:accept")).toBe(false);
+  });
+
   it("subscribe() receives server events across reconnects until unsubscribed", () => {
     const { result } = renderHook(() => useSignaling(profile, preferences));
     const seen: unknown[] = [];
