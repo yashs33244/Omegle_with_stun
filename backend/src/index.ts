@@ -3,9 +3,11 @@
  */
 import { ConfigError, loadConfig, type Config } from "./config";
 import { createLogger } from "./logger";
+import { connectRedisAdapter, type RedisAdapterHandle } from "./realtime/redisAdapter";
 import { createServer } from "./server";
 import { MemoryStore } from "./store/MemoryStore";
 import type { MatchStore } from "./store/MatchStore";
+import { RedisStore } from "./store/RedisStore";
 
 function readConfig(): Config {
   try {
@@ -24,17 +26,18 @@ async function main(): Promise<void> {
   const logger = createLogger(config.logLevel, config.instanceId);
 
   let store: MatchStore;
+  let adapter: RedisAdapterHandle | undefined;
   if (config.redisUrl) {
-    // RedisStore is added by the backend-redis lane; until then refuse to
-    // pretend we share state across replicas.
-    logger.fatal("REDIS_URL is set but this build has no Redis store");
-    process.exit(1);
+    // Shared state and cross-instance emits: safe to run several replicas.
+    store = await RedisStore.connect(config.redisUrl, { logger });
+    adapter = await connectRedisAdapter(config.redisUrl, logger);
+    logger.info("using Redis store and Socket.IO Redis adapter");
   } else {
     store = new MemoryStore();
     logger.info("using in-memory store (single instance)");
   }
 
-  const server = createServer(config, { store, logger });
+  const server = createServer(config, { store, logger, configureIo: adapter?.install });
   const port = await server.listen(config.port);
   logger.info({ port, env: config.nodeEnv }, "listening");
 
@@ -51,6 +54,7 @@ async function main(): Promise<void> {
     server
       .close()
       .then(() => store.close())
+      .then(() => adapter?.close())
       .then(
         () => {
           logger.info("shutdown complete");
