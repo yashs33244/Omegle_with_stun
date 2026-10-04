@@ -140,6 +140,9 @@ start_tag() {
 main() {
   local new_tag=${1:-} prev_tag=""
   [ -n "$new_tag" ] || die "usage: deploy.sh <image-tag>"
+  # .env is the single source of truth for these; a value exported in the
+  # shell would override it and break rollback.
+  unset IMAGE_TAG GATEWAY_CONF_VERSION
   command -v docker >/dev/null || die "docker is not installed"
   command -v curl >/dev/null || die "curl is not installed"
   docker compose version >/dev/null 2>&1 || die "the docker compose plugin is not installed"
