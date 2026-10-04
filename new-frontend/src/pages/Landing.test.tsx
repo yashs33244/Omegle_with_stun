@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { RoomProps } from "./Room";
 
@@ -149,6 +149,55 @@ describe("Landing profile validation", () => {
     await user.click(within(dialog).getByTestId("begin-chat"));
     await screen.findByTestId("room");
     expect(roomProps.current?.profile.gender).toBe("unspecified");
+  });
+});
+
+describe("Landing photo capture", () => {
+  async function openCapture() {
+    const user = userEvent.setup();
+    render(<Landing />);
+    const start = await screen.findByTestId("start-chat");
+    await waitFor(() => expect(start).toBeEnabled());
+    await user.click(start);
+    const dialog = await screen.findByRole("dialog");
+    const video = within(dialog).getByLabelText("Camera preview") as HTMLVideoElement;
+    return { user, dialog, video };
+  }
+
+  it("enables capture once the preview has a frame and sends the small photo", async () => {
+    const jpeg = "data:image/jpeg;base64,QUJD";
+    const drawImage = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      drawImage,
+    } as unknown as CanvasRenderingContext2D);
+    const toDataURL = vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(jpeg);
+
+    const { user, dialog, video } = await openCapture();
+    const capture = within(dialog).getByTestId("capture-photo");
+    expect(capture).toBeDisabled();
+
+    Object.defineProperty(video, "videoWidth", { configurable: true, value: 1280 });
+    Object.defineProperty(video, "videoHeight", { configurable: true, value: 720 });
+    fireEvent.loadedData(video);
+    expect(capture).toBeEnabled();
+
+    await user.click(capture);
+    expect(toDataURL).toHaveBeenCalledWith("image/jpeg", 0.8);
+    expect(drawImage).toHaveBeenCalledWith(video, 280, 0, 720, 720, 0, 0, 256, 256);
+    expect(await within(dialog).findByAltText("Your profile photo")).toHaveAttribute("src", jpeg);
+
+    await user.type(within(dialog).getByTestId("name-input"), "Asha");
+    await user.click(within(dialog).getByTestId("begin-chat"));
+    expect(roomProps.current?.profile.photo).toBe(jpeg);
+  });
+
+  it("shows why a capture failed instead of failing silently", async () => {
+    const { user, dialog, video } = await openCapture();
+    // loadeddata fired but the frame size is still unknown.
+    fireEvent.loadedData(video);
+    await user.click(within(dialog).getByTestId("capture-photo"));
+    expect(within(dialog).getByRole("alert")).toHaveTextContent("not showing a picture yet");
+    expect(within(dialog).getByTestId("capture-photo")).toBeInTheDocument();
   });
 });
 
