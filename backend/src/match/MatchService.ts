@@ -245,7 +245,11 @@ export class MatchService {
       const found = await this.memberRoomLocked(socketId, roomId);
       if (!found || found.room.state !== "pending") return;
       const { room, index } = found;
-      if (this.now() > room.expiresAt + this.config.matchAcceptGraceMs) return; // the sweeper ends it
+      if (this.now() > room.expiresAt + this.config.matchAcceptGraceMs) {
+        // Too late. Say so instead of dropping it; the sweeper ends the room.
+        this.emitter.emit(socketId, "server:error", { code: "not_in_room", message: "the match expired" });
+        return;
+      }
       if (room.accepted[index]) return;
       room.accepted[index] = true;
       const other = room.members[1 - index]!;

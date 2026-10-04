@@ -225,6 +225,18 @@ describe("ending a match", () => {
     expect((await start).roomId).toBe(roomId);
   });
 
+  test("an accept after the grace window is answered with not_in_room, not dropped", async () => {
+    // No sweeps: the expired room stays pending so the late accept reaches it.
+    ts = await startServer({ matchAcceptTimeoutMs: 100, matchAcceptGraceMs: 50, sweepIntervalMs: 60_000 });
+    const { ca, roomId } = await matchedPair(ts);
+    await new Promise((r) => setTimeout(r, 250));
+    const error = next(ca, "server:error");
+    const start = arrives(ca, "call:start", 200);
+    ca.emit("match:accept", { roomId });
+    expect(await error).toEqual({ code: "not_in_room", message: "the match expired" });
+    expect(await start).toBe(false);
+  });
+
   test("skip during a call ends it, re-queues both and escalates the block", async () => {
     ts = await startServer();
     const { ca, cb, roomId, a, b } = await activePair(ts);
