@@ -1,87 +1,106 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 
+/**
+ * Owns the camera and microphone. The live stream is kept in a ref so cleanup
+ * always stops the current tracks (state captured by an old closure would be
+ * stale). Mute and camera-off flip track.enabled, so the peer connection keeps
+ * its senders and the partner simply receives silence or black frames.
+ */
 export const useMediaStream = () => {
-  const [localAudioTrack, setLocalAudioTrack] = useState<MediaStreamTrack | null>(null);
-  const [localVideoTrack, setLocalVideoTrack] = useState<MediaStreamTrack | null>(null);
-  const [hasPermission, setHasPermission] = useState<boolean>(false);
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [error, setError] = useState<string | null>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const [hasPermission, setHasPermission] = useState<boolean>(false);
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [error, setError] = useState<string | null>(null);
+  const [micEnabled, setMicEnabledState] = useState<boolean>(true);
+  const [cameraEnabled, setCameraEnabledState] = useState<boolean>(true);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const mountedRef = useRef<boolean>(true);
+  // Bumped on every start/stop so a slow getUserMedia from an older call is discarded.
+  const requestRef = useRef<number>(0);
 
-  const getCam = async (): Promise<void> => {
+  const stopStream = useCallback(() => {
+    requestRef.current += 1;
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+    streamRef.current = null;
+    if (!mountedRef.current) return;
+    setStream(null);
+    setHasPermission(false);
+    setIsLoading(false);
+  }, []);
+
+  const getCam = useCallback(async (): Promise<void> => {
+    const request = ++requestRef.current;
     setIsLoading(true);
     setError(null);
-    
+
     try {
       const mediaStream = await navigator.mediaDevices.getUserMedia({
         video: { width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: true
+        audio: true,
       });
-      
-      const audioTrack = mediaStream.getAudioTracks()[0];
-      const videoTrack = mediaStream.getVideoTracks()[0];
-      
-      setLocalAudioTrack(audioTrack);
-      setLocalVideoTrack(videoTrack);
+      if (request !== requestRef.current || !mountedRef.current) {
+        mediaStream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      streamRef.current?.getTracks().forEach((track) => track.stop());
+      streamRef.current = mediaStream;
       setStream(mediaStream);
       setHasPermission(true);
-      
-      console.log('Camera stream acquired successfully');
-    } catch (error) {
-      console.error('Error accessing media devices:', error);
+      setMicEnabledState(true);
+      setCameraEnabledState(true);
+    } catch (err) {
+      if (request !== requestRef.current || !mountedRef.current) return;
+      console.error('Error accessing media devices:', err);
       setError('Unable to access camera and microphone. Please check permissions.');
       setHasPermission(false);
     } finally {
-      setIsLoading(false);
+      if (request === requestRef.current && mountedRef.current) setIsLoading(false);
     }
-  };
+  }, []);
 
-  const stopStream = () => {
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop());
-      setStream(null);
-    }
-    if (localAudioTrack) {
-      localAudioTrack.stop();
-      setLocalAudioTrack(null);
-    }
-    if (localVideoTrack) {
-      localVideoTrack.stop();
-      setLocalVideoTrack(null);
-    }
-    setHasPermission(false);
-  };
-
-  const restartStream = () => {
+  const restartStream = useCallback(() => {
     stopStream();
-    getCam();
-  };
+    void getCam();
+  }, [stopStream, getCam]);
 
-  // Initialize camera once on mount
+  const setMicEnabled = useCallback((enabled: boolean) => {
+    streamRef.current?.getAudioTracks().forEach((track) => {
+      track.enabled = enabled;
+    });
+    setMicEnabledState(enabled);
+  }, []);
+
+  const setCameraEnabled = useCallback((enabled: boolean) => {
+    streamRef.current?.getVideoTracks().forEach((track) => {
+      track.enabled = enabled;
+    });
+    setCameraEnabledState(enabled);
+  }, []);
+
+  // Acquire the camera once on mount; stop every track on unmount.
   useEffect(() => {
-    getCam();
-    
+    mountedRef.current = true;
+    void getCam();
     return () => {
-      // Cleanup on unmount
+      mountedRef.current = false;
       stopStream();
     };
-  }, []); // Empty dependency array to run only once
+  }, [getCam, stopStream]);
 
-  // Update video element when stream changes
+  // Update the preview element when the stream changes.
   useEffect(() => {
     if (videoRef.current && stream) {
       videoRef.current.srcObject = stream;
-      videoRef.current.play().catch(err => {
-        console.log('Video play failed:', err);
-        // Don't set this as an error, it's often just a timing issue
+      videoRef.current.play().catch(() => {
+        // Autoplay of a muted preview can still be interrupted by a re-render; harmless.
       });
     }
   }, [stream]);
 
   return {
-    localAudioTrack,
-    localVideoTrack,
+    localAudioTrack: stream?.getAudioTracks()[0] ?? null,
+    localVideoTrack: stream?.getVideoTracks()[0] ?? null,
     videoRef,
     hasPermission,
     isLoading,
@@ -89,6 +108,10 @@ export const useMediaStream = () => {
     getCam,
     stopStream,
     restartStream,
-    stream
+    stream,
+    micEnabled,
+    cameraEnabled,
+    setMicEnabled,
+    setCameraEnabled,
   };
 };
