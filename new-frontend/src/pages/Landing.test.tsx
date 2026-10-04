@@ -78,6 +78,24 @@ describe("Landing profile validation", () => {
     expect(within(dialog).queryByText("Enter your name.")).not.toBeInTheDocument();
   });
 
+  it("reserves the name error line so showing it does not shift the controls below", async () => {
+    const { user, dialog } = await openDetails();
+    const name = within(dialog).getByTestId("name-input");
+    expect(name).toHaveFocus();
+    const slot = dialog.querySelector("#profile-name-error");
+    expect(slot).toBeInTheDocument();
+    expect(slot).toHaveClass("min-h-4");
+    expect(slot).toBeEmptyDOMElement();
+    expect(name).not.toHaveAttribute("aria-describedby");
+
+    // Blurring the empty name fills the same element instead of inserting a new one.
+    await user.click(within(dialog).getByTestId("topic-music"));
+    expect(dialog.querySelector("#profile-name-error")).toBe(slot);
+    expect(slot).toHaveTextContent("Enter your name.");
+    expect(name).toHaveAttribute("aria-describedby", "profile-name-error");
+    expect(within(dialog).getByTestId("topic-music")).toHaveAttribute("aria-pressed", "true");
+  });
+
   it("requires at least one topic", async () => {
     const { user, dialog } = await openDetails();
     await user.type(within(dialog).getByTestId("name-input"), "Asha");

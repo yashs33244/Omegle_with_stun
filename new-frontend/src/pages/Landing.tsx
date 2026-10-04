@@ -467,11 +467,11 @@ export const Landing = () => {
                     }}
                     className="border-gray-300 text-black"
                   />
-                  {showNameError && (
-                    <p id="profile-name-error" className="text-xs text-red-600">
-                      {errors.name}
-                    </p>
-                  )}
+                  {/* Always rendered with a reserved line, so showing the error on blur does not
+                      move the controls below while a click on one of them is in progress. */}
+                  <p id="profile-name-error" className="min-h-4 text-xs text-red-600">
+                    {showNameError ? errors.name : null}
+                  </p>
                 </div>
 
                 <div className="space-y-2">
