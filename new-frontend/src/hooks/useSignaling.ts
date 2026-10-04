@@ -328,7 +328,16 @@ export interface Signaling {
   sendChat: (text: string) => Promise<ChatAck>;
   /** Call on every keystroke with whether the input has text. */
   setTyping: (typing: boolean) => void;
-  report: (reason: ReportReason, details?: string, evidence?: ReportPayload["evidence"]) => Promise<ReportAck>;
+  /**
+   * Reports a partner. Pass `roomId` to pin the report to the room the user saw (a post-call
+   * report, or a call that ended while the report sheet was open); defaults to the current room.
+   */
+  report: (
+    reason: ReportReason,
+    details?: string,
+    evidence?: ReportPayload["evidence"],
+    roomId?: string,
+  ) => Promise<ReportAck>;
   updatePreferences: (preferences: Preferences) => Promise<SimpleAck>;
   sendSignal: (signal: RtcSignal) => void;
   /** Subscribe to rtc:signal for a room. Signals that arrived before subscribing are replayed. */
@@ -583,8 +592,13 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
     [setTyping],
   );
 
-  const report = useCallback(async (reason: ReportReason, details?: string, evidence?: ReportPayload["evidence"]): Promise<ReportAck> => {
-    const { roomId } = stateRef.current;
+  const report = useCallback(async (
+    reason: ReportReason,
+    details?: string,
+    evidence?: ReportPayload["evidence"],
+    targetRoomId?: string,
+  ): Promise<ReportAck> => {
+    const roomId = targetRoomId ?? stateRef.current.roomId;
     const socket = connectedSocket();
     if (!socket || !roomId) return notConnected();
     const trimmed = details?.trim().slice(0, LIMITS.reportDetailsMax);

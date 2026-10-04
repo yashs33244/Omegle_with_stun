@@ -16,6 +16,9 @@ const Takedown = lazy(() => import("./pages/legal/Takedown"));
 
 const PageFallback = () => <div className="min-h-screen bg-gray-100" aria-busy="true" />;
 
+// The moderation console is its own chunk, never part of the main bundle.
+const AdminPage = lazy(() => import("./pages/admin/AdminPage"));
+
 const App = () => (
   <ErrorBoundary>
     <BrowserRouter>
@@ -27,6 +30,14 @@ const App = () => (
               <Gate>
                 <Landing />
               </Gate>
+            }
+          />
+          <Route
+            path="/admin/*"
+            element={
+              <Suspense fallback={<p className="p-4 text-sm">Loading...</p>}>
+                <AdminPage />
+              </Suspense>
             }
           />
           <Route path="/terms" element={<Terms />} />

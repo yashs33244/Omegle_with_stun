@@ -75,6 +75,10 @@ export async function onboard(s: Stranger, opts: OnboardOptions = {}): Promise<v
   }
 
   await page.getByTestId("begin-chat").click();
+  // First visit on this device: the safety card comes before anything connects.
+  const coach = page.getByTestId("safety-coach-continue");
+  await expect(coach.or(page.getByTestId("status-waiting")).or(page.getByTestId("match-prompt")).first()).toBeVisible();
+  if (await coach.isVisible()) await coach.click();
   // Queued; a partner who is already waiting may match straight away.
   await expect(page.getByTestId("status-waiting").or(page.getByTestId("match-prompt"))).toBeVisible();
 }

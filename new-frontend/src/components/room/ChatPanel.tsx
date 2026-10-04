@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Send, X } from "lucide-react";
+import { Send, ShieldAlert, X } from "lucide-react";
 import { Button } from "@/components/retroui/Button";
 import { Input } from "@/components/retroui/Input";
 import { LIMITS } from "@/lib/protocol";
 import type { ChatEntry } from "@/hooks/useSignaling";
+import { RedactedText } from "@/components/safety/RedactedText";
 
 interface ChatPanelProps {
   messages: ChatEntry[];
@@ -14,6 +15,10 @@ interface ChatPanelProps {
   onSend: (text: string) => void;
   /** Called on every edit with whether the input currently has text. */
   onTyping: (typing: boolean) => void;
+  /** Message ids the server's chat guard redacted. */
+  redactedIds?: ReadonlySet<string>;
+  /** Inline safety notice after a safety:nudge in this call. */
+  safetyNotice?: string | null;
 }
 
 const TypingDots: React.FC<{ size: "sm" | "md" }> = ({ size }) => {
@@ -42,6 +47,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   onClose,
   onSend,
   onTyping,
+  redactedIds,
+  safetyNotice,
 }) => {
   const [draft, setDraft] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
@@ -49,7 +56,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   // Auto scroll to the newest message.
   useEffect(() => {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
-  }, [messages.length]);
+  }, [messages.length, safetyNotice]);
 
   const send = () => {
     const text = draft.trim();
@@ -115,12 +122,33 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                     message.from === "me" ? "bg-yellow-500 text-black" : "bg-gray-700 text-white"
                   } ${message.delivery === "pending" ? "opacity-70" : ""}`}
                 >
-                  {message.text}
+                  {redactedIds?.has(message.id) && message.from === "partner" ? (
+                    <RedactedText text={message.text} />
+                  ) : (
+                    message.text
+                  )}
                 </div>
+                {redactedIds?.has(message.id) && (
+                  <span className="text-xs text-gray-400 mt-1" data-testid="redaction-note">
+                    {message.from === "me"
+                      ? "Links, handles or phone numbers were hidden from them for safety."
+                      : "Links, handles and phone numbers are hidden for safety early in a call."}
+                  </span>
+                )}
                 {message.delivery === "failed" && <span className="text-xs text-red-400 mt-1">Not delivered</span>}
               </div>
             ),
           )
+        )}
+        {safetyNotice && (
+          <p
+            role="note"
+            data-testid="chat-safety-notice"
+            className="flex items-start gap-2 rounded-lg border border-yellow-500/60 bg-yellow-500/10 p-2 text-xs text-yellow-200"
+          >
+            <ShieldAlert className="w-4 h-4 shrink-0" aria-hidden="true" />
+            <span>{safetyNotice}</span>
+          </p>
         )}
       </div>
 
