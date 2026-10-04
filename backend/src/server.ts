@@ -10,6 +10,11 @@ import { createApp } from "./http/app";
 import type { Logger } from "./logger";
 import { MatchService } from "./match/MatchService";
 import { createMetrics, type Metrics } from "./metrics";
+import { MemorySignalStore, RedisSignalStore, SafetySignals } from "./safety/signals";
+import type { FetchFn } from "./turn/cloudflare";
+import { TurnSpendPoller, cloudflareEgressQuery } from "./turn/spendPoller";
+import { MemoryTurnStore, RedisTurnStore } from "./turn/store";
+import { TurnService } from "./turn/TurnService";
 import { attachHandlers, createEmitter, createSocketServer, type AppServer } from "./realtime/socket";
 import type { MatchStore } from "./store/MatchStore";
 
@@ -26,6 +31,8 @@ export interface ServerDeps {
    * The caller owns and closes it.
    */
   redis?: Redis;
+  /** Outbound HTTP for Cloudflare (TURN credentials, analytics). Tests inject a fake; defaults to global fetch. */
+  fetch?: FetchFn;
 }
 
 export interface ChizzyServer {
@@ -58,10 +65,43 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
   const io = createSocketServer(httpServer, config);
   deps.configureIo?.(io);
 
-  const service = new MatchService({ store, config, logger, metrics, flags, emitter: createEmitter(io) });
+  const turn = new TurnService({
+    config,
+    flags,
+    logger,
+    metrics,
+    store: deps.redis ? new RedisTurnStore(deps.redis) : new MemoryTurnStore(),
+    fetch: deps.fetch,
+  });
+  const safety = new SafetySignals({
+    config,
+    logger,
+    metrics,
+    store: deps.redis ? new RedisSignalStore(deps.redis) : new MemorySignalStore(),
+  });
+  const spendPoller =
+    config.cfAccountId && config.cfAnalyticsToken
+      ? new TurnSpendPoller({
+          flags,
+          logger,
+          metrics,
+          redis: deps.redis,
+          thresholdsGb: config.turnSpendDailyGb,
+          intervalMs: config.turnSpendPollMs,
+          query: cloudflareEgressQuery({
+            accountId: config.cfAccountId,
+            apiToken: config.cfAnalyticsToken,
+            fetch: deps.fetch ?? ((input, init) => fetch(input, init)),
+          }),
+        })
+      : undefined;
+  const service = new MatchService({ store, config, logger, metrics, flags, turn, safety, emitter: createEmitter(io) });
   attachHandlers(io, { config, service, logger, metrics });
   // listen() waits for this, so no client connects before the first heartbeat.
-  const started = flags.start().then(() => service.start());
+  const started = flags.start().then(() => {
+    spendPoller?.start();
+    return service.start();
+  });
   started.catch(() => {}); // surfaced by listen(); avoid an unhandled rejection meanwhile
 
   let closing: Promise<void> | undefined;
@@ -86,6 +126,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     close() {
       closing ??= (async () => {
         flags.stop();
+        spendPoller?.stop();
         try {
           await service.shutdown();
         } catch (err) {

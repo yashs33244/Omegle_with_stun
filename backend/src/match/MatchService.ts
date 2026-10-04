@@ -15,12 +15,16 @@ import type { FlagsReader } from "../flags/flags";
 import type { Logger } from "../logger";
 import type { Metrics } from "../metrics";
 import type {
+  CallFailedPayload,
+  CallTelemetryPayload,
   ChatAck,
   ChatSendPayload,
   ChatTypingPayload,
   HelloAck,
   HelloPayload,
   MatchEndReason,
+  MatchMode,
+  ModerationSignalPayload,
   PublicProfile,
   ReportAck,
   ReportPayload,
@@ -30,8 +34,11 @@ import type {
   UpdatePreferencesPayload,
 } from "../protocol";
 import type { MatchStore, Room, Session, SessionProfile } from "../store/MatchStore";
-import { buildIceServers } from "../turn";
+import { guardChat, guardName } from "../safety/guard";
+import { NUDGE_RISK, type SafetySignals } from "../safety/signals";
+import type { TurnService } from "../turn/TurnService";
 import { isCompatible } from "./compatibility";
+import { HELD, MAX_STEP, meetsPreferences, pairStep, relaxStep } from "./relax";
 
 /** How long a pair block record is remembered after it lapses, so repeated skips escalate. */
 const BLOCK_MEMORY_MS = 24 * 60 * 60_000;
@@ -58,6 +65,10 @@ export interface MatchServiceDeps {
   emitter: Emitter;
   /** Operator flags (kill switch, staffed hours, bitrate caps). */
   flags: FlagsReader;
+  /** Per-call ICE servers and media caps. */
+  turn: TurnService;
+  /** Risk score, early skips, low priority, nudge cooldowns. */
+  safety: SafetySignals;
   /** Injectable clock for tests. */
   now?: () => number;
 }
@@ -67,6 +78,8 @@ interface LocalSocket {
   deviceId: string;
   /** Set when a sweep found no stored session for this socket (see tickRewards). */
   orphaned?: boolean;
+  /** Rooms this socket already sent call:telemetry for (last 20). */
+  telemetryRooms?: string[];
   rewards?: {
     roomId: string;
     activeSince: number;
@@ -87,8 +100,20 @@ export class MatchService {
   private readonly log: Logger;
   private readonly metrics: Metrics;
   private readonly emitter: Emitter;
+  private readonly flags: FlagsReader;
+  private readonly turn: TurnService;
+  private readonly safety: SafetySignals;
   private readonly now: () => number;
   private readonly local = new Map<string, LocalSocket>();
+  /**
+   * Relaxation ladder progress of sessions THIS instance queued: the sweeper
+   * marks a session dirty when its step goes up (so the incremental pass
+   * retries it) and tells it with queue:waiting. Entries leave at the last step.
+   */
+  private readonly relaxing = new Map<string, { since: number; step: number; low: boolean }>();
+  /** Real number of sessions, refreshed by the sweeper (queue:waiting `online`). */
+  private online = 0;
+  private lastOnlineAt = 0;
   /** Sessions queued or changed since the last match pass (only touched under the lock). */
   private readonly dirty = new Set<string>();
   private sweepTimer?: ReturnType<typeof setInterval>;
@@ -105,6 +130,9 @@ export class MatchService {
     this.log = deps.logger;
     this.metrics = deps.metrics;
     this.emitter = deps.emitter;
+    this.flags = deps.flags;
+    this.turn = deps.turn;
+    this.safety = deps.safety;
     this.now = deps.now ?? Date.now;
   }
 
@@ -176,16 +204,24 @@ export class MatchService {
    * session:hello. The ack is sent through `reply` inside the lock, before
    * queue:waiting or match:found, so clients always see the ack first.
    */
-  async hello(socketId: string, payload: HelloPayload, reply: Reply<HelloAck>): Promise<void> {
+  async hello(socketId: string, payload: HelloPayload, reply: Reply<HelloAck>, ip?: string): Promise<void> {
     if (this.stopped) return reply({ ok: false, error: "internal", message: "server shutting down" });
     const { deviceId } = payload;
     if (await this.store.getBan(deviceId)) return reply({ ok: false, error: "banned" });
+    if (ip) {
+      await this.turn.rememberIp(deviceId, ip).catch((err: unknown) => this.log.warn({ err }, "remember ip failed"));
+    }
 
     await this.store.withLock(async () => {
       // The socket may have disconnected while we waited for the lock.
       if (!this.emitter.isLocalConnected(socketId)) return reply({ ok: false, error: "bad_state" });
       const now = this.now();
       const { photo, ...profile } = payload.profile;
+      const name = guardName(profile.name, deviceId);
+      if (name.replaced) {
+        profile.name = name.name;
+        this.metrics.namesReplacedTotal.inc();
+      }
       let session = await this.store.getSession(socketId);
 
       if (session && session.deviceId !== deviceId) {
@@ -216,7 +252,7 @@ export class MatchService {
       this.local.set(socketId, this.local.get(socketId) ?? { deviceId });
 
       const coins = (await this.store.getCoins(deviceId)) ?? this.config.initialCoins;
-      reply({ ok: true, coins, iceServers: buildIceServers(this.config, deviceId, now), mode: payload.mode });
+      reply({ ok: true, coins, iceServers: this.turn.stunServers(), mode: this.effectiveMode(payload.mode) });
 
       if (session.state === "idle" || session.state === "waiting") {
         await this.enqueueLocked(session, session.state === "waiting" ? session.waitingSince : undefined);
@@ -255,27 +291,7 @@ export class MatchService {
         return;
       }
 
-      const now = this.now();
-      room.state = "active";
-      room.activeSince = now;
-      await this.store.putRoom(room);
-      const sessions = await this.store.getSessions(room.members);
-      for (const s of sessions) {
-        if (s && s.roomId === room.id) {
-          s.state = "active";
-          await this.store.putSession(s);
-        }
-      }
-      // Protocol v3 fields: per-call TURN credentials and bitrate caps arrive with the backend-match lane.
-      const media = {
-        iceServers: buildIceServers(this.config, sessions[0]?.deviceId ?? roomId, now),
-        maxBitrateKbps: 900,
-        relayMaxBitrateKbps: 500,
-        privateModeAllowed: false,
-      };
-      this.emitter.emit(room.members[0], "call:start", { roomId, initiator: true, ...media });
-      this.emitter.emit(room.members[1], "call:start", { roomId, initiator: false, ...media });
-      this.log.info({ roomId }, "call started");
+      await this.activateRoomLocked(room);
     });
   }
 
@@ -301,6 +317,9 @@ export class MatchService {
       const found = await this.memberRoomLocked(socketId, session.roomId);
       if (!found) return;
       const { room, index } = found;
+      if (room.state === "active" && room.activeSince !== undefined) {
+        this.safety.skipped(room.devices[1 - index]!, this.now() - room.activeSince);
+      }
       await this.blockPairLocked(room, 0, true);
       await this.endRoomLocked(room, "skipped", {
         [room.members[index]]: "skipped",
@@ -355,13 +374,89 @@ export class MatchService {
     if (partner) this.emitter.emit(partner, "rtc:signal", payload);
   }
 
+  /**
+   * chat:send. The safety guard hides links, handles and phone numbers during
+   * the first chatGuardMs of the call and raises informative nudges.
+   */
   async chat(socketId: string, payload: ChatSendPayload, reply: Reply<ChatAck>): Promise<void> {
-    const partner = await this.activePartner(socketId, payload.roomId);
-    if (!partner) return reply({ ok: false, error: "not_in_room" });
+    const active = await this.activeRoom(socketId, payload.roomId);
+    if (!active) return reply({ ok: false, error: "not_in_room" });
+    const { room, index } = active;
+    const partner = room.members[1 - index]!;
+    const roomId = payload.roomId;
     const id = randomUUID();
     const ts = this.now();
-    this.emitter.emit(partner, "chat:message", { roomId: payload.roomId, id, text: payload.text, ts, redacted: false });
-    reply({ ok: true, id, ts, redacted: false });
+    const guarded = guardChat(payload.text, { redact: ts - (room.activeSince ?? ts) < this.config.chatGuardMs });
+    this.emitter.emit(partner, "chat:message", { roomId, id, text: guarded.text, ts, redacted: guarded.redacted });
+    reply({ ok: true, id, ts, redacted: guarded.redacted });
+
+    if (guarded.redacted) {
+      this.metrics.chatRedactedTotal.inc();
+      if (this.safety.shouldNudge(`${roomId}:${socketId}`, "link-hidden")) {
+        this.metrics.safetyNudgesTotal.inc({ kind: "link-hidden" });
+        this.emitter.emit(socketId, "safety:nudge", { roomId, kind: "link-hidden" });
+      }
+    }
+    for (const kind of ["contact-sharing", "solicitation"] as const) {
+      if (kind === "contact-sharing" ? !guarded.contactSharing : !guarded.solicitation) continue;
+      if (!this.safety.shouldNudge(roomId, kind)) continue;
+      this.safety.addRisk(room.devices[index], NUDGE_RISK[kind], kind);
+      this.metrics.safetyNudgesTotal.inc({ kind });
+      this.emitter.emit(socketId, "safety:nudge", { roomId, kind });
+      this.emitter.emit(partner, "safety:nudge", { roomId, kind });
+    }
+  }
+
+  /**
+   * call:failed: the WebRTC connection could not be established. Only a member
+   * of the ACTIVE room may send it. Ends the room for both with
+   * "connection-failed" and re-queues both; the pair is kept apart briefly so
+   * they are not matched straight back into the same failing connection.
+   */
+  async callFailed(socketId: string, payload: CallFailedPayload): Promise<void> {
+    await this.store.withLock(async () => {
+      const found = await this.memberRoomLocked(socketId, payload.roomId);
+      if (!found || found.room.state !== "active") return;
+      const { room } = found;
+      this.metrics.callFailedTotal.inc({ reason: payload.reason });
+      await this.blockPairLocked(room, this.config.declineBlockMs, false);
+      await this.endRoomLocked(room, "connection-failed", {
+        [room.members[0]]: "connection-failed",
+        [room.members[1]]: "connection-failed",
+      });
+      await this.matchPassLocked();
+    });
+  }
+
+  /**
+   * call:telemetry: counters only, once per socket and room. No IPs, no
+   * content; the room may already have ended (it is sent at call end).
+   */
+  async telemetry(socketId: string, payload: CallTelemetryPayload): Promise<void> {
+    const entry = this.local.get(socketId);
+    if (!entry) return;
+    entry.telemetryRooms ??= [];
+    if (entry.telemetryRooms.includes(payload.roomId)) return;
+    entry.telemetryRooms.push(payload.roomId);
+    if (entry.telemetryRooms.length > 20) entry.telemetryRooms.shift();
+    this.metrics.callsTotal.inc({
+      outcome: payload.outcome,
+      local_candidate: payload.localCandidateType ?? "unknown",
+      private: payload.privateMode ? "true" : "false",
+    });
+    if (payload.outcome === "connected" && payload.timeToConnectMs !== undefined) {
+      this.metrics.timeToConnectSeconds.observe(payload.timeToConnectMs / 1000);
+    }
+  }
+
+  /** moderation:signal: counted per kind; feeds the soft risk score. */
+  async moderationSignal(socketId: string, payload: ModerationSignalPayload): Promise<void> {
+    const session = await this.store.getSession(socketId);
+    if (!session || session.roomId !== payload.roomId) return;
+    const room = await this.store.getRoom(payload.roomId);
+    const index = room ? room.members.indexOf(socketId) : -1;
+    const partner = room && index >= 0 ? room.devices[1 - index]! : null;
+    this.safety.moderationSignal(socketId, payload.roomId, payload.kind, session.deviceId, partner);
   }
 
   async typing(socketId: string, payload: ChatTypingPayload): Promise<void> {
@@ -418,9 +513,15 @@ export class MatchService {
         // Full pass now and then: picks up users queued on other instances and lapsed blocks.
         const full = now - this.lastFullPassAt >= this.config.fullMatchPassIntervalMs;
         if (full) this.lastFullPassAt = now;
+        await this.relaxTickLocked(now);
         await this.matchPassLocked(full);
       });
       await this.tickRewards();
+      const now = this.now();
+      if (now - this.lastOnlineAt >= this.config.heartbeatIntervalMs) {
+        this.lastOnlineAt = now;
+        this.online = (await this.store.stats()).sessions;
+      }
     } catch (err) {
       this.log.error({ err }, "sweep failed");
     }
@@ -522,12 +623,64 @@ export class MatchService {
 
   /** No lock needed: a read-only membership check for relays. */
   private async activePartner(socketId: string, roomId: string): Promise<string | null> {
+    const found = await this.activeRoom(socketId, roomId);
+    return found ? found.room.members[1 - found.index]! : null;
+  }
+
+  private async activeRoom(socketId: string, roomId: string): Promise<{ room: Room; index: 0 | 1 } | null> {
     const session = await this.store.getSession(socketId);
     if (!session || session.state !== "active" || session.roomId !== roomId) return null;
     const room = await this.store.getRoom(roomId);
     if (!room || room.state !== "active") return null;
     const index = room.members.indexOf(socketId);
-    return index < 0 ? null : room.members[1 - index]!;
+    return index < 0 ? null : { room, index: index as 0 | 1 };
+  }
+
+  /** The mode the server uses for a session: the default_mode flag can force preview. */
+  private effectiveMode(requested: MatchMode): MatchMode {
+    return this.flags.current().default_mode === "preview" ? "preview" : requested;
+  }
+
+  /**
+   * Both sides accepted (or the server accepted for instant-mode sides): mark
+   * the room and sessions active. call:start goes out from startCall, which
+   * fetches per-call TURN credentials outside the lock.
+   */
+  private async activateRoomLocked(room: Room): Promise<void> {
+    room.state = "active";
+    room.activeSince = this.now();
+    await this.store.putRoom(room);
+    const sessions = await this.store.getSessions(room.members);
+    for (const s of sessions) {
+      if (s && s.roomId === room.id) {
+        s.state = "active";
+        await this.store.putSession(s);
+      }
+    }
+    this.safety.callStarted(room.devices);
+    this.log.info({ roomId: room.id }, "call started");
+    // Not awaited: it takes the lock again after the network calls.
+    void this.startCall(room);
+  }
+
+  /**
+   * Per-call ICE servers (TURN credentials may need an API call) are fetched
+   * without holding the matchmaking lock; call:start is then emitted under the
+   * lock only if the room is still active, so it never follows match:ended.
+   */
+  private async startCall(room: Room): Promise<void> {
+    try {
+      const [mediaA, mediaB] = await Promise.all(room.devices.map((d) => this.turn.callMedia(d)));
+      if (this.stopped) return;
+      await this.store.withLock(async () => {
+        const current = await this.store.getRoom(room.id);
+        if (!current || current.state !== "active" || current.activeSince !== room.activeSince) return;
+        this.emitter.emit(room.members[0], "call:start", { roomId: room.id, initiator: true, ...mediaA! });
+        this.emitter.emit(room.members[1], "call:start", { roomId: room.id, initiator: false, ...mediaB! });
+      });
+    } catch (err) {
+      this.log.error({ err, roomId: room.id }, "call start failed");
+    }
   }
 
   private async memberRoomLocked(socketId: string, roomId: string): Promise<{ room: Room; index: 0 | 1 } | null> {
@@ -547,7 +700,45 @@ export class MatchService {
     await this.store.putSession(session);
     await this.store.addWaiting(session.socketId, session.waitingSince);
     this.dirty.add(session.socketId);
-    this.emitter.emit(session.socketId, "queue:waiting", { relaxStep: 0 });
+    const low = (await this.safety.lowPriority()).has(session.deviceId);
+    this.relaxing.set(session.socketId, { since: session.waitingSince, step: low ? HELD : 0, low });
+    this.emitter.emit(session.socketId, "queue:waiting", this.waitingPayload(0));
+  }
+
+  private waitingPayload(step: number): { relaxStep: number; online?: number } {
+    const relaxStep = Math.max(0, step);
+    return this.online >= this.flags.current().online_count_threshold ? { relaxStep, online: this.online } : { relaxStep };
+  }
+
+  /**
+   * Sweeper: sessions this instance queued whose ladder step went up are
+   * marked dirty (the next incremental pass retries them) and told their new
+   * step. A low-priority device is held back first, silently: it sees step 0.
+   */
+  private async relaxTickLocked(now: number): Promise<void> {
+    const changed = new Map<string, number>();
+    for (const [socketId, entry] of this.relaxing) {
+      const step = relaxStep(now - entry.since, this.config, entry.low);
+      if (step > entry.step) changed.set(socketId, step);
+    }
+    if (changed.size === 0) return;
+    const ids = [...changed.keys()];
+    const sessions = await this.store.getSessions(ids);
+    for (let i = 0; i < ids.length; i++) {
+      const socketId = ids[i]!;
+      const entry = this.relaxing.get(socketId)!;
+      const s = sessions[i];
+      if (!s || s.state !== "waiting" || s.waitingSince !== entry.since) {
+        this.relaxing.delete(socketId); // matched, gone or re-queued by another instance
+        continue;
+      }
+      const step = changed.get(socketId)!;
+      const shownBefore = Math.max(0, entry.step);
+      entry.step = step;
+      this.dirty.add(socketId);
+      if (step > shownBefore) this.emitter.emit(socketId, "queue:waiting", this.waitingPayload(step));
+      if (step >= MAX_STEP) this.relaxing.delete(socketId);
+    }
   }
 
   /**
@@ -592,6 +783,7 @@ export class MatchService {
       }
     }
     await this.store.removeWaiting(session.socketId);
+    this.relaxing.delete(session.socketId);
     await this.store.deleteSession(session.socketId);
     await this.store.clearDeviceSocket(session.deviceId, session.socketId);
   }
@@ -646,6 +838,8 @@ export class MatchService {
     if (waiting.length < 2) return;
 
     const now = this.now();
+    const low = await this.safety.lowPriority();
+    const steps = waiting.map((s) => relaxStep(now - (s.waitingSince ?? now), this.config, low.has(s.deviceId)));
     const banCache = new Map<string, boolean>();
     const isBanned = async (deviceId: string): Promise<boolean> => {
       let banned = banCache.get(deviceId);
@@ -660,7 +854,7 @@ export class MatchService {
 
     const taken = new Set<number>();
     for (let i = 0; i < waiting.length; i++) {
-      if (taken.has(i)) continue;
+      if (taken.has(i) || steps[i] === HELD) continue;
       const a = waiting[i]!;
       // A non-dirty session can only pair with a dirty one.
       const partners = !focus || focus.has(a.socketId) ? all : focused;
@@ -671,7 +865,8 @@ export class MatchService {
         const j = partners[k]!;
         if (taken.has(j)) continue;
         const b = waiting[j]!;
-        if (!isCompatible(a, b)) continue;
+        const step = pairStep(steps[i]!, steps[j]!);
+        if (step === HELD || !isCompatible(a, b) || !meetsPreferences(a, b, step)) continue;
         if ((await isBanned(a.deviceId)) || (await isBanned(b.deviceId))) continue;
         const block = await this.store.getBlock(a.deviceId, b.deviceId);
         if (block && block.until > now) continue;
@@ -683,13 +878,20 @@ export class MatchService {
     }
   }
 
+  /**
+   * Creates a pending room and sends match:found. Instant-mode sides are
+   * accepted by the server: instant + instant starts the call at once;
+   * instant + preview shows the preview side its card while the instant side
+   * waits for it (it sees match:found with mode "instant").
+   */
   private async createRoomLocked(a: Session, b: Session, now: number): Promise<void> {
+    const modes = [this.effectiveMode(a.mode), this.effectiveMode(b.mode)] as const;
     const room: Room = {
       id: randomUUID(),
       state: "pending",
       members: [a.socketId, b.socketId],
       devices: [a.deviceId, b.deviceId],
-      accepted: [false, false],
+      accepted: [modes[0] === "instant", modes[1] === "instant"],
       createdAt: now,
       expiresAt: now + this.config.matchAcceptTimeoutMs,
     };
@@ -700,6 +902,7 @@ export class MatchService {
       s.waitingSince = undefined;
       await this.store.putSession(s);
       await this.store.removeWaiting(s.socketId);
+      this.relaxing.delete(s.socketId);
     }
     const [isFriend, photoA, photoB] = await Promise.all([
       this.store.areFriends(a.deviceId, b.deviceId),
@@ -710,7 +913,10 @@ export class MatchService {
     this.log.info({ roomId: room.id }, "match found");
     const sharedTopics = a.profile.topics.filter((t) => b.profile.topics.includes(t));
     const base = { roomId: room.id, isFriend, expiresAt: room.expiresAt, serverNow: now, sharedTopics };
-    this.emitter.emit(a.socketId, "match:found", { ...base, mode: a.mode, partner: publicProfile(b.profile, photoB) });
-    this.emitter.emit(b.socketId, "match:found", { ...base, mode: b.mode, partner: publicProfile(a.profile, photoA) });
+    this.emitter.emit(a.socketId, "match:found", { ...base, mode: modes[0], partner: publicProfile(b.profile, photoB) });
+    this.emitter.emit(b.socketId, "match:found", { ...base, mode: modes[1], partner: publicProfile(a.profile, photoA) });
+    if (room.accepted[0] && room.accepted[1]) await this.activateRoomLocked(room);
+    else if (room.accepted[0]) this.emitter.emit(b.socketId, "match:partner-accepted", { roomId: room.id });
+    else if (room.accepted[1]) this.emitter.emit(a.socketId, "match:partner-accepted", { roomId: room.id });
   }
 }

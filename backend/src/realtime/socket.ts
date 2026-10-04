@@ -12,9 +12,12 @@ import type { Metrics } from "../metrics";
 import type { Emitter, MatchService } from "../match/MatchService";
 import {
   PROTOCOL_VERSION,
+  callFailedSchema,
+  callTelemetrySchema,
   chatSendSchema,
   chatTypingSchema,
   helloSchema,
+  moderationSignalSchema,
   reportSchema,
   roomRefSchema,
   rtcSignalSchema,
@@ -179,7 +182,9 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): void {
       });
     }
 
-    on("session:hello", "hello", helloSchema, (p, reply) => service.hello(socket.id, p, reply));
+    on("session:hello", "hello", helloSchema, (p, reply) =>
+      service.hello(socket.id, p, reply, clientIp(socket, config.trustProxy)),
+    );
     on("session:preferences", "preferences", updatePreferencesSchema, (p, reply) =>
       service.updatePreferences(socket.id, p, reply),
     );
@@ -190,6 +195,9 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): void {
     on("chat:send", "chat", chatSendSchema, (p, reply) => service.chat(socket.id, p, reply));
     on("chat:typing", "typing", chatTypingSchema, (p) => service.typing(socket.id, p));
     on("report:submit", "report", reportSchema, (p, reply) => service.report(socket.id, p, reply));
+    on("call:failed", "telemetry", callFailedSchema, (p) => service.callFailed(socket.id, p));
+    on("call:telemetry", "telemetry", callTelemetrySchema, (p) => service.telemetry(socket.id, p));
+    on("moderation:signal", "telemetry", moderationSignalSchema, (p) => service.moderationSignal(socket.id, p));
 
     socket.on("disconnect", (reason) => {
       metrics.connectedSockets.dec();

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildIceServers, turnCredential } from "../../src/turn";
+import { buildIceServers, turnCredential } from "../../src/turn/coturn";
 
 const base = {
   stunUrls: ["stun:stun.example.com:3478"],
