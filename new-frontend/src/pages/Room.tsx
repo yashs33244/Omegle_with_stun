@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageCircle, Mic, MicOff, UserRound, Video, WifiOff } from "lucide-react";
 import { Button } from "@/components/retroui/Button";
 import { ChatSettings } from "@/components/ChatSettings";
@@ -45,22 +45,51 @@ const NameBadge: React.FC<{ name: string; country: string }> = ({ name, country 
   );
 };
 
-const TextOnlyPanel: React.FC<{ partner: PublicProfile | null; partnerTyping: boolean; onSwitchToVideo: () => void }> = ({
-  partner,
-  partnerTyping,
-  onSwitchToVideo,
+const MicToggle: React.FC<{ micEnabled: boolean; onToggle: () => void; showLabel?: boolean }> = ({
+  micEnabled,
+  onToggle,
+  showLabel = false,
 }) => (
+  <Button
+    onClick={onToggle}
+    variant="outline"
+    size="sm"
+    aria-label={micEnabled ? "Mute microphone" : "Unmute microphone"}
+    aria-pressed={!micEnabled}
+    data-testid="mic-toggle"
+    className={`flex items-center gap-2 ${
+      micEnabled ? "bg-black bg-opacity-60 text-white border-white" : "bg-red-600 text-white border-red-500"
+    }`}
+  >
+    {micEnabled ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
+    {showLabel && <span aria-hidden="true">{micEnabled ? "Mic on" : "Mic off"}</span>}
+  </Button>
+);
+
+const TextOnlyPanel: React.FC<{
+  partner: PublicProfile | null;
+  partnerTyping: boolean;
+  micEnabled: boolean;
+  onToggleMic: () => void;
+  onSwitchToVideo: () => void;
+}> = ({ partner, partnerTyping, micEnabled, onToggleMic, onSwitchToVideo }) => (
   <div className="flex-1 flex flex-col justify-center items-center text-center space-y-4">
     <MessageCircle className="w-16 h-16 text-yellow-400" />
     <div className="text-white space-y-2">
       <h3 className="text-xl font-bold">Text Chat Mode</h3>
       <p className="text-gray-300">You're chatting with {partner?.name || "a stranger"}</p>
+      <p className="text-sm text-gray-400">
+        {micEnabled ? "Your camera is off, but they can still hear you." : "Your camera and microphone are off."}
+      </p>
       {partnerTyping && <PartnerTyping />}
     </div>
-    <Button onClick={onSwitchToVideo} variant="outline" className="bg-yellow-500 text-black hover:bg-yellow-400">
-      <Video className="w-4 h-4 mr-2" />
-      Switch to Video
-    </Button>
+    <div className="flex items-center gap-3">
+      <MicToggle micEnabled={micEnabled} onToggle={onToggleMic} showLabel />
+      <Button onClick={onSwitchToVideo} variant="outline" className="bg-yellow-500 text-black hover:bg-yellow-400">
+        <Video className="w-4 h-4 mr-2" />
+        Switch to Video
+      </Button>
+    </div>
   </div>
 );
 
@@ -94,12 +123,31 @@ export const Room: React.FC<RoomProps> = ({
   const [showChat, setShowChat] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [textOnlyMode, setTextOnlyMode] = useState(false);
+  /** Entering text-only muted the mic, and the user has not touched it since. */
+  const textOnlyMutedMicRef = useRef(false);
+
+  // Text-only mutes the mic too; its toggle moves into the text panel.
+  const enterTextOnly = () => {
+    textOnlyMutedMicRef.current = micEnabled;
+    if (micEnabled) onMicEnabledChange(false);
+    setTextOnlyMode(true);
+  };
+  // Back to video: unmute only if text-only is what muted the mic.
+  const leaveTextOnly = useCallback(() => {
+    if (textOnlyMutedMicRef.current) onMicEnabledChange(true);
+    textOnlyMutedMicRef.current = false;
+    setTextOnlyMode(false);
+  }, [onMicEnabledChange]);
+  const toggleMic = () => {
+    textOnlyMutedMicRef.current = false;
+    onMicEnabledChange(!micEnabled);
+  };
 
   // Text-only is per call: a new call starts with video again.
   useEffect(() => {
-    setTextOnlyMode(false);
+    leaveTextOnly();
     setShowChat(false);
-  }, [state.roomId]);
+  }, [state.roomId, leaveTextOnly]);
 
   // The partner must stop seeing us in text-only mode.
   useEffect(() => {
@@ -194,18 +242,7 @@ export const Room: React.FC<RoomProps> = ({
               </div>
 
               <div className="absolute bottom-4 right-4" style={{ zIndex: 5 }}>
-                <Button
-                  onClick={() => onMicEnabledChange(!micEnabled)}
-                  variant="outline"
-                  size="sm"
-                  aria-label={micEnabled ? "Mute microphone" : "Unmute microphone"}
-                  aria-pressed={!micEnabled}
-                  className={`flex items-center ${
-                    micEnabled ? "bg-black bg-opacity-60 text-white border-white" : "bg-red-600 text-white border-red-500"
-                  }`}
-                >
-                  {micEnabled ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
-                </Button>
+                <MicToggle micEnabled={micEnabled} onToggle={toggleMic} />
               </div>
 
               {/* Chat toggle button */}
@@ -254,7 +291,9 @@ export const Room: React.FC<RoomProps> = ({
               <TextOnlyPanel
                 partner={state.partner}
                 partnerTyping={state.partnerTyping}
-                onSwitchToVideo={() => setTextOnlyMode(false)}
+                micEnabled={micEnabled}
+                onToggleMic={toggleMic}
+                onSwitchToVideo={leaveTextOnly}
               />
             )}
 
@@ -267,7 +306,7 @@ export const Room: React.FC<RoomProps> = ({
                 )}
                 <div className="absolute top-4 left-4" style={{ zIndex: 5 }}>
                   <Button
-                    onClick={() => setTextOnlyMode(true)}
+                    onClick={enterTextOnly}
                     variant="outline"
                     size="sm"
                     className="bg-black bg-opacity-60 text-white border-white hover:bg-gray-800"
