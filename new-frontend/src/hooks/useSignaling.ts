@@ -488,8 +488,15 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
     socket.emit("match:decline", { roomId });
   }, []);
 
+  // call:skip carries no roomId and the server skips whatever room we are in now,
+  // so a second click (or the auto-skip timer) would skip the next, unseen match.
+  const skippedRoom = useRef<string | null>(null);
   const skip = useCallback(() => {
-    connectedSocket()?.emit("call:skip");
+    const socket = connectedSocket();
+    const { roomId, status } = stateRef.current;
+    if (!socket || !roomId || status !== "in-call" || skippedRoom.current === roomId) return;
+    skippedRoom.current = roomId;
+    socket.emit("call:skip");
   }, []);
 
   const emitTyping = useCallback((typing: boolean) => {
