@@ -126,7 +126,7 @@ stops the process with a clear message. Empty values mean "use the default".
 | REDIS_URL | unset | set -> RedisStore + redis adapter |
 | TRUST_PROXY | false | true -> client IP from `X-Real-IP` (set by our gateway) |
 | MAX_CONNECTIONS_PER_IP | 10 | per instance |
-| MATCH_ACCEPT_TIMEOUT_MS | 5000 | current product behavior |
+| MATCH_ACCEPT_TIMEOUT_MS | 30000 | how long both users have to press Accept |
 | STUN_URLS | stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302 | comma list |
 | TURN_URLS | unset | comma list, e.g. turn:turn.example.com:3478?transport=udp,turns:turn.example.com:5349 |
 | TURN_SECRET | unset | coturn `use-auth-secret` shared secret: issue `username = <expiry>:<deviceId>`, `credential = base64(HMAC-SHA1(secret, username))` |

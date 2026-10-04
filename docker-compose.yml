@@ -56,7 +56,7 @@ services:
       # Always behind the gateway, which sets X-Real-IP to the client address.
       TRUST_PROXY: "true"
       MAX_CONNECTIONS_PER_IP: ${MAX_CONNECTIONS_PER_IP:-10}
-      MATCH_ACCEPT_TIMEOUT_MS: ${MATCH_ACCEPT_TIMEOUT_MS:-5000}
+      MATCH_ACCEPT_TIMEOUT_MS: ${MATCH_ACCEPT_TIMEOUT_MS:-30000}
       STUN_URLS: ${STUN_URLS:-}
       TURN_URLS: ${TURN_URLS:-}
       TURN_SECRET: ${TURN_SECRET:-}
