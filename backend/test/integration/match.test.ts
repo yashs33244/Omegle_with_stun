@@ -259,6 +259,55 @@ describe("ending a match", () => {
     expect(second!.until - Date.now()).toBeGreaterThan(9 * 60_000);
   });
 
+  test("a waiting pair is matched soon after its block lapses, without a recheck", async () => {
+    // The only recheck runs on the first sweep, before anyone is waiting.
+    ts = await startServer({ recheckIntervalMs: 60_000 });
+    const a = hello();
+    const b = hello();
+    const lapse = Date.now() + 400;
+    await ts.store.setBlock(a.deviceId, b.deviceId, { until: lapse, skipCount: 1 }, 60_000);
+    const ca = await ts.connect();
+    const cb = await ts.connect();
+    const found = next(ca, "match:found", 2000);
+    await sendHello(ca, a);
+    await sendHello(cb, b);
+    await found;
+    expect(Date.now()).toBeGreaterThanOrEqual(lapse);
+  });
+
+  test("the recheck reaches every waiter of a long queue in bounded slices", async () => {
+    // One session per recheck: 40 unmatchable waiters plus the pair below.
+    ts = await startServer({ recheckPairBudget: 1, recheckIntervalMs: 20 });
+    const now = Date.now();
+    for (let i = 0; i < 40; i++) {
+      // Men who only want women: they match neither each other nor the pair.
+      const { photo: _photo, ...p } = profile({ gender: "male" });
+      const socketId = `ghost-${i}`;
+      await ts.store.putSession({
+        socketId,
+        deviceId: randomUUID(),
+        instanceId: ts.config.instanceId,
+        profile: p,
+        preferences: prefs({ genderFilter: "female" }),
+        state: "waiting",
+        waitingSince: now - 1000 + i,
+        connectedAt: now,
+      });
+      await ts.store.addWaiting(socketId, now - 1000 + i);
+    }
+    const a = hello();
+    const b = hello();
+    await ts.store.setBlock(a.deviceId, b.deviceId, { until: now + 60_000, skipCount: 1 }, 60_000);
+    const ca = await ts.connect();
+    const cb = await ts.connect();
+    const found = next(ca, "match:found", 4000);
+    await sendHello(ca, a);
+    await sendHello(cb, b);
+    // The block is lifted behind the server's back, so no lapse is scheduled for it.
+    await ts.store.setBlock(a.deviceId, b.deviceId, { until: Date.now() - 1, skipCount: 1 }, 60_000);
+    await found;
+  });
+
   test("skip while pending also ends the match", async () => {
     ts = await startServer();
     const { ca, cb, roomId } = await matchedPair(ts);

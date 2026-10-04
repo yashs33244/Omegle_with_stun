@@ -87,12 +87,19 @@ export class MatchService {
   private readonly local = new Map<string, LocalSocket>();
   /** Sessions queued or changed since the last match pass (only touched under the lock). */
   private readonly dirty = new Set<string>();
+  /**
+   * Waiting sessions a block kept from a compatible partner, with the time
+   * that block lapses. The sweeper marks them dirty then (only touched under the lock).
+   */
+  private readonly wakeAt = new Map<string, number>();
   private sweepTimer?: ReturnType<typeof setInterval>;
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   private started?: Promise<void>;
   private sweeping?: Promise<void>;
   private stopped = false;
-  private lastFullPassAt = 0;
+  private lastRecheckAt = 0;
+  /** Where the next recheck slice starts in the waiting queue. */
+  private recheckCursor = 0;
   private lastReapAt = 0;
 
   constructor(deps: MatchServiceDeps) {
@@ -361,6 +368,7 @@ export class MatchService {
     await this.store.withLock(async () => {
       // Again under the lock: a hello that held the lock may have re-added it.
       this.local.delete(socketId);
+      this.wakeAt.delete(socketId);
       const session = await this.store.getSession(socketId);
       if (!session) return;
       await this.removeSessionLocked(session, "partner-left");
@@ -402,10 +410,17 @@ export class MatchService {
             [room.members[1]]: "timeout",
           });
         }
-        // Full pass now and then: picks up users queued on other instances and lapsed blocks.
-        const full = now - this.lastFullPassAt >= this.config.fullMatchPassIntervalMs;
-        if (full) this.lastFullPassAt = now;
-        await this.matchPassLocked(full);
+        // A block that kept a pair apart has lapsed: try those sessions again.
+        for (const [socketId, until] of this.wakeAt) {
+          if (until > now) continue;
+          this.wakeAt.delete(socketId);
+          this.dirty.add(socketId);
+        }
+        // Now and then also recheck a bounded slice of the queue, for marks
+        // this instance never saw (sessions queued elsewhere, blocks changed).
+        const recheck = now - this.lastRecheckAt >= this.config.recheckIntervalMs;
+        if (recheck) this.lastRecheckAt = now;
+        await this.matchPassLocked(recheck ? "recheck" : "dirty");
       });
       await this.tickRewards();
     } catch (err) {
@@ -432,9 +447,9 @@ export class MatchService {
     }
   }
 
-  /** Runs one full match pass under the lock (exposed for tests and multi-instance pickup). */
+  /** Runs one full O(waiting^2) match pass under the lock (exposed for tests; the sweeper never does this). */
   matchPass(): Promise<void> {
-    return this.store.withLock(() => this.matchPassLocked(true));
+    return this.store.withLock(() => this.matchPassLocked("full"));
   }
 
   /**
@@ -614,12 +629,17 @@ export class MatchService {
    * ("dirty") can form new pairs, so the default pass only tries pairs that
    * include one of them: O(waiting x dirty) instead of O(waiting^2). It gives
    * the same pairs as a full pass, because the other waiters were already
-   * unmatchable with each other. The sweeper runs the full pass.
+   * unmatchable with each other, except across a block that has since lapsed
+   * (wakeAt marks those sessions dirty again).
+   *
+   * "recheck" (sweeper) also focuses a bounded slice of the queue, so each
+   * waiter is rechecked now and then without ever scanning all pairs. "full"
+   * focuses everyone and is O(waiting^2); only tests use it.
    */
-  private async matchPassLocked(full = false): Promise<void> {
-    const focus = full ? null : new Set(this.dirty);
+  private async matchPassLocked(mode: "dirty" | "recheck" | "full" = "dirty"): Promise<void> {
+    const focus = mode === "full" ? null : new Set(this.dirty);
     this.dirty.clear();
-    if (focus && focus.size === 0) return;
+    if (focus && focus.size === 0 && mode === "dirty") return;
 
     const ids = await this.store.listWaiting();
     if (ids.length < 2) return;
@@ -631,6 +651,8 @@ export class MatchService {
       else await this.store.removeWaiting(ids[i]!); // stale entry
     }
     if (waiting.length < 2) return;
+    if (focus && mode === "recheck") this.addRecheckSlice(waiting, focus);
+    if (focus && focus.size === 0) return;
 
     const now = this.now();
     const banCache = new Map<string, boolean>();
@@ -661,13 +683,35 @@ export class MatchService {
         if (!isCompatible(a, b)) continue;
         if ((await isBanned(a.deviceId)) || (await isBanned(b.deviceId))) continue;
         const block = await this.store.getBlock(a.deviceId, b.deviceId);
-        if (block && block.until > now) continue;
+        if (block && block.until > now) {
+          const wake = this.wakeAt.get(a.socketId);
+          if (wake === undefined || block.until < wake) this.wakeAt.set(a.socketId, block.until);
+          continue;
+        }
         taken.add(i);
         taken.add(j);
         await this.createRoomLocked(a, b, now);
         break;
       }
     }
+  }
+
+  /**
+   * Adds the next slice of the queue to `focus`, sized so the pass costs
+   * about recheckPairBudget pair checks. The cursor is a plain index into
+   * the queue, so a queue that changes between rechecks may make it skip or
+   * repeat a few sessions; the next round covers them.
+   */
+  private addRecheckSlice(waiting: Session[], focus: Set<string>): void {
+    const count = Math.max(1, Math.floor(this.config.recheckPairBudget / waiting.length));
+    if (count >= waiting.length) {
+      for (const s of waiting) focus.add(s.socketId);
+      this.recheckCursor = 0;
+      return;
+    }
+    const start = this.recheckCursor % waiting.length;
+    for (let k = 0; k < count; k++) focus.add(waiting[(start + k) % waiting.length]!.socketId);
+    this.recheckCursor = start + count;
   }
 
   private async createRoomLocked(a: Session, b: Session, now: number): Promise<void> {
