@@ -1,10 +1,9 @@
 # syntax=docker/dockerfile:1
 # Frontend image: Vite build served by unprivileged nginx on port 8080.
 # Build:  docker build --build-arg VITE_API_URL=https://api.example.com -t chizzy-frontend ./new-frontend
-ARG NODE_IMAGE=node:22.23.3-alpine3.24
-ARG NGINX_IMAGE=nginxinc/nginx-unprivileged:1.28.2-alpine3.23
+# Image tags are literal (not ARGs) so dependabot can bump them.
 
-FROM ${NODE_IMAGE} AS build
+FROM node:22.23.3-alpine3.24 AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 # Point any private package-firewall mirror URLs in the lockfile at the public
@@ -17,7 +16,7 @@ ARG VITE_API_URL=https://chizzyapi.itsyash.space
 ENV VITE_API_URL=${VITE_API_URL}
 RUN npm run build
 
-FROM ${NGINX_IMAGE} AS runtime
+FROM nginxinc/nginx-unprivileged:1.28.2-alpine3.23 AS runtime
 # The CSP connect-src is derived from this at container start (see
 # nginx-api-origin.envsh). Defaults to the URL the bundle was built with.
 ARG VITE_API_URL=https://chizzyapi.itsyash.space

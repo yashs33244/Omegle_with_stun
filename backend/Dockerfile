@@ -1,10 +1,10 @@
 # syntax=docker/dockerfile:1
 # Backend image: Bun + TypeScript compiled to dist/.
 # Build:  docker build -t chizzy-backend ./backend
-# The bun version must read the committed text lockfile (bun.lock).
-ARG BUN_IMAGE=oven/bun:1.4.2-alpine
+# The bun version must read the committed text lockfile (bun.lock). Image tags
+# are literal (not ARGs) so dependabot can bump them; keep both FROM lines equal.
 
-FROM ${BUN_IMAGE} AS base
+FROM oven/bun:1.4.2-alpine AS base
 WORKDIR /app
 COPY package.json bun.lock ./
 # bun.lock may record tarball URLs from a private package-firewall mirror
@@ -24,7 +24,7 @@ RUN bun run build
 FROM base AS prod-deps
 RUN bun install --frozen-lockfile --production
 
-FROM ${BUN_IMAGE} AS runtime
+FROM oven/bun:1.4.2-alpine AS runtime
 ENV NODE_ENV=production \
     PORT=3004
 WORKDIR /app
