@@ -180,6 +180,79 @@ describe("PeerSession", () => {
   });
 });
 
+describe("PeerSession connectivity and track swaps", () => {
+  function withTracks(opts: { initiator?: boolean; privateMode?: boolean } = {}) {
+    const fake = new FakePeerConnection();
+    let config: RTCConfiguration | null = null;
+    const camera = { kind: "video", id: "camera" };
+    const mic = { kind: "audio", id: "mic" };
+    const videoSender = { track: camera as unknown, replaceTrack: vi.fn(async (t: unknown) => void (videoSender.track = t)) };
+    const audioSender = { track: mic as unknown, replaceTrack: vi.fn(async (t: unknown) => void (audioSender.track = t)) };
+    fake.addTrack.mockImplementation((track: { kind: string }) => (track.kind === "video" ? videoSender : audioSender));
+    const stream = { getTracks: () => [mic, camera], getAudioTracks: () => [mic], getVideoTracks: () => [camera] } as unknown as MediaStream;
+    const sent: RtcSignal[] = [];
+    const session = new PeerSession({
+      roomId: ROOM,
+      initiator: opts.initiator ?? true,
+      iceServers: [{ urls: "turn:t.example", username: "u", credential: "c" }],
+      privateMode: opts.privateMode,
+      localStream: stream,
+      sendSignal: (s) => sent.push(s),
+      onRemoteStream: vi.fn(),
+      onConnectionStateChange: vi.fn(),
+      createPeerConnection: (c) => {
+        config = c;
+        return fake as unknown as RTCPeerConnection;
+      },
+    });
+    return { fake, session, sent, videoSender, audioSender, camera, config: () => config };
+  }
+
+  it("uses relay-only ICE in private mode and all paths otherwise", () => {
+    expect(withTracks({ privateMode: true }).config()?.iceTransportPolicy).toBe("relay");
+    expect(withTracks().config()?.iceTransportPolicy).toBe("all");
+  });
+
+  it("only the initiator sends the ICE restart offer", async () => {
+    const offerer = withTracks({ initiator: true });
+    await offerer.session.restartIce();
+    expect(offerer.fake.calls).toEqual(["createOffer", "setLocal:offer"]);
+    expect(offerer.sent).toHaveLength(1);
+
+    const answerer = withTracks({ initiator: false });
+    await answerer.session.restartIce();
+    expect(answerer.fake.calls).toEqual([]);
+  });
+
+  it("swaps the camera for the face-gate placeholder and back", () => {
+    const { session, videoSender, camera } = withTracks();
+    const placeholder = { kind: "video", id: "placeholder" } as unknown as MediaStreamTrack;
+    session.setVideoPaused(true, placeholder);
+    expect(videoSender.replaceTrack).toHaveBeenLastCalledWith(placeholder);
+    session.setVideoPaused(false, null);
+    expect(videoSender.replaceTrack).toHaveBeenLastCalledWith(camera);
+  });
+
+  it("sends nothing while paused when no placeholder could be made", () => {
+    const { session, videoSender } = withTracks();
+    session.setVideoPaused(true, null);
+    expect(videoSender.replaceTrack).toHaveBeenLastCalledWith(null);
+  });
+
+  it("swaps in a new camera and microphone, keeping a pause in place", () => {
+    const { session, videoSender, audioSender } = withTracks();
+    const placeholder = { kind: "video", id: "placeholder" } as unknown as MediaStreamTrack;
+    session.setVideoPaused(true, placeholder);
+    const newCam = { kind: "video", id: "back-camera" };
+    const newMic = { kind: "audio", id: "mic2" };
+    session.setLocalStream({ getAudioTracks: () => [newMic], getVideoTracks: () => [newCam] } as unknown as MediaStream);
+    expect(audioSender.replaceTrack).toHaveBeenLastCalledWith(newMic);
+    expect(videoSender.track).toBe(placeholder);
+    session.setVideoPaused(false, null);
+    expect(videoSender.replaceTrack).toHaveBeenLastCalledWith(newCam);
+  });
+});
+
 describe("connection quality", () => {
   it("maps RTT and loss to levels", () => {
     const base = { packetsReceived: 0, packetsLost: 0 };
