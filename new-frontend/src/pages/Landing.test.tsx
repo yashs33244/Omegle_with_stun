@@ -240,6 +240,45 @@ describe("Landing photo capture", () => {
     await waitFor(() => expect(video.srcObject).toBe(stream));
   });
 
+  it("keeps the current photo when a retake is abandoned, and drops it only on skip", async () => {
+    const jpeg = "data:image/jpeg;base64,QUJD";
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+      drawImage: vi.fn(),
+    } as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(jpeg);
+
+    const { user, dialog, video } = await openCapture();
+    Object.defineProperty(video, "videoWidth", { configurable: true, value: 1280 });
+    Object.defineProperty(video, "videoHeight", { configurable: true, value: 720 });
+    fireEvent.loadedData(video);
+    await user.click(within(dialog).getByTestId("capture-photo"));
+    expect(await within(dialog).findByAltText("Your profile photo")).toHaveAttribute("src", jpeg);
+
+    // Retake, then close the dialog without taking a new photo.
+    await user.click(within(dialog).getByRole("button", { name: "Retake Photo" }));
+    expect(within(dialog).getByTestId("capture-photo")).toBeInTheDocument();
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Edit profile photo and details" }).querySelector("img")).toHaveAttribute(
+      "src",
+      jpeg,
+    );
+
+    // Reopening goes straight to the details with the photo kept.
+    await user.click(screen.getByTestId("start-chat"));
+    const reopened = await screen.findByRole("dialog");
+    expect(within(reopened).getByAltText("Your profile photo")).toHaveAttribute("src", jpeg);
+
+    // Choosing to continue without a photo is what removes it.
+    await user.click(within(reopened).getByRole("button", { name: "Retake Photo" }));
+    await user.click(within(reopened).getByTestId("skip-photo"));
+    expect(within(reopened).queryByAltText("Your profile photo")).not.toBeInTheDocument();
+    expect(within(reopened).getByRole("button", { name: "Take a Photo" })).toBeInTheDocument();
+    await user.type(within(reopened).getByTestId("name-input"), "Asha");
+    await user.click(within(reopened).getByTestId("begin-chat"));
+    expect(roomProps.current?.profile.photo).toBeUndefined();
+  });
+
   it("shows why a capture failed instead of failing silently", async () => {
     const { user, dialog, video } = await openCapture();
     // loadeddata fired but the frame size is still unknown.

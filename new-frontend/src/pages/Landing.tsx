@@ -137,10 +137,15 @@ export const Landing = () => {
     }
   };
 
+  // The current photo stays until a new capture succeeds or the user skips the photo.
   const retakePhoto = () => {
-    setForm((prev) => ({ ...prev, photo: undefined }));
     setCaptureError(null);
     setSetupStep("capture");
+  };
+
+  const skipPhoto = () => {
+    setForm((prev) => ({ ...prev, photo: undefined }));
+    setSetupStep("details");
   };
 
   const beginChat = () => {
@@ -418,7 +423,7 @@ export const Landing = () => {
 
                 <button
                   type="button"
-                  onClick={() => setSetupStep("details")}
+                  onClick={skipPhoto}
                   data-testid="skip-photo"
                   className="w-full text-sm text-gray-600 underline hover:text-black"
                 >
