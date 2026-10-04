@@ -13,6 +13,11 @@ ARG VITE_API_URL=https://chizzyapi.itsyash.space
 # An empty build arg falls back like config.ts does, so the bundle and the CSP agree.
 ENV VITE_API_URL=${VITE_API_URL:-https://chizzyapi.itsyash.space}
 RUN npm run build
+# Pre-compressed copies of the moderation models and their runtimes, served by
+# gzip_static (nginx.conf, /models/): the 12 MB MediaPipe wasm goes out as
+# about 4 MB without nginx compressing it again on every request.
+RUN find dist/models -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.json' -o -name '*.bin' -o -name '*.tflite' \) \
+    -exec gzip -9 -n -k {} +
 
 FROM nginxinc/nginx-unprivileged:1.28.2-alpine3.23 AS runtime
 # The CSP connect-src is derived from this at container start (see
