@@ -9,6 +9,7 @@ case "$api_origin" in
   http://*) ws_origin="ws://${api_origin#http://}" ;;
   *) api_origin="" ; ws_origin="" ;;
 esac
-CSP_CONNECT_SRC="'self'${api_origin:+ $api_origin}${ws_origin:+ $ws_origin}"
-export CSP_CONNECT_SRC
+# The single quotes around self are part of the CSP value, not shell quoting.
+# shellcheck disable=SC2089,SC2090
+export CSP_CONNECT_SRC="'self'${api_origin:+ $api_origin}${ws_origin:+ $ws_origin}"
 echo "18-api-origin.envsh: CSP connect-src $CSP_CONNECT_SRC"
