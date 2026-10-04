@@ -38,6 +38,8 @@ export const MatchPrompt: React.FC<MatchPromptProps> = ({
   onDecline,
 }) => {
   const remaining = useSecondsLeft(expiresAt);
+  // Time is up: the server ends this match, so answering it does nothing.
+  const expired = remaining === 0;
   const country = getCountryByCode(partner.country);
 
   return (
@@ -102,25 +104,34 @@ export const MatchPrompt: React.FC<MatchPromptProps> = ({
               </span>
             </div>
           ) : (
-            <div className="flex gap-4 justify-center">
-              <button
-                type="button"
-                onClick={onDecline}
-                data-testid="match-decline"
-                className="retro-button bg-red-500 border-red-600 text-white hover:bg-red-400"
-              >
-                <X className="w-5 h-5 inline mr-2" />
-                Pass
-              </button>
-              <button
-                type="button"
-                onClick={onAccept}
-                data-testid="match-accept"
-                className="retro-button bg-green-500 border-green-600 text-white hover:bg-green-400"
-              >
-                <Check className="w-5 h-5 inline mr-2" />
-                Accept
-              </button>
+            <div className="space-y-3">
+              {expired && (
+                <p className="text-gray-300" role="status">
+                  Time's up. Finding someone new...
+                </p>
+              )}
+              <div className="flex gap-4 justify-center">
+                <button
+                  type="button"
+                  onClick={onDecline}
+                  disabled={expired}
+                  data-testid="match-decline"
+                  className="retro-button bg-red-500 border-red-600 text-white hover:bg-red-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <X className="w-5 h-5 inline mr-2" />
+                  Pass
+                </button>
+                <button
+                  type="button"
+                  onClick={onAccept}
+                  disabled={expired}
+                  data-testid="match-accept"
+                  className="retro-button bg-green-500 border-green-600 text-white hover:bg-green-400 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Check className="w-5 h-5 inline mr-2" />
+                  Accept
+                </button>
+              </div>
             </div>
           )}
         </div>

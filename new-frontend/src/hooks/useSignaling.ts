@@ -475,9 +475,11 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
   };
 
   const accept = useCallback(() => {
-    const { roomId, status } = stateRef.current;
+    const { roomId, status, expiresAt } = stateRef.current;
     const socket = connectedSocket();
     if (!socket || !roomId || status !== "match-found") return;
+    // The countdown hit 0: the server ends this match, so do not show a spinner for it.
+    if (expiresAt !== null && Date.now() >= expiresAt) return;
     socket.emit("match:accept", { roomId });
     dispatch({ type: "local-accept" });
   }, []);
