@@ -1,8 +1,10 @@
 # syntax=docker/dockerfile:1
-# Backend image: Bun + TypeScript compiled to dist/.
+# Backend image: bun installs and compiles, Node 22 runs dist/.
 # Build:  docker build -t chizzy-backend ./backend
+# Node is the production runtime because it enforces Socket.IO's
+# maxHttpBufferSize on websocket frames (Bun did not; BUGS.md S-03).
 # The bun version must read the committed text lockfile (bun.lock). Image tags
-# are literal (not ARGs) so dependabot can bump them; keep both FROM lines equal.
+# are literal (not ARGs) so dependabot can bump them.
 
 FROM oven/bun:1.4.2-alpine AS base
 WORKDIR /app
@@ -24,7 +26,7 @@ RUN bun run build
 FROM base AS prod-deps
 RUN bun install --frozen-lockfile --production
 
-FROM oven/bun:1.4.2-alpine AS runtime
+FROM node:22.23.3-alpine3.24 AS runtime
 ENV NODE_ENV=production \
     PORT=3004
 WORKDIR /app
@@ -32,12 +34,12 @@ WORKDIR /app
 COPY package.json ./
 COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
-USER bun
+USER node
 EXPOSE 3004
 STOPSIGNAL SIGTERM
-# Alpine has no curl; use bun's fetch against the liveness endpoint.
+# Alpine has no curl; use Node's fetch against the liveness endpoint.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
-  CMD ["bun", "-e", "fetch('http://127.0.0.1:' + (process.env.PORT || 3004) + '/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
-# Run the server directly (not through `bun run`) so it is PID 1 and receives
-# SIGTERM for graceful shutdown. Same command as the `start` package script.
-CMD ["bun", "dist/index.js"]
+  CMD ["node", "-e", "fetch('http://127.0.0.1:' + (process.env.PORT || 3004) + '/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+# Same command as the `start` package script, without npm/bun in between, so
+# the server receives SIGTERM directly and can shut down gracefully.
+CMD ["node", "dist/index.js"]
