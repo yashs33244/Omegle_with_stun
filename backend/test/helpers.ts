@@ -8,7 +8,10 @@ import { loadConfig, type Config } from "../src/config";
 import { createLogger } from "../src/logger";
 import {
   PROTOCOL_VERSION,
+  TOS_VERSION,
   type ClientToServerEvents,
+  type SessionRequest,
+  type SessionResponse,
   type HelloAck,
   type HelloPayload,
   type Preferences,
@@ -23,10 +26,15 @@ import type { MatchStore } from "../src/store/MatchStore";
 
 export type Client = Socket<ServerToClientEvents, ClientToServerEvents>;
 
-/** Matchmaking timings shrunk so integration tests run in milliseconds. */
+/**
+ * Matchmaking timings shrunk so integration tests run in milliseconds.
+ * The session gate is OFF here so matchmaking tests can connect directly;
+ * gate tests pass `requireSession: true` and use createSession().
+ */
 export function testConfig(overrides: Partial<Config> = {}): Config {
   return {
     ...loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent", MAX_CONNECTIONS_PER_IP: "1000" }),
+    requireSession: false,
     matchAcceptTimeoutMs: 400,
     matchAcceptGraceMs: 50,
     sweepIntervalMs: 20,
@@ -55,7 +63,7 @@ export interface TestServer {
   config: Config;
   url: string;
   clients: Client[];
-  connect(opts?: { headers?: Record<string, string> }): Promise<Client>;
+  connect(opts?: { headers?: Record<string, string>; auth?: Record<string, unknown> }): Promise<Client>;
   close(): Promise<void>;
 }
 
@@ -68,7 +76,7 @@ export interface TestServer {
 export async function startServer(
   overrides: Partial<Config> = {},
   store?: MatchStore,
-  deps: Pick<ServerDeps, "configureIo"> = {},
+  deps: Pick<ServerDeps, "configureIo" | "fetch" | "restrictions" | "redis" | "flags"> = {},
 ): Promise<TestServer> {
   const config = testConfig(overrides);
   const owned: { close(): Promise<void> }[] = [];
@@ -97,6 +105,7 @@ export async function startServer(
         forceNew: true,
         reconnection: false,
         extraHeaders: opts.headers,
+        auth: opts.auth,
       });
       clients.push(client);
       await new Promise<void>((resolve, reject) => {
@@ -111,6 +120,42 @@ export async function startServer(
       for (const o of owned) await o.close();
     },
   };
+}
+
+/** A valid POST /api/session body for a new adult device. */
+export function sessionBody(overrides: Partial<SessionRequest> = {}): SessionRequest {
+  return {
+    deviceId: randomUUID(),
+    fingerprint: "a".repeat(64),
+    turnstileToken: "test-token",
+    age: { dob: "1990-01-01", attest18: true, tosVersion: TOS_VERSION },
+    ...overrides,
+  };
+}
+
+export async function postSession(
+  ts: Pick<TestServer, "url">,
+  body: unknown,
+  headers: Record<string, string> = {},
+): Promise<{ status: number; body: SessionResponse }> {
+  const res = await fetch(`${ts.url}/api/session`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: (await res.json()) as SessionResponse };
+}
+
+/** Creates a session for a new device and connects a client with its token. */
+export async function connectWithSession(
+  ts: TestServer,
+  overrides: Partial<SessionRequest> = {},
+): Promise<{ client: Client; deviceId: string; sessionToken: string }> {
+  const body = sessionBody(overrides);
+  const res = await postSession(ts, body);
+  if (!res.body.ok) throw new Error(`session refused: ${res.body.error}`);
+  const client = await ts.connect({ auth: { sessionToken: res.body.sessionToken } });
+  return { client, deviceId: body.deviceId, sessionToken: res.body.sessionToken };
 }
 
 /** Resolves with the next payload of `event`, or rejects after `ms`. */

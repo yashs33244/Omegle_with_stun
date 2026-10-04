@@ -14,6 +14,7 @@ import type { Config } from "../config";
 import type { FlagsReader } from "../flags/flags";
 import type { Logger } from "../logger";
 import type { Metrics } from "../metrics";
+import type { QueueGate } from "../session/queueGate";
 import type {
   ChatAck,
   ChatSendPayload,
@@ -58,6 +59,8 @@ export interface MatchServiceDeps {
   emitter: Emitter;
   /** Operator flags (kill switch, staffed hours, bitrate caps). */
   flags: FlagsReader;
+  /** Who may join the queue (kill switch, staffed hours, max_waiting, hourly caps). Open when unset. */
+  gate?: QueueGate;
   /** Injectable clock for tests. */
   now?: () => number;
 }
@@ -87,6 +90,8 @@ export class MatchService {
   private readonly log: Logger;
   private readonly metrics: Metrics;
   private readonly emitter: Emitter;
+  private readonly flags: FlagsReader;
+  private readonly gate?: QueueGate;
   private readonly now: () => number;
   private readonly local = new Map<string, LocalSocket>();
   /** Sessions queued or changed since the last match pass (only touched under the lock). */
@@ -105,6 +110,8 @@ export class MatchService {
     this.log = deps.logger;
     this.metrics = deps.metrics;
     this.emitter = deps.emitter;
+    this.flags = deps.flags;
+    this.gate = deps.gate;
     this.now = deps.now ?? Date.now;
   }
 
@@ -190,6 +197,11 @@ export class MatchService {
 
       if (session && session.deviceId !== deviceId) {
         return reply({ ok: false, error: "bad_state", message: "deviceId cannot change on a live socket" });
+      }
+      // Gate only hellos that would join the queue; a re-hello mid-call just updates the profile.
+      if (!session || session.state === "idle") {
+        const refused = await this.gate?.admit(deviceId);
+        if (refused) return reply({ ok: false, ...refused });
       }
 
       if (!session) {
@@ -571,11 +583,13 @@ export class MatchService {
       this.emitter.emit(socketId, "match:ended", { roomId: room.id, reason });
       const s = sessions[i];
       if (!s || s.roomId !== room.id) continue;
-      if (await this.store.getBan(s.deviceId)) {
+      const capped = await this.gate?.requeue(s.deviceId);
+      if (capped || (await this.store.getBan(s.deviceId))) {
         s.state = "idle";
         s.roomId = undefined;
         s.waitingSince = undefined;
         await this.store.putSession(s);
+        if (capped) this.emitter.emit(socketId, "server:error", { code: capped.error, message: capped.message });
       } else {
         await this.enqueueLocked(s);
       }
@@ -630,6 +644,8 @@ export class MatchService {
    * unmatchable with each other. The sweeper runs the full pass.
    */
   private async matchPassLocked(full = false): Promise<void> {
+    // Kill switch or outside staffed hours: keep the queue, match nobody.
+    if (!this.flags.status(this.now()).open) return;
     const focus = full ? null : new Set(this.dirty);
     this.dirty.clear();
     if (focus && focus.size === 0) return;
@@ -708,6 +724,7 @@ export class MatchService {
     ]);
     this.metrics.matchesTotal.inc();
     this.log.info({ roomId: room.id }, "match found");
+    if (this.gate) await Promise.all([this.gate.recordMatch(a.deviceId), this.gate.recordMatch(b.deviceId)]);
     const sharedTopics = a.profile.topics.filter((t) => b.profile.topics.includes(t));
     const base = { roomId: room.id, isFriend, expiresAt: room.expiresAt, serverNow: now, sharedTopics };
     this.emitter.emit(a.socketId, "match:found", { ...base, mode: a.mode, partner: publicProfile(b.profile, photoB) });
