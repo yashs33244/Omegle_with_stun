@@ -1,5 +1,6 @@
 import { type ClassValue, clsx } from "clsx"
 import { twMerge } from "tailwind-merge"
+import type { ReportReason } from "./protocol"
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -29,25 +30,26 @@ export const LANGUAGE_OPTIONS = [
   { value: 'hi', label: 'Hindi', flag: '🇮🇳' }
 ] as const;
 
-// Report reasons for user reporting
-export const REPORT_REASONS = [
-  'Inappropriate behavior',
-  'Spam or unwanted content',
-  'Nudity or sexual content',
-  'Harassment or bullying',
-  'Hate speech',
-  'Violence or threats',
-  'Fake profile',
-  'Underage user',
-  'Other'
-] as const;
+// Human labels for the protocol report reasons
+export const REPORT_REASON_LABELS: Record<ReportReason, string> = {
+  inappropriate: 'Inappropriate behavior',
+  spam: 'Spam or unwanted content',
+  nudity: 'Nudity or sexual content',
+  harassment: 'Harassment or bullying',
+  hate: 'Hate speech',
+  violence: 'Violence or threats',
+  fake: 'Fake profile',
+  underage: 'Underage user',
+  other: 'Other'
+};
 
 // Connection quality indicators
 export const CONNECTION_QUALITY = {
-  EXCELLENT: { label: 'Excellent', color: 'text-green-400', bars: 4 },
-  GOOD: { label: 'Good', color: 'text-yellow-400', bars: 3 },
-  FAIR: { label: 'Fair', color: 'text-orange-400', bars: 2 },
-  POOR: { label: 'Poor', color: 'text-red-400', bars: 1 }
+  EXCELLENT: { label: 'Excellent', color: 'text-green-400', bar: 'bg-green-400', bars: 4 },
+  GOOD: { label: 'Good', color: 'text-yellow-400', bar: 'bg-yellow-400', bars: 3 },
+  FAIR: { label: 'Fair', color: 'text-orange-400', bar: 'bg-orange-400', bars: 2 },
+  POOR: { label: 'Poor', color: 'text-red-400', bar: 'bg-red-400', bars: 1 },
+  DISCONNECTED: { label: 'Disconnected', color: 'text-red-400', bar: 'bg-red-400', bars: 0 }
 } as const;
 
 // Format connection time for display
@@ -79,12 +81,12 @@ export function getRandomElement<T>(array: T[]): T {
 }
 
 // Debounce function for search/typing
-export function debounce<T extends (...args: any[]) => any>(
-  func: T,
+export function debounce<A extends unknown[]>(
+  func: (...args: A) => void,
   delay: number
-): (...args: Parameters<T>) => void {
-  let timeoutId: NodeJS.Timeout;
-  return (...args: Parameters<T>) => {
+): (...args: A) => void {
+  let timeoutId: ReturnType<typeof setTimeout>;
+  return (...args: A) => {
     clearTimeout(timeoutId);
     timeoutId = setTimeout(() => func(...args), delay);
   };

@@ -22,9 +22,7 @@ export const ConnectionIndicator: React.FC<ConnectionIndicatorProps> = ({
         <div
           key={i}
           className={`w-1 rounded-sm ${
-            i <= qualityInfo.bars 
-              ? qualityInfo.color.replace('text-', 'bg-')
-              : 'bg-gray-600'
+            i <= qualityInfo.bars ? qualityInfo.bar : 'bg-gray-600'
           }`}
           style={{ height: `${i * 3 + 2}px` }}
         />
@@ -33,9 +31,9 @@ export const ConnectionIndicator: React.FC<ConnectionIndicatorProps> = ({
     return bars;
   };
 
-  if (quality === 'POOR' && qualityInfo.bars === 0) {
+  if (qualityInfo.bars === 0) {
     return (
-      <div className={`flex items-center gap-2 ${className}`}>
+      <div className={`flex items-center gap-2 ${className}`} role="img" aria-label="Connection: Disconnected">
         <WifiOff className="w-4 h-4 text-red-400" />
         {showLabel && (
           <span className="text-xs text-red-400">Disconnected</span>
@@ -45,7 +43,7 @@ export const ConnectionIndicator: React.FC<ConnectionIndicatorProps> = ({
   }
 
   return (
-    <div className={`flex items-center gap-2 ${className}`}>
+    <div className={`flex items-center gap-2 ${className}`} role="img" aria-label={`Connection: ${qualityInfo.label}`}>
       <div className="flex items-end gap-0.5 h-4">
         {renderBars()}
       </div>
