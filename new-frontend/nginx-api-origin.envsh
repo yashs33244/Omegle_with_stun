@@ -1,0 +1,15 @@
+#!/bin/sh
+# Sourced by the nginx image entrypoint before its envsubst step.
+# Derives the CSP connect-src list from API_ORIGIN (the socket server URL, set
+# from VITE_API_URL at build time): the http(s) origin for plain requests and
+# the matching ws(s) origin for the websocket.
+api_origin=$(printf '%s' "${API_ORIGIN:-}" | sed -E 's|^([A-Za-z][A-Za-z0-9+.-]*://[^/?#]+).*$|\1|')
+case "$api_origin" in
+  https://*) ws_origin="wss://${api_origin#https://}" ;;
+  http://*) ws_origin="ws://${api_origin#http://}" ;;
+  *) api_origin="" ; ws_origin="" ;;
+esac
+# The single quotes around self are part of the CSP value, not shell quoting.
+# shellcheck disable=SC2089,SC2090
+export CSP_CONNECT_SRC="'self'${api_origin:+ $api_origin}${ws_origin:+ $ws_origin}"
+echo "18-api-origin.envsh: CSP connect-src $CSP_CONNECT_SRC"
