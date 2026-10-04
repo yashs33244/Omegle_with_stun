@@ -53,6 +53,10 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
+      # Node 22 is the production runtime; test:node runs the built server on it.
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
       - name: Use the public npm registry in bun.lock
         run: sed -i -E "$LOCKFILE_REGISTRY_FIX" bun.lock
       - run: bun install --frozen-lockfile
@@ -63,6 +67,8 @@ jobs:
         env:
           REDIS_URL: redis://localhost:6379
       - run: bun run build
+      - name: Test the built server under Node
+        run: bun run test:node
 
   frontend:
     name: Frontend
