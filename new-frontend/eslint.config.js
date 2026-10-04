@@ -23,15 +23,16 @@ export default tseslint.config(
         "warn",
         { allowConstantExport: true },
       ],
-      "@typescript-eslint/no-unused-vars": "off",
+      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
     },
   },
   {
     // Vendored shadcn/ui components are kept as generated upstream.
-    files: ["src/components/ui/**/*.{ts,tsx}"],
+    files: ["src/components/ui/**/*.{ts,tsx}", "src/hooks/use-toast.ts"],
     rules: {
       "@typescript-eslint/no-empty-object-type": "off",
       "react-refresh/only-export-components": "off",
+      "@typescript-eslint/no-unused-vars": "off",
     },
   },
   {
