@@ -42,6 +42,10 @@ workflow. Empty optional secrets fall back to the defaults shown.
 | `CORS_ORIGINS` | `https://chizzy.itsyash.space` | comma list of allowed browser origins (the frontend URL). The backend refuses to start in production without it |
 | `BACKEND_REPLICAS` | `2` | number of backend containers |
 | `BIND_ADDRESS` | `0.0.0.0` | host address the gateway (3004) and frontend (5173) ports bind to. Set `127.0.0.1` when the host proxy runs on the same host and connects via localhost, so the ports are not reachable around it |
+| `BACKEND_PORT`, `FRONTEND_PORT` | `3004`, `5173` | host ports of the gateway and the frontend (the host proxy must point at them) |
+| `MAX_CONNECTIONS_PER_IP` | `10` | sockets one client IP may hold on each backend replica |
+| `MATCH_ACCEPT_TIMEOUT_MS` | `30000` | how long both users have to accept a match |
+| `SHUTDOWN_GRACE_MS` | `10000` | graceful shutdown time of a replica; keep it under the 15 s compose `stop_grace_period` |
 | `REDIS_PASSWORD` | unset | optional Redis password, URL safe (`openssl rand -hex 32`) |
 | `METRICS_TOKEN` | unset | bearer token for `GET /metrics` on the replicas |
 | `LOG_LEVEL` | `info` | pino log level |
@@ -53,6 +57,11 @@ workflow. Empty optional secrets fall back to the defaults shown.
 | `RUN_COTURN` | unset | `true` runs the bundled coturn service (compose profile `turn`) on the host |
 | `TURN_REALM` | `chizzy` | coturn realm |
 | `TURN_EXTERNAL_IP` | unset | for coturn on EC2: `<public-ip>/<private-ip>` |
+| `TURN_MIN_PORT`, `TURN_MAX_PORT` | `49160`, `49200` | coturn UDP relay port range; the security group must open the same range |
+
+Every deploy rewrites `.env` on the host from these secrets, so a value
+changed by editing `.env` by hand lasts only until the next deploy. Set a
+secret instead.
 
 Secrets from the old setup that nothing reads any more and can be deleted:
 `JWT_SECRET`, `FRONTEND_URL`, `DB_URL`, `REDIS_URL` (Redis is part of the stack).
@@ -72,7 +81,7 @@ reviewers to the `production` environment if deploys should need approval.
     minutes, and `X-Forwarded-For` / `X-Forwarded-Proto` set.
 - Security group: 80 and 443 open to the world, 22 to where you deploy from.
   Ports 3004 and 5173 do not need to be public (set `BIND_ADDRESS=127.0.0.1`).
-  For coturn: 3478 tcp+udp and 49160-49200 udp.
+  For coturn: 3478 tcp+udp and 49160-49200 udp (or `TURN_MIN_PORT`-`TURN_MAX_PORT`).
 
 ### Client IP behind Cloudflare
 
@@ -176,7 +185,7 @@ cd ~/Omegle_with_stun
 docker compose ps
 docker compose logs -f --tail=100 backend      # all replicas
 docker compose logs -f gateway frontend redis
-docker compose up -d                           # re-apply after editing .env by hand
+docker compose up -d                           # re-apply after editing .env by hand (lost on the next deploy; set a secret)
 docker compose --profile turn up -d            # start coturn manually
 ```
 

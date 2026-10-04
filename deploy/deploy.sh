@@ -21,10 +21,14 @@
 set -Eeuo pipefail
 
 # Variables copied from the environment into .env when DEPLOY_WRITE_ENV=1.
+# Every variable docker-compose.yml reads is here (scripts/test-deploy.sh
+# checks it): .env is rewritten on every workflow deploy, so a value set only by
+# editing .env by hand would be lost on the next deploy.
 ENV_KEYS=(
-  CORS_ORIGINS REDIS_PASSWORD BACKEND_REPLICAS BIND_ADDRESS
+  CORS_ORIGINS REDIS_PASSWORD BACKEND_REPLICAS BIND_ADDRESS BACKEND_PORT FRONTEND_PORT
+  MAX_CONNECTIONS_PER_IP MATCH_ACCEPT_TIMEOUT_MS SHUTDOWN_GRACE_MS
   STUN_URLS TURN_URLS TURN_SECRET TURN_USERNAME TURN_CREDENTIAL TURN_TTL_SECONDS
-  TURN_REALM TURN_EXTERNAL_IP METRICS_TOKEN LOG_LEVEL
+  TURN_REALM TURN_EXTERNAL_IP TURN_MIN_PORT TURN_MAX_PORT METRICS_TOKEN LOG_LEVEL
 )
 installed=0
 HEALTH_ATTEMPTS="${HEALTH_ATTEMPTS:-30}"

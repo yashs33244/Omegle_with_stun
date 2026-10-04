@@ -29,6 +29,8 @@ jobs:
       - run: sh scripts/sync-protocol.sh --check
       - name: Lockfiles only reference the public npm registry
         run: sh scripts/check-lockfiles.sh
+      - name: Deploy script tests
+        run: bash scripts/test-deploy.sh
 
   backend:
     name: Backend
