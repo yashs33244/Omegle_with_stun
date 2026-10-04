@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import type { RoomProps } from "./Room";
 
 const roomProps: { current: RoomProps | null } = { current: null };
@@ -48,7 +49,7 @@ beforeEach(() => {
 
 async function openDetails() {
   const user = userEvent.setup();
-  render(<Landing />);
+  render(<Landing />, { wrapper: MemoryRouter });
   const start = await screen.findByTestId("start-chat");
   await waitFor(() => expect(start).toBeEnabled());
   await user.click(start);
@@ -155,7 +156,7 @@ describe("Landing profile validation", () => {
 describe("Landing photo capture", () => {
   async function openCapture() {
     const user = userEvent.setup();
-    render(<Landing />);
+    render(<Landing />, { wrapper: MemoryRouter });
     const start = await screen.findByTestId("start-chat");
     await waitFor(() => expect(start).toBeEnabled());
     await user.click(start);
@@ -205,7 +206,7 @@ describe("Landing camera handling", () => {
   it("shows the real cause when the camera is blocked and retries on demand", async () => {
     getUserMedia.mockRejectedValueOnce(new DOMException("denied", "NotAllowedError"));
     const user = userEvent.setup();
-    render(<Landing />);
+    render(<Landing />, { wrapper: MemoryRouter });
 
     const problem = await screen.findByTestId("camera-error");
     expect(problem).toHaveTextContent("Camera access is blocked");
@@ -219,7 +220,7 @@ describe("Landing camera handling", () => {
 
   it("explains a busy camera", async () => {
     getUserMedia.mockRejectedValueOnce(new DOMException("busy", "NotReadableError"));
-    render(<Landing />);
+    render(<Landing />, { wrapper: MemoryRouter });
     expect(await screen.findByTestId("camera-error")).toHaveTextContent("Camera is busy");
   });
 
