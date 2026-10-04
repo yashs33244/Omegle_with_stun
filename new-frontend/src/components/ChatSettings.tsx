@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Settings, Shield, Globe, Users, Flag, X } from 'lucide-react';
 import { Button } from './retroui/Button';
 import { Card, CardContent } from './retroui/Card';
 import { Select, SelectItem } from './retroui/Select';
+import { useDialogFocus } from '../hooks/useDialogFocus';
 import { GENDER_OPTIONS, LANGUAGE_OPTIONS, REPORT_REASON_LABELS } from '../lib/utils';
 import {
   GENDER_FILTERS,
@@ -57,6 +58,10 @@ export const ChatSettings: React.FC<ChatSettingsProps> = ({
   const [prefsFeedback, setPrefsFeedback] = useState<Feedback>(null);
   const [reportSending, setReportSending] = useState(false);
   const [reportFeedback, setReportFeedback] = useState<Feedback>(null);
+  const settingsRef = useRef<HTMLDivElement>(null);
+  const reportRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(isOpen, settingsRef);
+  useDialogFocus(isOpen && showReportDialog, reportRef);
 
   const savePreferences = async (next: Preferences) => {
     setPrefsSaving(true);
@@ -126,6 +131,7 @@ export const ChatSettings: React.FC<ChatSettingsProps> = ({
     <>
       {/* Main Settings Panel */}
       <div
+        ref={settingsRef}
         className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4"
         role="dialog"
         aria-modal="true"
@@ -235,7 +241,7 @@ export const ChatSettings: React.FC<ChatSettingsProps> = ({
 
             <div className="mt-6 pt-4 border-t border-gray-700">
               <p className="text-xs text-gray-400 text-center">
-                Settings are applied immediately and saved for your next session
+                Changes apply from your next match.
               </p>
             </div>
           </CardContent>
@@ -245,6 +251,7 @@ export const ChatSettings: React.FC<ChatSettingsProps> = ({
       {/* Report Dialog */}
       {showReportDialog && (
         <div
+          ref={reportRef}
           className="fixed inset-0 bg-black bg-opacity-50 z-[60] flex items-center justify-center p-4"
           role="dialog"
           aria-modal="true"
