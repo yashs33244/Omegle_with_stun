@@ -16,6 +16,14 @@ push to new-v
 Deploys are serialized (`concurrency: deploy-production`, a newer push waits
 for the running deploy). `workflow_dispatch` re-runs a deploy by hand.
 
+Production layout:
+
+```
+browser -> Cloudflare (proxy, Turnstile; TURN for relayed media)
+        -> host proxy on EC2 (TLS) -> frontend :5173 (SPA, /admin, /models)
+                                   -> gateway :3004 -> backend replicas -> Redis
+```
+
 ## GitHub secrets
 
 Settings -> Secrets and variables -> Actions. Values are never printed by the
@@ -31,10 +39,30 @@ workflow. Empty optional secrets fall back to the defaults shown.
 | `EC2_USER` | SSH user (for example `ubuntu`) |
 | `EC2_SSH_KEY` | private key for that user (the full PEM, including the BEGIN and END lines) |
 
+### Required for the launch build
+
+| secret | used for |
+|---|---|
+| `SESSION_SECRET` | HMAC key for session and age tokens (`openssl rand -hex 32`). Required in production |
+| `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET` | Cloudflare Turnstile widget for the SPA hostname. The site key is public (served by `/api/config`) |
+| `ADMIN_TOKEN` | bearer token for `/admin/api/*` (`openssl rand -hex 32`). Unset keeps the admin console's API off |
+| `TURN_PROVIDER` | `cloudflare` |
+| `CF_TURN_KEY_ID`, `CF_TURN_API_TOKEN` | Cloudflare Realtime TURN key; the backend mints per-call credentials with it |
+| `TRUST_CLOUDFLARE` | `true` once both hostnames are proxied by Cloudflare (see "Cloudflare in front") |
+
 ### Optional
 
 | secret | default | used for |
 |---|---|---|
+| `SESSION_SECRET_PREVIOUS` | unset | previous `SESSION_SECRET`, still accepted during a rotation; clear it after 180 days |
+| `TURNSTILE_DISABLED` | `false` | skips Turnstile. Staging and load tests only, never production |
+| `CF_ACCOUNT_ID`, `CF_ANALYTICS_TOKEN` | unset | TURN spend poller (read-only Analytics token) |
+| `SENTRY_DSN`, `SENTRY_DSN_FRONTEND` | unset | Sentry projects for the backend and the SPA |
+| `POSTHOG_KEY`, `POSTHOG_HOST` | unset | PostHog Cloud project (cookieless) |
+| `ADMIN_ALLOWED_IPS` | unset | comma list of IPs or CIDRs allowed to call the admin API, on top of the token |
+| `EVIDENCE_S3_BUCKET`, `AWS_REGION` | unset | evidence in S3 instead of the `evidence-data` volume (credentials from the instance role) |
+| `CLOUDFLARE_ONLY` | `false` | `true`: the gateway refuses requests that did not come through Cloudflare |
+| `BACKUP_S3_URI` | unset | `s3://bucket/prefix` for the nightly Redis snapshot (docs/redis-backup.md) |
 | `PROJECT_PATH` | `Omegle_with_stun` | directory on the host (relative to the SSH user's home, or absolute) that holds `docker-compose.yml` and `.env` |
 | `EC2_SSH_FINGERPRINT` | unset | SHA256 host key fingerprint; when set, the SSH steps refuse a different host key (recommended). Get it with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the host |
 | `VITE_API_URL` | `REACT_APP_API_URL`, then `https://chizzyapi.itsyash.space` | public URL of the socket server, baked into the frontend build and its CSP |
@@ -46,16 +74,20 @@ workflow. Empty optional secrets fall back to the defaults shown.
 | `METRICS_TOKEN` | unset | bearer token for `GET /metrics` on the replicas |
 | `LOG_LEVEL` | `info` | pino log level |
 | `STUN_URLS` | Google public STUN | comma list |
-| `TURN_URLS` | unset | comma list of TURN URLs handed to clients |
-| `TURN_SECRET` | unset | shared secret with coturn (`use-auth-secret`); the backend issues short-lived credentials |
-| `TURN_USERNAME`, `TURN_CREDENTIAL` | unset | static TURN credentials instead of `TURN_SECRET` (both or neither) |
-| `TURN_TTL_SECONDS` | `43200` | lifetime of issued TURN credentials |
-| `RUN_COTURN` | unset | `true` runs the bundled coturn service (compose profile `turn`) on the host |
-| `TURN_REALM` | `chizzy` | coturn realm |
-| `TURN_EXTERNAL_IP` | unset | for coturn on EC2: `<public-ip>/<private-ip>` |
+| `TURN_URLS`, `TURN_SECRET`, `TURN_USERNAME`, `TURN_CREDENTIAL`, `TURN_TTL_SECONDS` | unset | self-hosted TURN on a separate host only (`TURN_PROVIDER` `static` or `secret`) |
 
-Secrets from the old setup that nothing reads any more and can be deleted:
-`JWT_SECRET`, `FRONTEND_URL`, `DB_URL`, `REDIS_URL` (Redis is part of the stack).
+Repository **variable** (not a secret) and the canary secret:
+
+| name | kind | used for |
+|---|---|---|
+| `CANARY_URL` | variable | API origin the canary tests every 15 minutes; unset disables the canary |
+| `CANARY_TURNSTILE_BYPASS` | secret, optional | token the canary sends instead of Cloudflare's dummy test token (see "Synthetic canary") |
+
+Secrets nothing reads any more and that can be deleted: `JWT_SECRET`,
+`FRONTEND_URL`, `DB_URL`, `REDIS_URL` (Redis is part of the stack), and the
+coturn settings `RUN_COTURN`, `TURN_REALM`, `TURN_EXTERNAL_IP` (coturn was
+removed from the stack; the next deploy removes a running coturn container
+as an orphan).
 
 Also recommended: protect `new-v` (require the CI checks and a review) and add
 reviewers to the `production` environment if deploys should need approval.
@@ -69,14 +101,67 @@ reviewers to the `production` environment if deploys should need approval.
   - `chizzy.itsyash.space` -> `http://127.0.0.1:5173`
   - `chizzyapi.itsyash.space` -> `http://127.0.0.1:3004`, with websocket upgrade
     (`Upgrade` and `Connection` headers), a read timeout of at least a few
-    minutes, and `X-Forwarded-For` / `X-Forwarded-Proto` set.
-- Security group: 80 and 443 open to the world, 22 to where you deploy from.
-  Ports 3004 and 5173 do not need to be public (set `BIND_ADDRESS=127.0.0.1`).
-  For coturn: 3478 tcp+udp and 49160-49200 udp.
+    minutes, and `X-Forwarded-Proto` set. It must **append** the address it
+    received the connection from to `X-Forwarded-For` (nginx:
+    `$proxy_add_x_forwarded_for`; Caddy does this by default). The gateway
+    uses that last hop to tell Cloudflare from everyone else.
+- Security group: 443 (and 80) open to Cloudflare's ranges only once
+  Cloudflare is in front (to the world before that), 22 to where you deploy
+  from (or use SSM). Ports 3004 and 5173 do not need to be public (set
+  `BIND_ADDRESS=127.0.0.1`). No TURN ports: TURN is Cloudflare's.
+- For backups: the AWS CLI on the host, and an instance role with
+  `s3:PutObject` on the backup prefix (docs/redis-backup.md). For S3
+  evidence: the role also needs access to `EVIDENCE_S3_BUCKET`, and the
+  instance metadata hop limit must be 2 so containers can reach the role
+  credentials (`aws ec2 modify-instance-metadata-options --http-put-response-hop-limit 2 ...`).
 
 The gateway trusts `X-Forwarded-For` only from private addresses (the host
 proxy and Docker's port publishing), so the backend sees the real client IP for
-its per-IP limits, and a client connecting directly cannot spoof it.
+its per-IP limits, and a client connecting directly cannot spoof it. Behind
+Cloudflare the real client IP comes from `CF-Connecting-IP`, which the gateway
+believes only when the previous hop is a Cloudflare address.
+
+## Cloudflare in front
+
+Both hostnames go through Cloudflare (proxied DNS records, SSL mode "Full
+(strict)" with a Cloudflare Origin CA certificate on the host proxy).
+Websockets work through Cloudflare on every plan; Socket.IO's 20 s ping keeps
+idle sockets open, and the client reconnects and re-sends hello when
+Cloudflare restarts an edge.
+
+**Why geo-blocking needs this.** The country blocklist (`blocked_countries`
+flag: the UK, EU and EEA, and Australia by default) reads Cloudflare's
+`CF-IPCountry` header. A header is only as trustworthy as the path it came
+on: if the origin also accepts direct connections, anyone can send their own
+`CF-IPCountry: US` and skip the block (Ofcom has fined a service for blocking
+UK users badly). So:
+
+1. Proxy both the SPA and the API hostname through Cloudflare.
+2. Set `TRUST_CLOUDFLARE=true` so the backend uses the country header. With
+   it false the country is unknown and the blocklist cannot apply.
+3. The gateway forwards `CF-IPCountry` and `CF-Connecting-IP` only for
+   requests whose previous hop is in Cloudflare's published ranges
+   (`deploy/nginx/cloudflare-ips.conf`); from anywhere else it drops them.
+4. Lock the origin to Cloudflare, in two layers:
+   - the security group allows 443 only from https://www.cloudflare.com/ips-v4
+     and https://www.cloudflare.com/ips-v6 (the strongest layer);
+   - `CLOUDFLARE_ONLY=true`: every deploy runs `deploy/cloudflare-ips.sh`,
+     which refreshes the ranges and writes a gateway rule that answers 403 to
+     any public address that is not Cloudflare. Health checks from the host
+     and the compose network still pass.
+
+`deploy/cloudflare-ips.sh` keeps the existing list if the download fails or
+looks wrong, so a failed download never empties the list. A snapshot of the
+ranges is committed; refresh it with `sh deploy/cloudflare-ips.sh` and commit
+when Cloudflare announces changes. Test the block from UK, US and EU exits (a
+commercial VPN and a cloud VM) before launch and record the result in
+docs/risk-assessment.md.
+
+Also on Cloudflare: Turnstile (the site key and secret above), Realtime TURN
+(the key above, plus a billing notification), and **Cloudflare Access** in
+front of `chizzyapi.itsyash.space/admin/api/*` and `chizzy.itsyash.space/admin`
+(free for small teams), so the admin console is not on the open internet even
+though it also needs `ADMIN_TOKEN`.
 
 ## First-time setup
 
@@ -106,6 +191,9 @@ first run, so that deploy cannot roll back automatically.
 4. `docker compose up -d --no-build --remove-orphans --wait`, which waits for
    every container healthcheck (Redis ping, backend `/healthz`, gateway,
    frontend `/healthz`).
+   Before that, `deploy/cloudflare-ips.sh` refreshes the gateway's Cloudflare
+   files (and the origin lock when `CLOUDFLARE_ONLY=true`), and a checksum of
+   `deploy/nginx/` recreates the gateway when any of its config changed.
 5. Verifies through the published ports, with retries: gateway `/healthz`,
    gateway `/readyz` (backend can reach Redis) and frontend `/healthz`.
 6. On success records the sha in `.deployed-tag` and prunes dangling images only.
@@ -113,8 +201,11 @@ first run, so that deploy cannot roll back automatically.
    starts the previous tag from `.deployed-tag`, verifies it, and fails the job
    either way so the broken commit is visible.
 
-Volumes are never pruned: the `redis-data` volume holds coins, friends, bans
-and reports.
+Volumes are never pruned: the `redis-data` volume holds flags, sessions,
+restrictions, reports metadata, appeals, takedowns, the audit log, coins and
+friends; the `evidence-data` volume holds report evidence (when S3 is not
+used), shared by the replicas on this host. The deploy also copies
+`scripts/backup-redis.sh` and `scripts/restore-redis.sh` to the host.
 
 A deploy recreates the backend replicas, which drops live calls; clients
 reconnect and are re-queued automatically.
@@ -152,11 +243,50 @@ docker compose ps
 docker compose logs -f --tail=100 backend      # all replicas
 docker compose logs -f gateway frontend redis
 docker compose up -d                           # re-apply after editing .env by hand
-docker compose --profile turn up -d            # start coturn manually
+bash scripts/backup-redis.sh                   # Redis snapshot (and S3 upload when BACKUP_S3_URI is set)
 ```
 
 Container logs rotate at 10 MB x 3 files per container. Backend logs are JSON
-(pino) and never contain names, photos or chat text.
+(pino) and never contain names, photos or chat text. CERT-In requires 180 days
+of logs kept in India; shipping logs to an India-region store is **not set up
+yet** (docs/launch-checklist.md).
+
+### Kill switch, flags and staffed hours
+
+Operator flags are edited in the admin console (`/admin` -> Flags) and reach
+every replica within about 2 s; no deploy or restart is needed:
+
+| flag | effect |
+|---|---|
+| `matching_enabled` | off: nobody is matched (live peer-to-peer calls continue) |
+| `new_sessions_enabled` | off: `POST /api/session` refuses new sessions |
+| `staffed_hours` | e.g. `20:00-24:00 Asia/Kolkata`: matching opens only in that window; empty is always open |
+| `banner_message` | banner in the app |
+| `default_mode` | `instant` or `preview` |
+| `max_waiting` | back-pressure on the queue |
+| `turn_enabled`, `private_mode_enabled`, `video_max_kbps`, `relay_video_max_kbps` | relay cost controls (the TURN spend poller also changes them) |
+| `blocked_countries` | country blocklist (comma separated ISO codes) |
+| `online_count_threshold` | show the real online count only above this |
+
+What to change when is in the runbooks: docs/runbooks/abuse-wave.md,
+docs/runbooks/turn-cost-spike.md, docs/runbooks/host-down.md.
+
+### Synthetic canary
+
+`.github/workflows/canary.yml` runs every 15 minutes once the repository
+variable `CANARY_URL` is set: two headless clients create sessions, connect
+and must both reach `call:start` within 30 s. They use the language code
+`zxx` and filter on it, so the server's hard language filter only pairs them
+with each other, never with a real person. When matching is closed (staffed
+hours or the kill switch) the run passes with "skipped". A failed run is the
+alert (GitHub emails whoever last changed the workflow's schedule; Better
+Stack can watch the run status).
+
+Turnstile is the catch: the canary cannot solve a real challenge. Either
+point `CANARY_URL` at a staging stack that runs with the Turnstile **test**
+secret `1x0000000000000000000000000000000AA` (the canary's dummy token passes
+there), or, if the backend gains a canary bypass, put its token in the
+`CANARY_TURNSTILE_BYPASS` secret. The backend has no such bypass today.
 
 Old sha-tagged images are not deleted automatically (only dangling ones are),
 so the previous release stays available for rollback. To reclaim disk space
@@ -175,6 +305,15 @@ docker build --build-arg VITE_API_URL=https://chizzyapi.itsyash.space -t yashs33
 ```
 
 The backend image installs and compiles with bun and runs on `node:22-alpine`
-as the `node` user. The frontend image builds with Node 22 and serves `dist/`
-from `nginxinc/nginx-unprivileged` on port 8080 with a strict CSP and
-`Permissions-Policy` limiting camera and microphone to the site itself.
+as the `node` user, with `/data/evidence` owned by that user (the evidence
+volume mounts there). The frontend image builds with Node 22 and serves `dist/`
+from `nginxinc/nginx-unprivileged` on port 8080 with a CSP that allows only
+the site itself, the API origin, Cloudflare Turnstile, Sentry ingest and
+PostHog, plus `wasm-unsafe-eval` and blob: workers for the on-device models
+(self-hosted under `/models/`, cached as immutable: a new model version must
+use a new path). `Permissions-Policy` limits camera and microphone to the site
+itself. `/admin` is served as the SPA with `X-Robots-Tag: noindex`.
+
+## Load testing
+
+See docs/capacity.md. Never point the load test at production.
