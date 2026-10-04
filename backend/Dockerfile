@@ -9,11 +9,6 @@
 FROM oven/bun:1.4.2-alpine AS base
 WORKDIR /app
 COPY package.json bun.lock ./
-# bun.lock may record tarball URLs from a private package-firewall mirror
-# (whatever registry the developer machine used). Point them at the public npm
-# registry so the build works on CI and on any host. Integrity hashes do not
-# change, so the install is still fully verified. No-op for a clean lockfile.
-RUN sed -i -E 's#https://registry\.npmjs\.org/#https://registry.npmjs.org/#g' bun.lock
 
 # All dependencies, used to compile.
 FROM base AS build

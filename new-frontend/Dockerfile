@@ -6,10 +6,7 @@
 FROM node:22.23.3-alpine3.24 AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
-# Point any private package-firewall mirror URLs in the lockfile at the public
-# npm registry so `npm ci` works on CI and any host (integrity is unchanged).
-RUN sed -i -E 's#https://registry\.npmjs\.org/#https://registry.npmjs.org/#g' package-lock.json \
- && npm ci --no-audit --no-fund
+RUN npm ci --no-audit --no-fund
 COPY . .
 # Socket server origin baked into the bundle.
 ARG VITE_API_URL=https://chizzyapi.itsyash.space

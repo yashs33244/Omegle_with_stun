@@ -18,18 +18,17 @@ concurrency:
 env:
   BUN_VERSION: "1.4.2"
   NODE_VERSION: "22.23.3"
-  # Lockfiles generated behind a private package-firewall mirror record its
-  # tarball URLs; point them at the public npm registry (integrity unchanged).
-  LOCKFILE_REGISTRY_FIX: 's#https://registry\.npmjs\.org/#https://registry.npmjs.org/#g'
 
 jobs:
   protocol:
-    name: Protocol in sync
+    name: Protocol and lockfiles
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: sh scripts/sync-protocol.sh --check
+      - name: Lockfiles only reference the public npm registry
+        run: sh scripts/check-lockfiles.sh
 
   backend:
     name: Backend
@@ -57,8 +56,6 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: Use the public npm registry in bun.lock
-        run: sed -i -E "$LOCKFILE_REGISTRY_FIX" bun.lock
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
       - run: bun run lint
@@ -84,8 +81,6 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
           cache-dependency-path: new-frontend/package-lock.json
-      - name: Use the public npm registry in package-lock.json
-        run: sed -i -E "$LOCKFILE_REGISTRY_FIX" package-lock.json
       - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
       - run: npm run lint
