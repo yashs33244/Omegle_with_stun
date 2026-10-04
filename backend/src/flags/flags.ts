@@ -109,6 +109,21 @@ export function parseStaffedHours(value: string): Window | null {
   return { start, end, timeZone: m[5]! };
 }
 
+function clockLabel(minutes: number): string {
+  if (minutes === 0 || minutes === 24 * 60) return "midnight";
+  if (minutes === 12 * 60) return "noon";
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  return `${h12}${m ? `:${String(m).padStart(2, "0")}` : ""} ${h < 12 ? "am" : "pm"}`;
+}
+
+/** "20:00-24:00 Asia/Kolkata" -> "8 pm to midnight (Asia/Kolkata)"; null when empty or invalid. */
+export function describeStaffedHours(value: string): string | null {
+  const w = value ? parseStaffedHours(value) : null;
+  return w ? `${clockLabel(w.start)} to ${clockLabel(w.end)} (${w.timeZone})` : null;
+}
+
 function insideWindow(w: Window, minutes: number): boolean {
   return w.start < w.end ? minutes >= w.start && minutes < w.end : minutes >= w.start || minutes < w.end;
 }
