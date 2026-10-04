@@ -45,6 +45,11 @@ const backendEnv = (port: number, acceptTimeoutMs: number) => ({
   LOG_LEVEL: "warn",
   // Always the in-memory store, whatever the calling shell exports.
   REDIS_URL: "",
+  // Cloudflare's Turnstile test keys: the always-pass site key and secret.
+  TURNSTILE_SITE_KEY: "1x00000000000000000000AA",
+  TURNSTILE_SECRET: "1x0000000000000000000000000000000AA",
+  // Lets a test pick its country with the CF-IPCountry header (e2e only).
+  TRUST_CLOUDFLARE: "true",
 });
 
 /** Production build pointed at one backend, served by `vite preview` with the production security headers. */
