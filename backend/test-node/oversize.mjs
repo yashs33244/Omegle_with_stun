@@ -45,7 +45,8 @@ function connect() {
 }
 
 const helloPayload = () => ({
-  protocolVersion: 2,
+  protocolVersion: 3,
+  mode: "preview",
   deviceId: randomUUID(),
   profile: { name: "Node", country: "IN", language: "en", gender: "unspecified", topics: ["general"] },
   preferences: { genderFilter: "all", languageFilter: "any" },

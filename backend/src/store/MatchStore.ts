@@ -18,7 +18,7 @@
  *   room inside withLock(); single-key atomic operations (coins, friends,
  *   reports, bans) do not need it.
  */
-import type { Preferences, Profile, ReportReason } from "../protocol";
+import type { MatchMode, Preferences, Profile, ReportReason } from "../protocol";
 
 export type SessionState = "idle" | "waiting" | "pending" | "active";
 
@@ -36,6 +36,8 @@ export interface Session {
   instanceId: string;
   profile: SessionProfile;
   preferences: Preferences;
+  /** Requested match mode. Instant means the server accepts on this session's behalf. */
+  mode: MatchMode;
   state: SessionState;
   /** Set while state is pending or active. */
   roomId?: string;

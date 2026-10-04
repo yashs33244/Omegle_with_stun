@@ -46,7 +46,7 @@ export function prefs(overrides: Partial<Preferences> = {}): Preferences {
 }
 
 export function hello(overrides: Partial<HelloPayload> = {}): HelloPayload {
-  return { protocolVersion: PROTOCOL_VERSION, deviceId: randomUUID(), profile: profile(), preferences: prefs(), ...overrides };
+  return { protocolVersion: PROTOCOL_VERSION, deviceId: randomUUID(), profile: profile(), preferences: prefs(), mode: "preview", ...overrides };
 }
 
 export interface TestServer {

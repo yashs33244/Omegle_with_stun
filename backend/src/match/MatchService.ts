@@ -21,6 +21,7 @@ import type {
   HelloPayload,
   MatchEndReason,
   PublicProfile,
+  ReportAck,
   ReportPayload,
   RtcSignal,
   ServerToClientEvents,
@@ -197,6 +198,7 @@ export class MatchService {
           instanceId: this.config.instanceId,
           profile,
           preferences: payload.preferences,
+          mode: payload.mode,
           state: "idle",
           connectedAt: now,
         };
@@ -204,13 +206,14 @@ export class MatchService {
       } else {
         session.profile = profile;
         session.preferences = payload.preferences;
+        session.mode = payload.mode;
       }
       await this.store.putSession(session);
       await this.store.setPhoto(socketId, photo ?? null);
       this.local.set(socketId, this.local.get(socketId) ?? { deviceId });
 
       const coins = (await this.store.getCoins(deviceId)) ?? this.config.initialCoins;
-      reply({ ok: true, coins, iceServers: buildIceServers(this.config, deviceId, now) });
+      reply({ ok: true, coins, iceServers: buildIceServers(this.config, deviceId, now), mode: payload.mode });
 
       if (session.state === "idle" || session.state === "waiting") {
         await this.enqueueLocked(session, session.state === "waiting" ? session.waitingSince : undefined);
@@ -260,8 +263,15 @@ export class MatchService {
           await this.store.putSession(s);
         }
       }
-      this.emitter.emit(room.members[0], "call:start", { roomId, initiator: true });
-      this.emitter.emit(room.members[1], "call:start", { roomId, initiator: false });
+      // Protocol v3 fields: per-call TURN credentials and bitrate caps arrive with the backend-match lane.
+      const media = {
+        iceServers: buildIceServers(this.config, sessions[0]?.deviceId ?? roomId, now),
+        maxBitrateKbps: 900,
+        relayMaxBitrateKbps: 500,
+        privateModeAllowed: false,
+      };
+      this.emitter.emit(room.members[0], "call:start", { roomId, initiator: true, ...media });
+      this.emitter.emit(room.members[1], "call:start", { roomId, initiator: false, ...media });
       this.log.info({ roomId }, "call started");
     });
   }
@@ -297,7 +307,7 @@ export class MatchService {
     });
   }
 
-  async report(socketId: string, payload: ReportPayload, reply: Reply<SimpleAck>): Promise<void> {
+  async report(socketId: string, payload: ReportPayload, reply: Reply<ReportAck>): Promise<void> {
     await this.store.withLock(async () => {
       const session = await this.store.getSession(socketId);
       if (!session) return reply({ ok: false, error: "bad_state", message: "send session:hello first" });
@@ -322,7 +332,7 @@ export class MatchService {
       const banned = reporters >= this.config.reportsToBan;
       if (banned) await this.store.setBan(reportedDevice, now + this.config.banMs);
 
-      reply({ ok: true });
+      reply({ ok: true, reportId: randomUUID() });
       // The reported side only learns that the partner moved on.
       await this.endRoomLocked(room, "reported", {
         [socketId]: "reported",
@@ -347,8 +357,8 @@ export class MatchService {
     if (!partner) return reply({ ok: false, error: "not_in_room" });
     const id = randomUUID();
     const ts = this.now();
-    this.emitter.emit(partner, "chat:message", { roomId: payload.roomId, id, text: payload.text, ts });
-    reply({ ok: true, id, ts });
+    this.emitter.emit(partner, "chat:message", { roomId: payload.roomId, id, text: payload.text, ts, redacted: false });
+    reply({ ok: true, id, ts, redacted: false });
   }
 
   async typing(socketId: string, payload: ChatTypingPayload): Promise<void> {
@@ -534,7 +544,7 @@ export class MatchService {
     await this.store.putSession(session);
     await this.store.addWaiting(session.socketId, session.waitingSince);
     this.dirty.add(session.socketId);
-    this.emitter.emit(session.socketId, "queue:waiting");
+    this.emitter.emit(session.socketId, "queue:waiting", { relaxStep: 0 });
   }
 
   /**
@@ -695,8 +705,9 @@ export class MatchService {
     ]);
     this.metrics.matchesTotal.inc();
     this.log.info({ roomId: room.id }, "match found");
-    const base = { roomId: room.id, isFriend, expiresAt: room.expiresAt, serverNow: now };
-    this.emitter.emit(a.socketId, "match:found", { ...base, partner: publicProfile(b.profile, photoB) });
-    this.emitter.emit(b.socketId, "match:found", { ...base, partner: publicProfile(a.profile, photoA) });
+    const sharedTopics = a.profile.topics.filter((t) => b.profile.topics.includes(t));
+    const base = { roomId: room.id, isFriend, expiresAt: room.expiresAt, serverNow: now, sharedTopics };
+    this.emitter.emit(a.socketId, "match:found", { ...base, mode: a.mode, partner: publicProfile(b.profile, photoB) });
+    this.emitter.emit(b.socketId, "match:found", { ...base, mode: b.mode, partner: publicProfile(a.profile, photoA) });
   }
 }

@@ -29,6 +29,7 @@ test("one hello with 2000 unmatchable waiters completes in under 50 ms", async (
       instanceId: ts.config.instanceId,
       profile: base,
       preferences: prefs({ languageFilter: "hi" }),
+      mode: "preview",
       state: "waiting",
       waitingSince: now - 2000 + i,
       connectedAt: now,

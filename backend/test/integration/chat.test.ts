@@ -20,7 +20,7 @@ describe("chat", () => {
     if (!ack.ok) throw new Error(`chat failed: ${ack.error}`);
     expect(ack.id).toMatch(/^[0-9a-f-]{36}$/);
     expect(ack.ts).toBeGreaterThanOrEqual(before);
-    expect(await got).toEqual({ roomId, id: ack.id, text: "hello <b>there</b>", ts: ack.ts });
+    expect(await got).toEqual({ roomId, id: ack.id, text: "hello <b>there</b>", ts: ack.ts, redacted: false });
     expect(await echo).toBe(false);
   });
 

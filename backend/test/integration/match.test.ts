@@ -29,7 +29,7 @@ describe("hello and matching", () => {
     c.on("queue:waiting", () => order.push("queue:waiting"));
     const ack = await sendHello(c, hello());
     order.push("ack");
-    expect(ack).toEqual({ ok: true, coins: 100, iceServers: [{ urls: ts.config.stunUrls }] });
+    expect(ack).toEqual({ ok: true, coins: 100, iceServers: [{ urls: ts.config.stunUrls }], mode: "preview" });
     await next(c, "queue:waiting").catch(() => undefined);
     expect(order[0]).toBe("ack");
   });
@@ -62,8 +62,8 @@ describe("hello and matching", () => {
     const startB = next(cb, "call:start");
     cb.emit("match:accept", { roomId: fa.roomId });
     const [sa, sb] = await Promise.all([startA, startB]);
-    expect(sa).toEqual({ roomId: fa.roomId, initiator: true }); // the older waiter
-    expect(sb).toEqual({ roomId: fa.roomId, initiator: false });
+    expect(sa).toMatchObject({ roomId: fa.roomId, initiator: true }); // the older waiter
+    expect(sb).toMatchObject({ roomId: fa.roomId, initiator: false });
   });
 
   test("rtc:signal is relayed unchanged to the partner", async () => {

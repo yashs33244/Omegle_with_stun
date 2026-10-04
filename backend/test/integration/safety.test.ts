@@ -123,7 +123,7 @@ describe("reports and bans", () => {
     const endA = next(ca, "match:ended");
     const endB = next(cb, "match:ended");
     const ack = await ca.timeout(1000).emitWithAck("report:submit", { roomId, reason: "spam", details: "ads" });
-    expect(ack).toEqual({ ok: true });
+    expect(ack).toMatchObject({ ok: true });
     expect(await endA).toEqual({ roomId, reason: "reported" });
     expect(await endB).toEqual({ roomId, reason: "partner-skipped" });
     const block = await ts.store.getBlock(a.deviceId, b.deviceId);
@@ -157,7 +157,7 @@ describe("reports and bans", () => {
       await foundT;
       const banned = i === 2 ? next(ct, "server:error") : null;
       const requeued = i < 2 ? next(ct, "queue:waiting") : null;
-      expect(await r.timeout(1000).emitWithAck("report:submit", { roomId, reason: "harassment" })).toEqual({ ok: true });
+      expect(await r.timeout(1000).emitWithAck("report:submit", { roomId, reason: "harassment" })).toMatchObject({ ok: true });
       if (banned) expect(await banned).toEqual({ code: "banned" });
       if (requeued) await requeued;
       r.disconnect();
