@@ -34,7 +34,7 @@ const found: SignalingEvent = {
   serverNow: 15_000,
   receivedAt: 1_000,
 };
-const start: SignalingEvent = { type: "call-start", roomId: ROOM, initiator: true, at: 2_000 };
+const start: SignalingEvent = { type: "call-start", roomId: ROOM, initiator: true };
 
 describe("signalingReducer", () => {
   it("starts connecting and moves to waiting on a successful hello", () => {
@@ -68,7 +68,6 @@ describe("signalingReducer", () => {
     s = run([start], s);
     expect(s.status).toBe("in-call");
     expect(s.initiator).toBe(true);
-    expect(s.callStartedAt).toBe(2_000);
     expect(s.expiresAt).toBeNull();
   });
 
@@ -80,7 +79,7 @@ describe("signalingReducer", () => {
   it("ignores events for another room", () => {
     const base = run([hello, found]);
     expect(run([{ type: "partner-accepted", roomId: OTHER_ROOM }], base)).toBe(base);
-    expect(run([{ type: "call-start", roomId: OTHER_ROOM, initiator: false, at: 1 }], base)).toBe(base);
+    expect(run([{ type: "call-start", roomId: OTHER_ROOM, initiator: false }], base)).toBe(base);
     expect(run([{ type: "match-ended", roomId: OTHER_ROOM, reason: "timeout" }], base)).toBe(base);
   });
 

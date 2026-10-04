@@ -225,6 +225,9 @@ membership, timestamps, coins). In short:
 - `match:found` -> `match:accept` / `match:decline` -> `call:start` (exactly
   one side is the initiator) -> `rtc:signal` relays offer, answer and ICE
   candidates between the two members of an active room only.
+- `call:connected` once each side's peer connection is up. Coins and friends
+  count from when both sides have sent it, so a call whose media never
+  connects earns nothing.
 - `chat:send` / `chat:message`, `chat:typing`, `call:skip`, `report:submit`,
   `session:preferences`.
 - Server notices: `match:ended` (with a reason), `coins:update`, `friends:new`,

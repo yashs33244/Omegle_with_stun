@@ -30,7 +30,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     matchAcceptTimeoutMs: 400,
     matchAcceptGraceMs: 50,
     sweepIntervalMs: 20,
-    fullMatchPassIntervalMs: 40,
+    recheckIntervalMs: 40,
     coinIntervalMs: 150,
     friendAfterMs: 350,
     ...overrides,
@@ -182,4 +182,12 @@ export async function activePair(ts: TestServer, a?: HelloPayload, b?: HelloPayl
   pair.cb.emit("match:accept", { roomId: pair.roomId });
   const [sa, sb] = await Promise.all([startA, startB]);
   return { ...pair, startA: sa, startB: sb };
+}
+
+/** An active pair whose peer connections both reported connected (rewards run from here). */
+export async function connectedPair(ts: TestServer, a?: HelloPayload, b?: HelloPayload) {
+  const pair = await activePair(ts, a, b);
+  pair.ca.emit("call:connected", { roomId: pair.roomId });
+  pair.cb.emit("call:connected", { roomId: pair.roomId });
+  return pair;
 }

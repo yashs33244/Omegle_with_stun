@@ -109,11 +109,20 @@ export interface Config {
   matchAcceptGraceMs: number;
   sweepIntervalMs: number;
   /**
-   * How often the sweeper runs a FULL match pass (O(waiting^2)); in between it
-   * only matches sessions queued since the last pass. The full pass picks up
-   * lapsed blocks and users queued on other instances.
+   * How often the sweeper rechecks a slice of the waiting queue against
+   * everyone else. In between it only matches sessions queued or changed
+   * since the last pass, plus sessions whose block just lapsed. The recheck
+   * is a safety net for marks this instance never saw (blocks changed or
+   * sessions queued elsewhere).
    */
-  fullMatchPassIntervalMs: number;
+  recheckIntervalMs: number;
+  /**
+   * Pair checks one recheck may spend. The slice is this divided by the
+   * queue length (at least one session), so a recheck never scans all pairs
+   * of a long queue and never stalls the event loop; a short queue is
+   * rechecked whole.
+   */
+  recheckPairBudget: number;
   /**
    * Every instance refreshes its heartbeat this often. Sessions of an
    * instance whose heartbeat is older than instanceTtlMs are removed by the
@@ -175,7 +184,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     matchAcceptTimeoutMs: e.MATCH_ACCEPT_TIMEOUT_MS,
     matchAcceptGraceMs: 750,
     sweepIntervalMs: 500,
-    fullMatchPassIntervalMs: 5_000,
+    recheckIntervalMs: 5_000,
+    recheckPairBudget: 100_000,
     heartbeatIntervalMs: 5_000,
     instanceTtlMs: 15_000,
     coinIntervalMs: 60_000,

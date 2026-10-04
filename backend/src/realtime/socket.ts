@@ -185,6 +185,7 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): void {
     );
     on("match:accept", "control", roomRefSchema, (p) => service.accept(socket.id, p.roomId));
     on("match:decline", "control", roomRefSchema, (p) => service.decline(socket.id, p.roomId));
+    on("call:connected", "control", roomRefSchema, (p) => service.connected(socket.id, p.roomId));
     on("call:skip", "control", null, () => service.skip(socket.id));
     on("rtc:signal", "signal", rtcSignalSchema, (p) => service.signal(socket.id, p));
     on("chat:send", "chat", chatSendSchema, (p, reply) => service.chat(socket.id, p, reply));
