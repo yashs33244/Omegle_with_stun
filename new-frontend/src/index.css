@@ -165,7 +165,8 @@
     transparent 70%
   );
   border-radius: 16px;
-  animation: border-beam 5s linear forwards;
+  /* --beam-duration is set from the server accept deadline. */
+  animation: border-beam var(--beam-duration, 5s) linear forwards;
   z-index: 1;
 }
 

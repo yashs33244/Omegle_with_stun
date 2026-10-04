@@ -52,6 +52,11 @@ export const CONNECTION_QUALITY = {
   DISCONNECTED: { label: 'Disconnected', color: 'text-red-400', bar: 'bg-red-400', bars: 0 }
 } as const;
 
+// "music, art" -> "Music, Art"
+export function formatTopics(topics: readonly string[]): string {
+  return topics.map((t) => t.charAt(0).toUpperCase() + t.slice(1)).join(', ');
+}
+
 // Format connection time for display
 export function formatConnectionTime(seconds: number): string {
   const hours = Math.floor(seconds / 3600);
