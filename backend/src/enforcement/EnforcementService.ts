@@ -282,8 +282,14 @@ export class EnforcementService {
 
     let evidenceId: string | null = null;
     if (input.frame) {
-      evidenceId = randomUUID();
-      await this.evidence.put(evidenceId, input.frame.bytes, { restricted });
+      // A storage failure must not lose the report itself: keep it without the frame (the hash stays).
+      try {
+        const id = randomUUID();
+        await this.evidence.put(id, input.frame.bytes, { restricted });
+        evidenceId = id;
+      } catch (err) {
+        this.log.error({ err, restricted }, "could not store report evidence");
+      }
     }
     const end = input.endedAt ?? now;
     const report: StoredReport = {
@@ -297,7 +303,7 @@ export class EnforcementService {
       details: input.details?.trim() || null,
       chat: (input.chat ?? []).map((l) => ({ from: l.from === "me" ? "reporter" : "reported", text: l.text, ts: l.ts })),
       evidenceId,
-      evidenceSha256: input.frame?.sha256 ?? null,
+      evidenceSha256: evidenceId && input.frame ? input.frame.sha256 : null,
       restricted,
       nsfwScore: scores?.nsfw ?? null,
       minorScore: scores?.minor ?? null,

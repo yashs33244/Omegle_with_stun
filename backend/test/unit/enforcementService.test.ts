@@ -166,6 +166,17 @@ describe("CSAM routing", () => {
     expect((await h.store.get<StoredReport>("report", plain.reportId))!.restricted).toBe(false);
   });
 
+  test("a failing evidence store keeps the report, without the frame or its hash", async () => {
+    h = harness();
+    h.evidence.put = async () => {
+      throw new Error("EACCES");
+    };
+    const frame = parseEvidenceFrame(jpegDataUrl())!;
+    const res = await report(randomUUID(), "harassment", { frame });
+    const stored = (await h.store.get<StoredReport>("report", res.reportId))!;
+    expect(stored).toMatchObject({ evidenceId: null, evidenceSha256: null, reason: "harassment" });
+  });
+
   test("a classifier that throws is ignored", async () => {
     h = harness({
       classifier: async () => {
