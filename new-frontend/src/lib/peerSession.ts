@@ -30,6 +30,7 @@ export class PeerSession {
   private chain: Promise<void> = Promise.resolve();
   private remoteStream: MediaStream | null = null;
   private closed = false;
+  private iceRestarted = false;
 
   constructor(opts: PeerSessionOptions) {
     this.opts = opts;
@@ -63,7 +64,14 @@ export class PeerSession {
     };
 
     this.pc.onconnectionstatechange = () => {
-      if (!this.closed) this.opts.onConnectionStateChange(this.pc.connectionState);
+      if (this.closed) return;
+      const state = this.pc.connectionState;
+      // One ICE restart per call: the initiator re-offers with fresh credentials.
+      if (state === "failed" && this.opts.initiator && !this.iceRestarted) {
+        this.iceRestarted = true;
+        void this.restartIce();
+      }
+      this.opts.onConnectionStateChange(state);
     };
 
     const stream = opts.localStream;
@@ -83,6 +91,21 @@ export class PeerSession {
     if (!this.opts.initiator) return Promise.resolve();
     return this.enqueue(async () => {
       const offer = await this.pc.createOffer();
+      if (this.closed) return;
+      await this.pc.setLocalDescription(offer);
+      this.sendDescription(offer);
+    });
+  }
+
+  /**
+   * Initiator only: renegotiate with fresh ICE credentials (the answerer
+   * answers it like any offer). Called once when the connection fails.
+   */
+  private restartIce(): Promise<void> {
+    if (!this.opts.initiator) return Promise.resolve();
+    return this.enqueue(async () => {
+      if (this.pc.signalingState !== "stable") return;
+      const offer = await this.pc.createOffer({ iceRestart: true });
       if (this.closed) return;
       await this.pc.setLocalDescription(offer);
       this.sendDescription(offer);
