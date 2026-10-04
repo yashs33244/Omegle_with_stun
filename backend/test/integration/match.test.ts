@@ -302,6 +302,7 @@ describe("ending a match", () => {
         instanceId: "other-instance",
         profile: p,
         preferences: prefs({ genderFilter: "female" }),
+        mode: "preview",
         state: "waiting",
         waitingSince: now - 1000 + i,
         connectedAt: now,
