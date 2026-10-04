@@ -52,7 +52,11 @@ export interface RedisStoreOptions {
   logger?: Logger;
   /** Lock lease. A critical section running longer than this is logged as an error. */
   lockTtlMs?: number;
-  /** withLock() rejects if the lock cannot be acquired within this time. */
+  /**
+   * withLock() rejects if the lock cannot be acquired within this time,
+   * counted from the call: time queued behind earlier callers in this
+   * process counts too, so a backlog sheds work instead of growing.
+   */
   lockWaitMs?: number;
 }
 
@@ -79,6 +83,19 @@ end
 return 0`;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const LOCK_TIMEOUT = "timed out waiting for the match lock";
+
+/** True if `p` resolves before `deadline` (epoch ms), false once the deadline passes. */
+async function resolvesBefore(p: Promise<void>, deadline: number): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<boolean>((resolve) => (timer = setTimeout(() => resolve(false), deadline - Date.now())));
+  try {
+    return await Promise.race([p.then(() => true), timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 const parse = <T>(raw: string | null): T | null => (raw === null ? null : (JSON.parse(raw) as T));
 
@@ -150,13 +167,19 @@ export class RedisStore implements MatchStore {
   /* ---------------------------------------------------------------- */
 
   async withLock<T>(fn: () => Promise<T>): Promise<T> {
+    const deadline = Date.now() + this.lockWaitMs;
     const previous = this.localTail;
     let releaseLocal!: () => void;
     this.localTail = new Promise<void>((resolve) => (releaseLocal = resolve));
-    await previous;
+    if (!(await resolvesBefore(previous, deadline))) {
+      // Pass the slot on only once the caller ahead is done, so the next
+      // local caller does not start polling Redis while that one still waits.
+      void previous.then(releaseLocal);
+      throw new Error(LOCK_TIMEOUT);
+    }
     try {
       const token = randomUUID();
-      await this.acquire(token);
+      await this.acquire(token, deadline);
       const started = Date.now();
       try {
         return await fn();
@@ -168,13 +191,12 @@ export class RedisStore implements MatchStore {
     }
   }
 
-  private async acquire(token: string): Promise<void> {
+  private async acquire(token: string, deadline: number): Promise<void> {
     const lockKey = this.key("lock", "match");
-    const deadline = Date.now() + this.lockWaitMs;
     let backoff = 4;
     for (;;) {
       if ((await this.redis.set(lockKey, token, "PX", this.lockTtlMs, "NX")) === "OK") return;
-      if (Date.now() >= deadline) throw new Error("timed out waiting for the match lock");
+      if (Date.now() >= deadline) throw new Error(LOCK_TIMEOUT);
       // Equal jitter: wait between backoff/2 and backoff ms, growing to 50 ms.
       await sleep(backoff / 2 + Math.random() * (backoff / 2));
       backoff = Math.min(backoff * 2, 50);
