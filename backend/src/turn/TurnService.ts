@@ -10,7 +10,7 @@
  *   Next presses do not mint a new set per call;
  * - new sets are capped per device and per IP (hashed) per hour.
  */
-import { createHash } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import type { Config } from "../config";
 import type { FlagsReader } from "../flags/flags";
 import type { Logger } from "../logger";
@@ -40,9 +40,14 @@ export interface TurnServiceDeps {
   now?: () => number;
 }
 
-/** Hash used as the per-IP counter key, so raw IPs are never stored. */
-export function ipKey(ip: string): string {
-  return createHash("sha256").update(`chizzy-turn-ip:${ip}`).digest("hex").slice(0, 32);
+/**
+ * Keyed hash used for the per-IP counter, so raw IPs are never stored and a
+ * stored key cannot be reversed by hashing every IPv4 address. The key is a
+ * secret every instance shares (the TURN API token or secret); without one it
+ * is random per process, which makes the IP cap per instance.
+ */
+export function ipKey(ip: string, secret: string): string {
+  return createHmac("sha256", secret).update(`chizzy-turn-ip:${ip}`).digest("hex").slice(0, 32);
 }
 
 export class TurnService {
@@ -53,6 +58,7 @@ export class TurnService {
   private readonly metrics: TurnServiceDeps["metrics"];
   private readonly fetch: FetchFn;
   private readonly now: () => number;
+  private readonly ipSecret: string;
   /** Requests in flight per device on this instance, so concurrent calls share one API request. */
   private readonly inflight = new Map<string, Promise<IceServer[] | null>>();
 
@@ -64,6 +70,7 @@ export class TurnService {
     this.metrics = deps.metrics;
     this.fetch = deps.fetch ?? ((input, init) => fetch(input, init));
     this.now = deps.now ?? Date.now;
+    this.ipSecret = this.config.cfTurnApiToken ?? this.config.turnSecret ?? randomBytes(32).toString("hex");
   }
 
   /** For the hello ack: STUN only. */
@@ -74,7 +81,7 @@ export class TurnService {
   /** Remembers which IP (hashed) a device said hello from, for the per-IP cap. */
   async rememberIp(deviceId: string, ip: string): Promise<void> {
     if (this.config.turnProvider === "none") return;
-    await this.store.setDeviceIp(deviceId, ipKey(ip), DEVICE_IP_TTL_MS);
+    await this.store.setDeviceIp(deviceId, ipKey(ip, this.ipSecret), DEVICE_IP_TTL_MS);
   }
 
   async callMedia(deviceId: string): Promise<CallMedia> {

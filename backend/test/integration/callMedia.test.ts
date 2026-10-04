@@ -150,7 +150,7 @@ describe("call:failed", () => {
     await sendHello(c, hello());
     const errors: unknown[] = [];
     c.on("server:error", (e) => errors.push(e));
-    for (let i = 0; i < 15; i++) c.emit("call:failed", { roomId: randomUUID(), reason: "timeout" });
+    for (let i = 0; i < 30; i++) c.emit("call:failed", { roomId: randomUUID(), reason: "timeout" });
     await new Promise((r) => setTimeout(r, 150));
     expect(errors.some((e) => (e as { code: string }).code === "rate_limited")).toBe(true);
   });

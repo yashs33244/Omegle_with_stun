@@ -20,8 +20,8 @@ export const RATE_LIMITS: Record<EventClass, BucketSpec> = {
   chat: { capacity: 10, refillPerSec: 2 },
   typing: { capacity: 10, refillPerSec: 4 },
   report: { capacity: 3, refillPerSec: 1 / 20 },
-  /** call:failed, call:telemetry and moderation:signal: a few per call. */
-  telemetry: { capacity: 10, refillPerSec: 0.5 },
+  /** call:failed, call:telemetry and moderation:signal: a few per call, calls can be seconds apart. */
+  telemetry: { capacity: 20, refillPerSec: 1 },
 };
 
 export class TokenBucket {

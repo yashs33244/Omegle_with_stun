@@ -5,7 +5,7 @@ import { createLogger } from "../../src/logger";
 import { createMatchMetrics } from "../../src/match/matchMetrics";
 import { cloudflareTurnUrl, dropPort53, fetchCloudflareIceServers, isPort53 } from "../../src/turn/cloudflare";
 import { MemoryTurnStore } from "../../src/turn/store";
-import { TurnService } from "../../src/turn/TurnService";
+import { TurnService, ipKey } from "../../src/turn/TurnService";
 import { fakeCloudflare } from "../fixtures/cloudflare";
 import { testConfig } from "../helpers";
 
@@ -59,6 +59,14 @@ describe("cloudflare helpers", () => {
       fetchCloudflareIceServers({ keyId: "k", apiToken: "t", ttlSeconds: 1, fetch: fakeCloudflare({ body: { iceServers: [{ urls: "stun:x" }] } }).fetch }),
     ).rejects.toThrow(/no TURN/);
   });
+});
+
+test("ipKey is a keyed hash: no raw IP, different per secret", () => {
+  const k = ipKey("203.0.113.9", "s1");
+  expect(k).toMatch(/^[a-f0-9]{32}$/);
+  expect(k).toBe(ipKey("203.0.113.9", "s1"));
+  expect(k).not.toBe(ipKey("203.0.113.9", "s2"));
+  expect(k).not.toBe(ipKey("203.0.113.10", "s1"));
 });
 
 describe("TurnService", () => {
