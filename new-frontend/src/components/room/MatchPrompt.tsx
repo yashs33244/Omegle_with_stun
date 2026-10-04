@@ -4,6 +4,7 @@ import { getCountryByCode } from "@/lib/data";
 import { formatTopics } from "@/lib/utils";
 import type { PublicProfile } from "@/lib/protocol";
 import { secondsLeft } from "@/hooks/useSignaling";
+import { PartnerPhoto } from "@/moderation/PartnerPhoto";
 
 interface MatchPromptProps {
   partner: PublicProfile;
@@ -47,11 +48,8 @@ export const MatchPrompt: React.FC<MatchPromptProps> = ({
       data-testid="match-prompt"
     >
       {partner.photo?.startsWith("data:image/") ? (
-        <img
-          src={partner.photo}
-          alt={`${partner.name}'s photo`}
-          className="w-full h-full object-cover"
-        />
+        // Blurred on this device until the on-device classifier passes it.
+        <PartnerPhoto photo={partner.photo} alt={`${partner.name}'s photo`} className="w-full h-full object-cover" />
       ) : (
         <div className="w-full h-full bg-gray-800 flex items-center justify-center">
           <UserRound className="w-32 h-32 text-gray-400" />

@@ -18,7 +18,7 @@ export interface RemoteBlurOptions {
   roomId: string | null;
   /** The partner's <video>. */
   video: HTMLVideoElement | null;
-  onSignal: (kind: BlurSignal) => void;
+  onSignal: (roomId: string, kind: BlurSignal) => void;
 }
 
 /** Safe-start blur for the partner's video. See blurGate.ts for the rules. */
@@ -38,7 +38,7 @@ export function useRemoteBlur({ roomId, video, onSignal }: RemoteBlurOptions): {
       grab: () => grabFrame(videoRef.current, CLASSIFIER_SIZE, "square", canvas),
       classify: (image) => classifyImage(image),
       onChange: (state) => setStatus(state.status),
-      onSignal: (kind) => onSignalRef.current(kind),
+      onSignal: (kind) => onSignalRef.current(roomId, kind),
     });
     monitorRef.current = monitor;
     monitor.start();

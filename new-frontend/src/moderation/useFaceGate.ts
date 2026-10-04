@@ -35,7 +35,7 @@ export function useFaceGate({ stream, enabled, roomId, onNoFace }: FaceGateOptio
   const active = enabled && !!videoTrack && moderationOverrides().faceGate === "real";
 
   useEffect(() => {
-    if (!active || !videoTrack) return;
+    if (!active || !videoTrack || typeof MediaStream === "undefined") return;
     // A private, muted element just for sampling, so layout changes never stop the gate.
     const video = document.createElement("video");
     video.muted = true;

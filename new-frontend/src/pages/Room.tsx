@@ -1,18 +1,27 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { MessageCircle, Mic, MicOff, UserRound, Video, WifiOff } from "lucide-react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Loader, Lock, MessageCircle, Mic, MicOff, SkipForward, SwitchCamera, UserRound, Video, VideoOff, WifiOff } from "lucide-react";
 import { Button } from "@/components/retroui/Button";
 import { ChatSettings } from "@/components/ChatSettings";
 import { ChatPanel, PartnerTyping } from "@/components/room/ChatPanel";
+import { HideIpToggle } from "@/components/room/HideIpToggle";
 import { MatchPrompt } from "@/components/room/MatchPrompt";
 import { RoomHeader } from "@/components/room/RoomHeader";
 import { VideoTile } from "@/components/room/VideoTile";
 import { WaitingPanel } from "@/components/room/WaitingPanel";
 import { useAudioLevelDetection } from "@/hooks/useAudioLevelDetection";
 import { useIsMobile } from "@/hooks/use-mobile";
+import { useNextShortcut } from "@/hooks/useNextShortcut";
 import { usePeerConnection } from "@/hooks/usePeerConnection";
+import { usePipDrag } from "@/hooks/usePipDrag";
 import { useSignaling } from "@/hooks/useSignaling";
+import { useWakeLock } from "@/hooks/useWakeLock";
 import { getCountryByCode } from "@/lib/data";
-import type { ErrorCode, Preferences, Profile, PublicProfile, SimpleAck } from "@/lib/protocol";
+import type { ErrorCode, MatchMode, ModerationSignalPayload, Preferences, Profile, PublicProfile, SimpleAck } from "@/lib/protocol";
+import { RemoteBlurOverlay } from "@/moderation/RemoteBlurOverlay";
+import { isBlurred } from "@/moderation/blurGate";
+import { useFaceGate } from "@/moderation/useFaceGate";
+import { useRemoteBlur } from "@/moderation/useRemoteBlur";
+import { activeCameraLabel, isVirtualCameraLabel } from "@/moderation/virtualCamera";
 
 export interface RoomProps {
   profile: Profile;
@@ -25,7 +34,28 @@ export interface RoomProps {
   /** Text-only mode turns the camera track off so the partner stops seeing you. */
   onCameraEnabledChange: (enabled: boolean) => void;
   onBackToHome: () => void;
+  /** Instant (the call starts right away, blurred) or Preview (accept card). */
+  mode?: MatchMode;
+  /** The user's Hide my IP choice; used when a call starts and the server allows it. */
+  hideIp?: boolean;
+  onHideIpChange?: (hideIp: boolean) => void;
+  /** Phones: switch between the front and back camera. */
+  onFlipCamera?: () => void;
+  /** False while the back camera is in use: the preview is then not mirrored. */
+  frontCamera?: boolean;
 }
+
+type ModerationKind = ModerationSignalPayload["kind"];
+
+/** Instant mode while the server connects you: no accept card, just a moment. */
+const ConnectingPanel: React.FC<{ partner: PublicProfile }> = ({ partner }) => (
+  <div className="w-full h-full min-h-[240px] bg-black flex items-center justify-center p-4" style={{ zIndex: 3 }} data-testid="instant-connecting">
+    <div className="text-center text-white space-y-3">
+      <Loader className="w-10 h-10 text-yellow-400 animate-spin mx-auto" aria-hidden="true" />
+      <p className="text-lg font-medium">Connecting you with {partner.name}...</p>
+    </div>
+  </div>
+);
 
 const NOTICE_TEXT: Partial<Record<ErrorCode, string>> = {
   rate_limited: "Slow down a little, you are sending too fast.",
@@ -73,27 +103,78 @@ export const Room: React.FC<RoomProps> = ({
   onMicEnabledChange,
   onCameraEnabledChange,
   onBackToHome,
+  mode = "preview",
+  hideIp = false,
+  onHideIpChange,
+  onFlipCamera,
+  frontCamera = true,
 }) => {
   const isMobile = useIsMobile();
   const [preferences, setPreferences] = useState<Preferences>(initialPreferences);
-  const signaling = useSignaling(profile, initialPreferences);
-  const { state, updatePreferences } = signaling;
+  const signaling = useSignaling(profile, initialPreferences, { mode });
+  const { state, updatePreferences, send } = signaling;
 
   const inCall = state.status === "in-call";
   const matchPhase = state.status === "match-found" || state.status === "starting-call";
-
-  const peer = usePeerConnection({
-    roomId: inCall ? state.roomId : null,
-    initiator: inCall ? state.initiator : null,
-    iceServers: state.iceServers,
-    localStream,
-    sendSignal: signaling.sendSignal,
-    subscribeSignals: signaling.subscribeSignals,
-  });
+  const callRoomId = inCall ? state.roomId : null;
 
   const [showChat, setShowChat] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [textOnlyMode, setTextOnlyMode] = useState(false);
+
+  const sendModeration = useCallback(
+    (roomId: string, kind: ModerationKind) => send("moderation:signal", { roomId, kind }),
+    [send],
+  );
+
+  // Sender face gate: no face for 3 s pauses our outgoing video.
+  const faceGate = useFaceGate({
+    stream: localStream,
+    enabled: !textOnlyMode,
+    roomId: callRoomId,
+    onNoFace: (roomId) => sendModeration(roomId, "no-face"),
+  });
+
+  const peer = usePeerConnection({
+    roomId: callRoomId,
+    initiator: inCall ? state.initiator : null,
+    iceServers: state.iceServers,
+    media: state.callMedia,
+    hideIp,
+    localStream,
+    videoPaused: faceGate.paused,
+    videoPlaceholder: faceGate.placeholder,
+    sendSignal: signaling.sendSignal,
+    subscribeSignals: signaling.subscribeSignals,
+    onCallFailed: (roomId, reason) => send("call:failed", { roomId, reason }),
+    onTelemetry: (payload) => send("call:telemetry", payload),
+  });
+
+  // Receiver safe-start blur on the partner's video.
+  const [remoteVideo, setRemoteVideo] = useState<HTMLVideoElement | null>(null);
+  const blur = useRemoteBlur({ roomId: callRoomId, video: remoteVideo, onSignal: sendModeration });
+  const remoteBlurred = isBlurred(blur.status);
+
+  // Virtual cameras (OBS and the like) are counted once per session.
+  const virtualCameraSent = useRef(false);
+  useEffect(() => {
+    if (!callRoomId || virtualCameraSent.current) return;
+    let cancelled = false;
+    void activeCameraLabel(localStream?.getVideoTracks()[0]).then((label) => {
+      if (cancelled || virtualCameraSent.current || !isVirtualCameraLabel(label)) return;
+      virtualCameraSent.current = true;
+      sendModeration(callRoomId, "virtual-camera");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [callRoomId, localStream, sendModeration]);
+
+  useWakeLock(inCall);
+  const canSkip = inCall || matchPhase;
+  useNextShortcut(canSkip, signaling.skip);
+  const pip = usePipDrag(isMobile && inCall && !textOnlyMode);
+  const instantConnecting = matchPhase && state.matchMode === "instant";
 
   // Text-only is per call: a new call starts with video again.
   useEffect(() => {
@@ -135,7 +216,8 @@ export const Room: React.FC<RoomProps> = ({
     void signaling.sendChat(text);
   };
 
-  const connectionFailed = inCall && peer.connectionState === "failed";
+  const connectionFailed = inCall && (peer.connectionState === "failed" || peer.failure !== null);
+  const privateAllowed = inCall && !!state.callMedia?.privateModeAllowed;
   // Length of the border beam: whatever is left of the accept window when the match arrives.
   const beamSeconds = useMemo(
     () => (state.expiresAt !== null ? Math.max(0, (state.expiresAt - Date.now()) / 1000) : 0),
@@ -166,8 +248,43 @@ export const Room: React.FC<RoomProps> = ({
         </div>
       )}
 
+      {inCall && (privateAllowed || peer.privateMode || peer.lowBandwidth || onFlipCamera) && (
+        <div className="flex flex-wrap items-center gap-3 px-4 py-2 bg-black bg-opacity-70 text-white border-b border-gray-700">
+          {peer.privateMode && (
+            <span className="flex items-center gap-1 text-xs text-green-400" data-testid="private-badge">
+              <Lock className="w-4 h-4" aria-hidden="true" />
+              IP hidden from your partner
+            </span>
+          )}
+          {privateAllowed && onHideIpChange && (
+            <HideIpToggle
+              checked={hideIp}
+              onChange={onHideIpChange}
+              note={hideIp !== peer.privateMode ? "Applies from your next call." : undefined}
+            />
+          )}
+          {peer.lowBandwidth && (
+            <span className="text-xs text-orange-300" role="status">
+              Weak connection: sending lower quality video.
+            </span>
+          )}
+          {onFlipCamera && !textOnlyMode && (
+            <Button
+              onClick={onFlipCamera}
+              variant="outline"
+              size="sm"
+              aria-label={frontCamera ? "Switch to the back camera" : "Switch to the front camera"}
+              data-testid="flip-camera"
+              className="ml-auto bg-black bg-opacity-60 text-white border-white"
+            >
+              <SwitchCamera className="w-4 h-4" />
+            </Button>
+          )}
+        </div>
+      )}
+
       {/* Main content */}
-      <div className="flex-1 flex">
+      <div className="flex-1 flex relative">
         <div
           className={`flex-1 grid ${
             textOnlyMode && inCall
@@ -181,19 +298,38 @@ export const Room: React.FC<RoomProps> = ({
         >
           {/* Local Video */}
           {!(textOnlyMode && inCall) && (
-            <div className={`retro-video-card ${localIsSpeaking ? "speaking" : ""}`}>
-              <VideoTile stream={localStream} mirrored muted testId="local-video" />
+            <div
+              className={`retro-video-card ${localIsSpeaking ? "speaking" : ""} ${pip.style ? "!w-28 !h-40 !min-h-0" : ""}`}
+              style={pip.style}
+              data-testid={pip.style ? "local-pip" : undefined}
+              {...pip.handlers}
+            >
+              <VideoTile stream={localStream} mirrored={frontCamera} muted testId="local-video" />
 
-              <div className="absolute bottom-4 left-4 flex items-center gap-2" style={{ zIndex: 5 }}>
-                {profile.photo && (
-                  <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-white">
-                    <img src={profile.photo} alt="Your profile" className="w-full h-full object-cover" />
-                  </div>
-                )}
-                <NameBadge name={profile.name} country={profile.country} />
-              </div>
+              {faceGate.paused && (
+                <div
+                  className="absolute inset-x-2 top-2 bg-black bg-opacity-80 text-white text-xs rounded px-2 py-1 flex items-center gap-2"
+                  style={{ zIndex: 6 }}
+                  role="status"
+                  data-testid="face-paused"
+                >
+                  <VideoOff className="w-4 h-4 shrink-0 text-yellow-400" aria-hidden="true" />
+                  Your face is out of frame, so your video is paused
+                </div>
+              )}
 
-              <div className="absolute bottom-4 right-4" style={{ zIndex: 5 }}>
+              {!pip.style && (
+                <div className="absolute bottom-4 left-4 flex items-center gap-2" style={{ zIndex: 5 }}>
+                  {profile.photo && (
+                    <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-white">
+                      <img src={profile.photo} alt="Your profile" className="w-full h-full object-cover" />
+                    </div>
+                  )}
+                  <NameBadge name={profile.name} country={profile.country} />
+                </div>
+              )}
+
+              <div className={`absolute ${pip.style ? "bottom-1 right-1" : "bottom-4 right-4"}`} style={{ zIndex: 5 }}>
                 <Button
                   onClick={() => onMicEnabledChange(!micEnabled)}
                   variant="outline"
@@ -210,19 +346,20 @@ export const Room: React.FC<RoomProps> = ({
 
               {/* Chat toggle button */}
               {inCall && (
-                <div className="absolute top-4 right-4" style={{ zIndex: 5 }}>
+                <div className={`absolute ${pip.style ? "top-1 right-1" : "top-4 right-4"}`} style={{ zIndex: 5 }}>
                   <Button
                     onClick={() => setShowChat((v) => !v)}
                     variant={showChat ? "default" : "outline"}
                     size="sm"
                     data-testid="chat-toggle"
                     aria-pressed={showChat}
+                    aria-label="Chat"
                     className={`flex items-center gap-2 ${
                       showChat ? "bg-yellow-500 text-black" : "bg-black bg-opacity-60 text-white border-white"
                     }`}
                   >
                     <MessageCircle className="w-4 h-4" />
-                    Chat
+                    {!pip.style && "Chat"}
                   </Button>
                 </div>
               )}
@@ -247,6 +384,17 @@ export const Room: React.FC<RoomProps> = ({
                 hidden={textOnlyMode}
                 testId="remote-video"
                 loadingLabel={connectionFailed ? undefined : "Connecting video..."}
+                blurred={remoteBlurred}
+                onVideoElement={setRemoteVideo}
+              />
+            )}
+
+            {inCall && !textOnlyMode && !connectionFailed && peer.remoteStream && (
+              <RemoteBlurOverlay
+                status={blur.status}
+                onReveal={blur.reveal}
+                onReport={() => setShowSettings(true)}
+                onNext={signaling.skip}
               />
             )}
 
@@ -293,7 +441,25 @@ export const Room: React.FC<RoomProps> = ({
               </div>
             )}
 
-            {matchPhase && state.partner && (
+            {instantConnecting && state.partner && <ConnectingPanel partner={state.partner} />}
+
+            {(inCall || instantConnecting) && (
+              <div className="absolute bottom-4 right-4" style={{ zIndex: 25 }}>
+                <button
+                  type="button"
+                  onClick={signaling.skip}
+                  data-testid="next-button"
+                  aria-keyshortcuts="Escape ArrowRight"
+                  title="Next (Esc or Right arrow)"
+                  className="retro-button bg-orange-500 text-white text-lg px-6 py-3 flex items-center gap-2"
+                >
+                  <SkipForward className="w-6 h-6" aria-hidden="true" />
+                  Next
+                </button>
+              </div>
+            )}
+
+            {matchPhase && !instantConnecting && state.partner && (
               <MatchPrompt
                 partner={state.partner}
                 isFriend={state.isFriend}
