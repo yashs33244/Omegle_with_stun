@@ -1,69 +1,37 @@
-# Welcome to your Lovable project
+# Chizzy frontend
 
-## Project info
+React 18 + Vite + TypeScript single-page app for Chizzy video chat. It talks to
+the backend over Socket.IO (websocket transport) and connects calls with WebRTC.
+The socket protocol lives in `src/lib/protocol.ts`, a copy of
+`backend/src/protocol.ts`; never edit the copy, run `scripts/sync-protocol.sh`.
 
-**URL**: https://lovable.dev/projects/a1a824ee-2d18-4180-befe-a3c03c9eee80
+npm is the package manager for this folder (`package-lock.json`).
 
-## How can I edit this code?
+## Scripts
 
-There are several ways of editing your application.
+| command | what it does |
+|---|---|
+| `npm ci` | install exactly what the lockfile pins |
+| `npm run dev` | dev server on http://localhost:8080 |
+| `npm run typecheck` | `tsc` in strict mode, no emit |
+| `npm run lint` | ESLint |
+| `npm test` | Vitest unit and component tests (jsdom) |
+| `npm run build` | production build into `dist/` |
 
-**Use Lovable**
+## Configuration
 
-Simply visit the [Lovable Project](https://lovable.dev/projects/a1a824ee-2d18-4180-befe-a3c03c9eee80) and start prompting.
+| variable | when | default |
+|---|---|---|
+| `VITE_API_URL` | build time | `http://localhost:3004` in dev, `https://chizzyapi.itsyash.space` in production builds |
 
-Changes made via Lovable will be committed automatically to this repo.
+Copy `.env.example` to `.env.local` to override it locally.
 
-**Use your preferred IDE**
+## Layout
 
-If you want to work locally using your own IDE, you can clone this repo and push changes. Pushed changes will also be reflected in Lovable.
-
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
-
-Follow these steps:
-
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
-
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
-
-# Step 3: Install the necessary dependencies.
-npm i
-
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
-```
-
-**Edit a file directly in GitHub**
-
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
-
-**Use GitHub Codespaces**
-
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
-
-## What technologies are used for this project?
-
-This project is built with .
-
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
-
-## How can I deploy this project?
-
-Simply open [Lovable](https://lovable.dev/projects/a1a824ee-2d18-4180-befe-a3c03c9eee80) and click on Share -> Publish.
-
-## I want to use a custom domain - is that possible?
-
-We don't support custom domains (yet). If you want to deploy your project under your own domain then we recommend using Netlify. Visit our docs for more details: [Custom domains](https://docs.lovable.dev/tips-tricks/custom-domain/)
+- `src/pages/Landing.tsx` camera preview, profile setup (photo, name, gender, topics), then the room.
+- `src/pages/Room.tsx` the call screen, built from `src/components/room/*`.
+- `src/hooks/useSignaling.ts` typed socket and the matchmaking state machine.
+- `src/hooks/usePeerConnection.ts` and `src/lib/peerSession.ts` one RTCPeerConnection per call.
+- `src/hooks/useMediaStream.ts` camera and microphone, with errors explained by cause.
+- `src/lib/photo.ts` downscales the profile photo to a small JPEG within protocol limits.
+- `src/components/ui/*` vendored shadcn/ui components, kept as generated.
