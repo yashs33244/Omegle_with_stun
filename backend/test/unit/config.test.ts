@@ -1,5 +1,8 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { ConfigError, loadConfig } from "../../src/config";
+import { originAllowed } from "../../src/realtime/socket";
 
 describe("loadConfig", () => {
   test("defaults outside production", () => {
@@ -62,5 +65,20 @@ describe("loadConfig", () => {
     const c = loadConfig({ TURN_URLS: "turn:t:3478,turns:t:5349", TURN_SECRET: "x", TRUST_PROXY: "true" });
     expect(c.turnUrls).toEqual(["turn:t:3478", "turns:t:5349"]);
     expect(c.trustProxy).toBe(true);
+  });
+
+  // The example says to copy it for local use; `bun run dev` loads the copy,
+  // and the frontend dev server (`npm run dev` in new-frontend) runs on
+  // http://localhost:8080.
+  test(".env.example is valid and lets the Vite dev server connect", () => {
+    const text = readFileSync(join(import.meta.dir, "../../.env.example"), "utf8");
+    const env: Record<string, string> = {};
+    for (const line of text.split("\n")) {
+      const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim());
+      if (m) env[m[1]!] = m[2]!;
+    }
+    const c = loadConfig(env);
+    expect(originAllowed("http://localhost:8080", c.corsOrigins)).toBe(true);
+    expect(originAllowed("http://localhost:5173", c.corsOrigins)).toBe(true);
   });
 });
