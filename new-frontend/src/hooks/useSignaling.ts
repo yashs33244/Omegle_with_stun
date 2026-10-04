@@ -177,10 +177,11 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
     }
 
     case "hello-failed":
-      if (event.error === "banned") return { ...clearRoom(state), status: "banned" };
+      if (event.error === "banned") return { ...clearRoom(state), status: "banned", reconnecting: false };
       return {
         ...clearRoom(state),
         status: "error",
+        reconnecting: false,
         error: event.message ?? event.error,
       };
 
