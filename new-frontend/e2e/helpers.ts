@@ -11,12 +11,43 @@ export interface OnboardOptions {
   photo?: "capture" | "skip";
 }
 
-/** Opens the app, fills the profile dialog and starts chatting. Ends waiting or matched. */
+/** A date of birth well over 18, as [day, month, year]. */
+export const ADULT_DOB = ["14", "2", "1995"] as const;
+
+/** Fills the date of birth form (and the attestation and Terms boxes). */
+export async function fillGateForm(page: Page, [day, month, year]: readonly [string, string, string]): Promise<void> {
+  await page.getByTestId("dob-day").fill(day);
+  await page.getByTestId("dob-month").fill(month);
+  await page.getByTestId("dob-year").fill(year);
+  await page.getByTestId("attest-18").check();
+  await page.getByTestId("accept-tos").check();
+}
+
+/**
+ * Passes the session gate if it is showing: date of birth, 18+ attestation,
+ * Terms, Turnstile (the always-pass test widget). A returning device with a
+ * valid session goes straight to the camera screen.
+ */
+export async function passGate(s: Stranger, dob: readonly [string, string, string] = ADULT_DOB): Promise<void> {
+  const { page } = s;
+  if (page.url() === "about:blank") await page.goto("/");
+  const start = page.getByTestId("start-chat");
+  const form = page.getByTestId("gate-form");
+  await expect(form.or(start), "the gate or the camera screen shows").toBeVisible();
+  if (await start.isVisible()) return;
+  if (await page.getByTestId("dob-day").isVisible()) await fillGateForm(page, dob);
+  const next = page.getByTestId("gate-continue");
+  await expect(next, "Continue is enabled once the bot check passed").toBeEnabled();
+  await next.click();
+  await expect(start).toBeVisible();
+}
+
+/** Opens the app, passes the gate, fills the profile dialog and starts chatting. Ends waiting or matched. */
 export async function onboard(s: Stranger, opts: OnboardOptions = {}): Promise<void> {
   const { page } = s;
   const { gender = "Prefer not to say", topics = ["general"], photo = "skip" } = opts;
 
-  if (page.url() === "about:blank") await page.goto("/");
+  await passGate(s);
   const start = page.getByTestId("start-chat");
   await expect(start, "Start is enabled once the camera is ready").toBeEnabled();
   await start.click();

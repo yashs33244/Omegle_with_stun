@@ -1,7 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Camera, Languages, Loader, User } from "lucide-react";
+import { Link } from "react-router-dom";
 import { useMediaStream, type MediaAccessError } from "../hooks/useMediaStream";
 import { Room } from "./Room";
+import { Footer } from "@/components/Footer";
+import { trackOnce } from "@/lib/observability";
 import { Button } from "@/components/retroui/Button";
 import { Input } from "@/components/retroui/Input";
 import { Select, SelectItem } from "@/components/retroui/Select";
@@ -93,6 +96,10 @@ export const Landing = () => {
     setMicEnabled,
     setCameraEnabled,
   } = useMediaStream();
+
+  useEffect(() => {
+    if (hasPermission) trackOnce("camera_granted");
+  }, [hasPermission]);
 
   const [homeVideoRef] = useStreamVideo(stream);
   const [modalVideoRef, modalVideo] = useStreamVideo(stream);
@@ -311,7 +318,7 @@ export const Landing = () => {
         </div>
 
         {/* Camera status and start button */}
-        <div className="flex-1 flex flex-col items-center justify-between gap-8 px-4 pb-20 pt-10">
+        <div className="flex-1 flex flex-col items-center justify-between gap-8 px-4 pb-6 pt-10">
           <div className="flex-1 flex items-center justify-center">
             {!stream &&
               (isLoading ? (
@@ -342,7 +349,15 @@ export const Landing = () => {
               Start
             </Button>
             {!hasPermission && <p className="text-white text-sm">Please allow camera access to continue</p>}
+            <p className="text-white text-xs max-w-sm mx-auto" data-testid="rules-reminder">
+              Reminder: 18+ only. No nudity, harassment, hate or spam. Rule breaks can get you removed. Read the{" "}
+              <Link to="/guidelines" className="underline text-yellow-300">
+                Community Guidelines
+              </Link>
+              .
+            </p>
           </div>
+          <Footer />
         </div>
       </div>
 

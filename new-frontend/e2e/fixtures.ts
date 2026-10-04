@@ -1,4 +1,5 @@
 import { test as base, expect, type BrowserContext, type Page } from "@playwright/test";
+import { installSessionApi, stubTurnstile } from "./sessionApi";
 
 /** Options set per project in playwright.config.ts. */
 export interface E2EOptions {
@@ -17,9 +18,18 @@ export interface Stranger {
   problems: string[];
 }
 
+export interface StrangerOptions {
+  /** Country the CDN reports for this stranger (CF-IPCountry). Default: none. */
+  country?: string;
+  /** Screen size, one of the fingerprint traits. Give a stranger its own to keep its fingerprint apart. */
+  screen?: { width: number; height: number };
+  /** Console errors this test expects (for example a refused request). */
+  allowedProblems?: RegExp[];
+}
+
 interface Fixtures {
   /** Opens a new stranger. Every stranger is closed and checked for problems after the test. */
-  openStranger: (name: string) => Promise<Stranger>;
+  openStranger: (name: string, options?: StrangerOptions) => Promise<Stranger>;
 }
 
 declare global {
@@ -52,15 +62,22 @@ export const test = base.extend<Fixtures & E2EOptions>({
   apiUrl: [null, { option: true }],
   acceptTimeoutMs: [30000, { option: true }],
 
-  openStranger: async ({ browser, baseURL }, use) => {
+  openStranger: async ({ browser, baseURL, apiUrl }, use) => {
     const strangers: Stranger[] = [];
+    const allowed = new Map<Stranger, RegExp[]>();
 
-    await use(async (name) => {
+    await use(async (name, options = {}) => {
       const context = await browser.newContext({
         baseURL,
         permissions: ["camera", "microphone"],
         viewport: { width: 1280, height: 800 },
+        ...(options.screen ? { screen: options.screen } : {}),
       });
+      // Servers started by Playwright: no third-party scripts, and the session API even before the backend has it.
+      if (apiUrl) {
+        await stubTurnstile(context);
+        await installSessionApi(context, { apiUrl, country: options.country ?? null });
+      }
       const problems: string[] = [];
       await context.exposeBinding("__e2eReportCsp", (_source, text: string) => {
         problems.push(`CSP violation: ${text}`);
@@ -75,12 +92,14 @@ export const test = base.extend<Fixtures & E2EOptions>({
 
       const stranger: Stranger = { name, context, page, problems };
       strangers.push(stranger);
+      allowed.set(stranger, options.allowedProblems ?? []);
       return stranger;
     });
 
     for (const s of strangers) await s.context.close();
     for (const s of strangers) {
-      expect(s.problems, `${s.name}: page errors, console errors or CSP violations`).toEqual([]);
+      const unexpected = s.problems.filter((p) => !allowed.get(s)?.some((re) => re.test(p)));
+      expect(unexpected, `${s.name}: page errors, console errors or CSP violations`).toEqual([]);
     }
   },
 });

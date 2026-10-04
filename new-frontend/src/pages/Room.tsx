@@ -12,6 +12,7 @@ import { useIsMobile } from "@/hooks/use-mobile";
 import { usePeerConnection } from "@/hooks/usePeerConnection";
 import { useSignaling } from "@/hooks/useSignaling";
 import { getCountryByCode } from "@/lib/data";
+import { useRoomGate } from "@/pages/gate/useRoomGate";
 import type { ErrorCode, Preferences, Profile, PublicProfile, SimpleAck } from "@/lib/protocol";
 
 export interface RoomProps {
@@ -90,6 +91,8 @@ export const Room: React.FC<RoomProps> = ({
     sendSignal: signaling.sendSignal,
     subscribeSignals: signaling.subscribeSignals,
   });
+
+  const roomGate = useRoomGate(signaling, { onLeave: onBackToHome, connected: peer.connectionState === "connected" });
 
   const [showChat, setShowChat] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -342,6 +345,7 @@ export const Room: React.FC<RoomProps> = ({
           canReport={inCall}
         />
       </div>
+      {roomGate.overlay}
     </div>
   );
 };
