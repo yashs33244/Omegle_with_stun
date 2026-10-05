@@ -12,7 +12,10 @@ import { TOS_VERSION, type PublicConfig } from "../protocol";
 import { requestCountry, requestIp } from "../session/geo";
 import type { SessionService } from "../session/SessionService";
 
-export function apiCors(allowed: Config["corsOrigins"]): RequestHandler {
+export function apiCors(
+  allowed: Config["corsOrigins"],
+  preflight: { methods: string; headers: string } = { methods: "GET, POST, OPTIONS", headers: "Content-Type" },
+): RequestHandler {
   return (req, res, next) => {
     const origin = req.get("origin");
     if (origin && (allowed === "*" || allowed.includes(origin))) {
@@ -20,8 +23,8 @@ export function apiCors(allowed: Config["corsOrigins"]): RequestHandler {
       res.vary("Origin");
       if (req.method === "OPTIONS") {
         res.set({
-          "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type",
+          "Access-Control-Allow-Methods": preflight.methods,
+          "Access-Control-Allow-Headers": preflight.headers,
           "Access-Control-Max-Age": "600",
         });
         res.status(204).end();

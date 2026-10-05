@@ -3,7 +3,9 @@
  * `Authorization: Bearer <ADMIN_TOKEN>` (constant-time compare). Without a
  * configured token the API answers 503: it is never open. ADMIN_ALLOWED_IPS
  * limits the client IPs (X-Real-IP is trusted only with TRUST_PROXY). Put
- * Cloudflare Access in front in production (see DEPLOYMENT.md).
+ * Cloudflare Access in front in production (see DEPLOYMENT.md). CORS follows
+ * CORS_ORIGINS: the console runs on the SPA host and sends the bearer token,
+ * so its preflight is answered before the token check.
  *
  *   GET  /queue?status=            review queue (severity, then due clock)
  *   GET  /reports/:id              one report
@@ -19,6 +21,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import express, { type Request, type RequestHandler, type Response, type Router } from "express";
 import { z } from "zod";
+import type { Config } from "../config";
 import type { AdminError, AdminResult, EnforcementService } from "../enforcement/EnforcementService";
 import type { FlagsReader } from "../flags/flags";
 import type { Logger } from "../logger";
@@ -29,6 +32,7 @@ import {
   flagsSchema,
 } from "../protocol";
 import { IpBuckets, jsonErrors, requestIp } from "./public";
+import { apiCors } from "./session";
 
 export interface AdminApiDeps {
   enforcement: EnforcementService;
@@ -37,6 +41,7 @@ export interface AdminApiDeps {
   adminToken?: string;
   adminAllowedIps: string[];
   trustProxy: boolean;
+  corsOrigins: Config["corsOrigins"];
   clock?: () => number;
 }
 
@@ -95,6 +100,7 @@ export function adminApiRouter(deps: AdminApiDeps): Router {
     if (!requests.allow(ip)) return void res.status(429).json({ error: "rate_limited" });
     next();
   };
+  router.use(apiCors(deps.corsOrigins, { methods: "GET, POST, PUT, OPTIONS", headers: "Authorization, Content-Type" }));
   router.use(guard);
 
   /** Ids are UUIDs; anything else is a 404 without touching the store. */

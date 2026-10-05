@@ -326,6 +326,31 @@ describe("admin API access", () => {
     expect((await admin("/queue", { headers: { "X-Real-IP": "203.0.113.9" } })).status).toBe(200);
   });
 
+  test("CORS for the console on an allowed origin, preflight before the token check", async () => {
+    ts = await boot({ corsOrigins: ["https://app.example"] });
+    const pre = await admin("/queue", {
+      method: "OPTIONS",
+      token: null,
+      headers: {
+        Origin: "https://app.example",
+        "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "authorization",
+      },
+    });
+    expect(pre.status).toBe(204);
+    expect(pre.headers.get("access-control-allow-origin")).toBe("https://app.example");
+    expect(pre.headers.get("access-control-allow-headers")).toContain("Authorization");
+    expect(pre.headers.get("access-control-allow-methods")).toContain("PUT");
+    const ok = await admin("/queue", { headers: { Origin: "https://app.example" } });
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("access-control-allow-origin")).toBe("https://app.example");
+    const denied = await admin("/queue", { token: null, headers: { Origin: "https://app.example" } });
+    expect(denied.status).toBe(401);
+    expect(denied.headers.get("access-control-allow-origin")).toBe("https://app.example");
+    const other = await admin("/queue", { headers: { Origin: "https://evil.example" } });
+    expect(other.headers.get("access-control-allow-origin")).toBeNull();
+  });
+
   test("validation, unknown ids and malformed JSON", async () => {
     ts = await boot();
     expect((await admin("/reports/not-a-uuid")).status).toBe(404);

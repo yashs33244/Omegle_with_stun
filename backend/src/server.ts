@@ -103,6 +103,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
           adminToken: config.adminToken,
           adminAllowedIps: config.adminAllowedIps,
           trustProxy: config.trustProxy,
+          corsOrigins: config.corsOrigins,
         }),
       );
     },
