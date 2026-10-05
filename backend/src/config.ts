@@ -61,7 +61,6 @@ const envSchema = z
     EVIDENCE_S3_REGION: z.string().min(1).optional(),
     EVIDENCE_S3_KMS_KEY_ID: z.string().min(1).optional(),
     PSEUDONYM_SALT: z.string().min(16).optional(),
-    TURNSTILE_SECRET_KEY: z.string().min(1).optional(),
   })
   .superRefine((env, ctx) => {
     refineMatchEnv(env, ctx);
@@ -259,7 +258,6 @@ export interface Config extends MatchConfig {
   evidenceS3KmsKeyId?: string;
   /** Salt for the pseudonymous device ids admins see. Defaults to one derived from ADMIN_TOKEN. */
   pseudonymSalt?: string;
-  turnstileSecretKey?: string;
 }
 
 export class ConfigError extends Error {}
@@ -334,7 +332,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     evidenceS3Region: e.EVIDENCE_S3_REGION,
     evidenceS3KmsKeyId: e.EVIDENCE_S3_KMS_KEY_ID,
     pseudonymSalt: e.PSEUDONYM_SALT,
-    turnstileSecretKey: e.TURNSTILE_SECRET_KEY,
     ...matchConfigFromEnv(e),
   };
 }

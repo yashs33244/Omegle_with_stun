@@ -393,7 +393,7 @@ describe("takedowns", () => {
       calls++;
       return new Response(JSON.stringify({ success: false }));
     }) as unknown as typeof fetch;
-    ts = await boot({ turnstileSecretKey: "2x0000000000000000000000000000000AA" }, { fetch: fakeFetch });
+    ts = await boot({ turnstileSecret: "2x0000000000000000000000000000000AA" }, { fetch: fakeFetch });
     expect((await postJson("/api/takedowns", body)).status).toBe(403);
     expect(calls).toBe(1);
   });

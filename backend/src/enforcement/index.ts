@@ -49,7 +49,9 @@ export function createEnforcement(
   const turnstile =
     opts.turnstile ??
     createTurnstileVerifier({
-      secret: config.turnstileSecretKey,
+      // The takedown form renders the same widget as the session gate
+      // (site key from /api/config), so its tokens verify with the same secret.
+      secret: config.turnstileSecret,
       production: config.nodeEnv === "production",
       fetch: opts.fetch,
     });
