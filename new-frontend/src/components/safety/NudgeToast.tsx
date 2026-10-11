@@ -1,6 +1,7 @@
 import React, { useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { ShieldAlert, X } from "lucide-react";
-import { NUDGE_TEXT } from "./safetyText";
+import { NUDGE_KEYS } from "./safetyText";
 import type { ActiveNudge } from "./useCallSafety";
 
 const NUDGE_TTL_MS = 15_000;
@@ -13,12 +14,13 @@ interface NudgeToastProps {
 }
 
 export const NudgeToast: React.FC<NudgeToastProps> = ({ nudge, onDismiss, onReport }) => {
+  const { t } = useTranslation("safety");
   useEffect(() => {
-    const t = setTimeout(onDismiss, NUDGE_TTL_MS);
-    return () => clearTimeout(t);
+    const timer = setTimeout(onDismiss, NUDGE_TTL_MS);
+    return () => clearTimeout(timer);
   }, [nudge.id, onDismiss]);
 
-  const text = NUDGE_TEXT[nudge.kind];
+  const text = NUDGE_KEYS[nudge.kind];
   const showReport = onReport && nudge.kind !== "link-hidden";
 
   return (
@@ -32,22 +34,22 @@ export const NudgeToast: React.FC<NudgeToastProps> = ({ nudge, onDismiss, onRepo
       <div className="flex items-start gap-3">
         <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-yellow-400" aria-hidden="true" />
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-semibold">{text.title}</p>
-          <p className="mt-1 text-sm text-gray-300">{text.body}</p>
+          <p className="text-sm font-semibold">{t(text.title)}</p>
+          <p className="mt-1 text-sm text-gray-300">{t(text.body)}</p>
           {showReport && (
             <button
               type="button"
               onClick={onReport}
               className="mt-2 rounded-md bg-red-600 px-3 py-1 text-sm font-medium hover:bg-red-500 focus:outline-none focus:ring-2 focus:ring-yellow-400"
             >
-              Report
+              {t("nudgeToast.report")}
             </button>
           )}
         </div>
         <button
           type="button"
           onClick={onDismiss}
-          aria-label="Dismiss safety tip"
+          aria-label={t("nudgeToast.dismiss")}
           className="rounded p-1 text-gray-300 hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-yellow-400"
         >
           <X className="h-4 w-4" />

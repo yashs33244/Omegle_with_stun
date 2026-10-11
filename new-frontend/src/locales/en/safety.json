@@ -1,1 +1,179 @@
-{}
+{
+  "nudges": {
+    "contactSharing": {
+      "title": "Thinking of moving to another app?",
+      "body": "Anyone can record their screen. You do not have to share your contacts with a stranger, and you can report them."
+    },
+    "solicitation": {
+      "title": "You do not have to do anything you are not comfortable with",
+      "body": "Never undress for a stranger. If someone threatens you, do not pay; report it. You can leave with Skip at any time."
+    },
+    "linkHidden": {
+      "title": "Link hidden for safety",
+      "body": "Links, handles and phone numbers are hidden in the first minutes of a call."
+    }
+  },
+  "nudgeToast": {
+    "report": "Report",
+    "dismiss": "Dismiss safety tip"
+  },
+  "redaction": {
+    "mark": "[hidden for safety]"
+  },
+  "reportButton": {
+    "label": "Report this person",
+    "short": "Report"
+  },
+  "reportReasons": {
+    "nudity": { "label": "Nudity", "hint": "Sexual content or undressing" },
+    "underage": { "label": "Minor", "hint": "They look under 18" },
+    "harassment": { "label": "Harassment or hate", "hint": "Threats, bullying or slurs" },
+    "spam": { "label": "Spam or scam", "hint": "Ads, links or asking for money" },
+    "fake": { "label": "Fake or pre-recorded video", "hint": "Not a live camera" },
+    "other": { "label": "Other", "hint": "Something else" }
+  },
+  "reportError": {
+    "notInRoom": "This call can no longer be reported. Reports are accepted during a call and for 60 seconds after it.",
+    "rateLimited": "You have sent several reports recently. Please wait a little and try again.",
+    "invalidPayload": "The report was not accepted. Try again without the attachments.",
+    "withMessage": "The report could not be sent: {{message}}",
+    "generic": "The report could not be sent. Please try again."
+  },
+  "reportSheet": {
+    "lead": {
+      "call": "Sending a report ends this call.",
+      "match": "Sending a report skips this match.",
+      "postCall": "This call has ended. You can report it for up to 60 seconds after it ends."
+    },
+    "frameWhen": {
+      "call": "taken when you tapped Report",
+      "match": "taken when you tapped Report",
+      "postCall": "taken when the call ended"
+    },
+    "defaultWho": "this person",
+    "title": "Report {{who}}",
+    "titlePostCall": "Report the person from your last call",
+    "titleDone": "Report sent",
+    "close": "Close report",
+    "received": "Report received. We review reports.",
+    "reference": "Reference:",
+    "closeButton": "Close",
+    "whatHappened": "What happened?",
+    "detailsLabel": "Anything else? (optional)",
+    "detailsPlaceholder": "What did they do?",
+    "attachedLegend": "Attached to this report",
+    "nothingAttached": "No image or chat is attached.",
+    "frameLabel": "A still image of their video",
+    "chatLabel_one": "The last chat message",
+    "chatLabel_other": "The last {{count}} chat messages",
+    "chatWho": "yours and theirs",
+    "onlyChecked": "Only what is checked here is sent with your report.",
+    "cancel": "Cancel",
+    "sending": "Sending...",
+    "send": "Send report"
+  },
+  "postCall": {
+    "aria": "Report your last call",
+    "defaultWho": "the last person",
+    "question": "Was something wrong with {{who}}?",
+    "countdown": "You can report them for <s>{{seconds}}</s> more seconds.",
+    "dismiss": "Dismiss",
+    "report": "Report this person"
+  },
+  "coach": {
+    "title": "Before you start",
+    "tips": {
+      "record": "Anyone can record their screen.",
+      "undress": "Never undress or move to another app for a stranger.",
+      "threats": "If someone threatens you, do not pay; report it.",
+      "flag": "Use the flag on their video to report someone. You can leave any call with Skip."
+    },
+    "helpHeading": "If you need help",
+    "moreTips": "More safety tips",
+    "back": "Back",
+    "continue": "I understand"
+  },
+  "helplines": {
+    "india": "<b>India:</b> cyber crime helpline <tel1930>1930</tel1930> (or cybercrime.gov.in), Childline <tel1098>1098</tel1098>",
+    "us": "<b>United States:</b> call or text <tel988>988</tel988> if you are in crisis. Report the sexual exploitation of a child to the NCMEC CyberTipline at <cybertip>report.cybertip.org</cybertip> or 1-800-843-5678.",
+    "anywhere": "<b>Anywhere:</b> if you are in danger right now, call your local emergency number."
+  },
+  "watermarkExplainer": {
+    "title": "The code over the video",
+    "p1": "During a call, a faint code (like \"chizzy 7K3P-9QX2\") shows over the other person's video. It is made from that call's id, not from anything about you. If a recording of a call turns up later, the code helps us find which call it came from when you report it.",
+    "p2": "It discourages recording, but it does not stop it. Anyone can record their screen or film it with another device, so only show on camera what you would be fine with a stranger keeping."
+  },
+  "restricted": {
+    "reasons": {
+      "nudity": "Nudity or sexual content on camera",
+      "minorSafety": "A child safety concern",
+      "harassment": "Harassing or threatening someone",
+      "hate": "Hateful content about someone's identity",
+      "violence": "Violent or graphic content",
+      "spam": "Spam, scams or advertising",
+      "fakeVideo": "Fake or pre-recorded video",
+      "underage": "Using Chizzy while under 18",
+      "other": "Breaking the Community Guidelines"
+    },
+    "kinds": {
+      "warning": "Warning",
+      "pause": "Temporary pause",
+      "ban": "Ban"
+    },
+    "appealStatus": {
+      "pending": "We received your appeal. A person on our team will review it.",
+      "upheld": "Your appeal was reviewed and the restriction stays in place.",
+      "overturned": "Your appeal was accepted and the restriction was lifted."
+    },
+    "appealErrors": {
+      "invalid": "Write at least 10 characters.",
+      "notFound": "We could not find this restriction. It may have ended already.",
+      "alreadyAppealed": "You have already appealed this restriction.",
+      "notAppealable": "This restriction cannot be appealed.",
+      "rateLimited": "Too many tries. Wait a minute and try again.",
+      "generic": "Something went wrong. Try again.",
+      "network": "Cannot reach Chizzy. Check your connection and try again."
+    },
+    "titleWarning": "You received a warning",
+    "title": "Your access to matching is restricted",
+    "reasonLabel": "Reason",
+    "typeLabel": "Type",
+    "endsLabel": "Ends",
+    "permanent": "Permanent",
+    "ended": "Ended",
+    "endsIn": "in <countdown></countdown>",
+    "evidenceNote": "For safety reasons we cannot show the material behind this decision.",
+    "appealLabel": "Think this is a mistake? Appeal for free.",
+    "appealHint": "Tell us what happened. A person reviews every appeal. {{length}}/{{max}}",
+    "sending": "Sending...",
+    "sendAppeal": "Send appeal",
+    "notAppealable": "This restriction cannot be appealed.",
+    "continue": "Continue"
+  },
+  "blur": {
+    "checking": "Checking the video on your device...",
+    "hiddenTitle": "Video hidden",
+    "hiddenBody": "Our on-device check thinks this video may show nudity.",
+    "report": "Report",
+    "next": "Next",
+    "blurredTitle": "Video blurred",
+    "blurredBody": "The safety check could not run on this device, so the video stays blurred.",
+    "reveal": "Tap to show video"
+  },
+  "inAppBrowser": {
+    "title": "Open Chizzy in {{browser}}",
+    "body": "You opened this link inside {{app}}. Its built-in browser often cannot use your camera, so video chat may not work here.",
+    "steps": {
+      "iosMenu": "Tap the menu (the three dots or the share button).",
+      "iosChoose": "Choose \"Open in Safari\" or \"Open in browser\".",
+      "androidMenu": "Tap the menu (the three dots, top right).",
+      "androidChoose": "Choose \"Open in Chrome\" or \"Open in browser\".",
+      "copy": "Or copy the link below and paste it into {{browser}}."
+    },
+    "openInChrome": "Open in Chrome",
+    "copyLink": "Copy link",
+    "copied": "Link copied.",
+    "copyThis": "Copy this link: {{url}}",
+    "continueAnyway": "Continue here anyway"
+  }
+}

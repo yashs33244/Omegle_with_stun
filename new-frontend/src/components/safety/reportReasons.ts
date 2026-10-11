@@ -2,16 +2,16 @@ import type { ReportReason } from "@/lib/protocol";
 
 export interface ReportChoice {
   reason: ReportReason;
-  label: string;
-  hint: string;
+  labelKey: `reportReasons.${ReportReason}.label`;
+  hintKey: `reportReasons.${ReportReason}.hint`;
 }
 
-/** The one-tap report reasons, in plain words, mapped onto the protocol enum. */
-export const REPORT_CHOICES: readonly ReportChoice[] = [
-  { reason: "nudity", label: "Nudity", hint: "Sexual content or undressing" },
-  { reason: "underage", label: "Minor", hint: "They look under 18" },
-  { reason: "harassment", label: "Harassment or hate", hint: "Threats, bullying or slurs" },
-  { reason: "spam", label: "Spam or scam", hint: "Ads, links or asking for money" },
-  { reason: "fake", label: "Fake or pre-recorded video", hint: "Not a live camera" },
-  { reason: "other", label: "Other", hint: "Something else" },
-];
+/** The one-tap report reasons, mapped onto the protocol enum; keys live in the `safety` namespace. */
+export const REPORT_CHOICES = [
+  { reason: "nudity", labelKey: "reportReasons.nudity.label", hintKey: "reportReasons.nudity.hint" },
+  { reason: "underage", labelKey: "reportReasons.underage.label", hintKey: "reportReasons.underage.hint" },
+  { reason: "harassment", labelKey: "reportReasons.harassment.label", hintKey: "reportReasons.harassment.hint" },
+  { reason: "spam", labelKey: "reportReasons.spam.label", hintKey: "reportReasons.spam.hint" },
+  { reason: "fake", labelKey: "reportReasons.fake.label", hintKey: "reportReasons.fake.hint" },
+  { reason: "other", labelKey: "reportReasons.other.label", hintKey: "reportReasons.other.hint" },
+] as const satisfies readonly ReportChoice[];
