@@ -1,0 +1,46 @@
+name: Feature request
+description: Propose a change to the product, the protocol or the operations tooling.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is hard or impossible today, and for whom (user, moderator, operator)?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: What should happen instead. Mention protocol, flags, env vars or docs it would touch.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Matching / calls
+        - Safety / moderation / admin
+        - Billing / coins
+        - Frontend UX / accessibility / i18n
+        - Backend / protocol
+        - Deploy / CI / operations
+        - Dependencies (major upgrade)
+        - Docs
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I searched existing issues and PRs
+          required: true
+        - label: This is not a security report (those go to SECURITY.md)
+          required: true

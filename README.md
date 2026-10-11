@@ -1,5 +1,9 @@
 # Chizzy
 
+[![CI](https://github.com/yashs33244/Omegle_with_stun/actions/workflows/ci.yml/badge.svg?branch=new-v)](https://github.com/yashs33244/Omegle_with_stun/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/yashs33244/Omegle_with_stun?sort=semver)](https://github.com/yashs33244/Omegle_with_stun/releases)
+[![Licence: proprietary](https://img.shields.io/badge/licence-proprietary-lightgrey)](#licence)
+
 Chizzy is an anonymous, topic-based video chat for adults (18+): pass a short
 age and Terms gate, pick a name, a few topics and (optionally) who you want to
 meet, and get matched with a stranger for a peer-to-peer WebRTC call with
@@ -358,6 +362,7 @@ https://chizzy-chat.vercel.app and https://chizzy-api.onrender.com.
 | `scripts/sync-spark-prompts.sh [--check]` | generate the Spark prompt files from the catalog / fail when they differ (CI) |
 | `scripts/check-lockfiles.sh` | lockfiles must only reference the public npm registry (CI) |
 | `scripts/check-frontend-headers.sh` | `vercel.json`, `_headers.template` (Cloudflare Pages) and the nginx config must send the same headers (CI) |
+| `scripts/release.sh [--dry-run] <patch\|minor\|major\|X.Y.Z>` | bump versions, date the CHANGELOG section, commit, tag `vX.Y.Z` and push; the tag runs `release.yml` ([Releases](#releases)) |
 | `node scripts/loadtest/loadtest.ts` | signaling load test ([docs/capacity.md](docs/capacity.md)) |
 | `node scripts/loadtest/canary.ts` | two-client synthetic canary (`CANARY_URL`) |
 | `scripts/backup-redis.sh`, `scripts/restore-redis.sh` | Redis snapshot to S3 and restore |
@@ -461,8 +466,28 @@ Honest list; the risk assessment ([docs/risk-assessment.md](docs/risk-assessment
   reconnect and are re-queued automatically.
 - Legal pages are drafts pending legal review.
 
+## Releases
+
+Versions are SemVer tags `vX.Y.Z` on `new-v`, listed on the
+[Releases](https://github.com/yashs33244/Omegle_with_stun/releases) page with
+the matching section of [CHANGELOG.md](CHANGELOG.md), the generated PR notes
+and the built frontend as a tarball. A release is cut with
+`scripts/release.sh <patch|minor|major|X.Y.Z>` from a green `new-v`; the tag
+runs `release.yml`, which repeats CI and pushes the images as
+`yashs3324/omegle-backend:X.Y.Z` and `yashs3324/omegle-frontend:X.Y.Z` when
+Docker Hub credentials are configured. Steps and rollback: [CONTRIBUTING.md](CONTRIBUTING.md#releases).
+
+## Licence
+
+Proprietary; all rights reserved. There is intentionally no LICENSE file: the
+code is published for review and deployment by the owner, not for reuse, and
+whether to adopt an open-source or source-available licence is the owner's
+decision.
+
 ## More
 
+- [CHANGELOG.md](CHANGELOG.md): what changed in each release.
+- [CONTRIBUTING.md](CONTRIBUTING.md): branches, commits, what CI enforces, releases.
 - [DEPLOYMENT.md](DEPLOYMENT.md): CI/CD, GitHub secrets, Cloudflare, host setup, rollback.
 - [SECURITY.md](SECURITY.md): reporting vulnerabilities and the security model.
 - [docs/](docs/): runbooks, capacity, retention, risk assessment, decision log, launch checklist.

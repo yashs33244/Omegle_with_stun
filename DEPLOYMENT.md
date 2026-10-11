@@ -16,6 +16,16 @@ push to new-v
 Deploys are serialized (`concurrency: deploy-production`, a newer push waits
 for the running deploy). `workflow_dispatch` re-runs a deploy by hand.
 
+**The EC2 path is paused.** The original host is gone, so the `images` and
+`deploy` jobs in `deploy.yml` are gated: they run only when the repository
+variable `EC2_DEPLOY_ENABLED` is `true` (Settings -> Secrets and variables ->
+Actions -> Variables) or the workflow is started by hand with
+`workflow_dispatch`. Until then a push to `new-v` only runs CI through this
+workflow; the live site is served by Vercel + Render (see
+[Free hosting](README.md#free-hosting-cloudflare-pages-or-vercel--render))
+and versioned images come from `release.yml` on a `v*` tag. To bring a new host
+online, finish [First-time setup](#first-time-setup) and set the variable.
+
 Production layout:
 
 ```
