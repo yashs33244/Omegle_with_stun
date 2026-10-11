@@ -107,8 +107,8 @@ export async function acceptMatch(a: Stranger, b: Stranger, acceptTimeoutMs: num
   await expectMatchPrompt(b.page, a.name, acceptTimeoutMs);
   await a.page.getByTestId("match-accept").click();
   await b.page.getByTestId("match-accept").click();
-  await expect(a.page.getByTestId("skip-button")).toBeVisible();
-  await expect(b.page.getByTestId("skip-button")).toBeVisible();
+  await expect(a.page.getByTestId("next-button")).toBeVisible();
+  await expect(b.page.getByTestId("next-button")).toBeVisible();
 }
 
 /** Onboards both strangers with a shared topic, matches them and starts the call. */

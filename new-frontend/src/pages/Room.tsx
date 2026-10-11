@@ -1,30 +1,30 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Loader, Lock, MessageCircle, Mic, MicOff, SkipForward, SwitchCamera, UserRound, Video, VideoOff, WifiOff } from "lucide-react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Loader, Lock, MessageCircle, Video, VideoOff, WifiOff } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { Button } from "@/components/retroui/Button";
 import { ChatSettings } from "@/components/ChatSettings";
+import { CallActionBar } from "@/components/room/CallActionBar";
 import { ChatPanel, PartnerTyping } from "@/components/room/ChatPanel";
+import { ChatSheet, ChatToast } from "@/components/room/ChatSheet";
 import { HideIpToggle } from "@/components/room/HideIpToggle";
 import { MatchPrompt } from "@/components/room/MatchPrompt";
 import { RoomHeader } from "@/components/room/RoomHeader";
+import { ShortcutHint } from "@/components/room/ShortcutHint";
 import { VideoTile } from "@/components/room/VideoTile";
 import { WaitingPanel } from "@/components/room/WaitingPanel";
 import { NudgeToast } from "@/components/safety/NudgeToast";
 import { PostCallReport } from "@/components/safety/PostCallReport";
-import { ReportButton } from "@/components/safety/ReportButton";
 import { ReportSheet } from "@/components/safety/ReportSheet";
 import { SafetyCoachGate } from "@/components/safety/SafetyCoachCard";
 import { NUDGE_KEYS } from "@/components/safety/safetyText";
 import { useCallSafety } from "@/components/safety/useCallSafety";
 import { Watermark } from "@/components/safety/Watermark";
 import { useAudioLevelDetection } from "@/hooks/useAudioLevelDetection";
-import { useIsMobile } from "@/hooks/use-mobile";
+import { DESKTOP_QUERY, LANDSCAPE_QUERY, useMediaQuery } from "@/hooks/useMediaQuery";
 import { useNextShortcut } from "@/hooks/useNextShortcut";
 import { usePeerConnection } from "@/hooks/usePeerConnection";
 import { usePipDrag } from "@/hooks/usePipDrag";
-import { useSignaling } from "@/hooks/useSignaling";
+import { useSignaling, type ChatEntry } from "@/hooks/useSignaling";
 import { useWakeLock } from "@/hooks/useWakeLock";
-import { getCountryByCode } from "@/lib/data";
 import { useRoomGate } from "@/pages/gate/useRoomGate";
 import { useWalletSync } from "@/premium";
 import type { ErrorCode, MatchMode, ModerationSignalPayload, Preferences, Profile, PublicProfile, SimpleAck } from "@/lib/protocol";
@@ -33,8 +33,8 @@ import { isBlurred } from "@/moderation/blurGate";
 import { useFaceGate } from "@/moderation/useFaceGate";
 import { useRemoteBlur } from "@/moderation/useRemoteBlur";
 import { activeCameraLabel, isVirtualCameraLabel } from "@/moderation/virtualCamera";
-import { CaptionsOverlay, CaptionsToggle, useCaptions } from "@/captions";
-import { SparkButton, SparkCard, useSpark } from "@/spark";
+import { CaptionsOverlay, useCaptions } from "@/captions";
+import { SparkCard, useSpark } from "@/spark";
 
 export interface RoomProps {
   profile: Profile;
@@ -64,9 +64,9 @@ type ModerationKind = ModerationSignalPayload["kind"];
 const ConnectingPanel: React.FC<{ partner: PublicProfile }> = ({ partner }) => {
   const { t } = useTranslation("room");
   return (
-    <div className="w-full h-full min-h-[240px] bg-black flex items-center justify-center p-4" style={{ zIndex: 3 }} data-testid="instant-connecting">
-      <div className="text-center text-white space-y-3">
-        <Loader className="w-10 h-10 text-yellow-400 animate-spin mx-auto" aria-hidden="true" />
+    <div className="absolute inset-0 z-[12] flex items-center justify-center bg-black/70 p-4" data-testid="instant-connecting">
+      <div className="space-y-3 text-center text-white">
+        <Loader className="mx-auto h-10 w-10 animate-spin text-yellow-400" aria-hidden="true" />
         <p className="text-lg font-medium">{t("connecting.withPartner", { name: partner.name })}</p>
       </div>
     </div>
@@ -81,6 +81,11 @@ const ConnectingPanel: React.FC<{ partner: PublicProfile }> = ({ partner }) => {
 const FAILED_SKIP_MS = 10_000;
 const FAILED_SKIP_STAGGER_MS = 4_000;
 
+/** The local picture-in-picture starts under the top bar (which pads for the notch itself). */
+const PIP_START_TOP_PX = 72;
+/** Landscape phones: the action rail (two 56 px columns) sits on the right edge. */
+const PIP_START_RIGHT_RAIL_PX = 156;
+
 type NoticeKey = `notice.${"rateLimited" | "notInRoom" | "invalidPayload" | "internal"}`;
 
 const NOTICE_KEYS: Partial<Record<ErrorCode, NoticeKey>> = {
@@ -90,65 +95,49 @@ const NOTICE_KEYS: Partial<Record<ErrorCode, NoticeKey>> = {
   internal: "notice.internal",
 };
 
-const NameBadge: React.FC<{ name: string; country: string }> = ({ name, country }) => {
-  const countryData = getCountryByCode(country);
-  return (
-    <div className="bg-black bg-opacity-80 backdrop-blur-sm text-white px-4 py-2 rounded-full flex items-center gap-2">
-      <UserRound className="w-4 h-4" />
-      <span className="text-sm font-medium truncate min-w-0 max-w-[10rem]">{name}</span>
-      {countryData && <span className="text-sm">{countryData.flag}</span>}
-    </div>
-  );
-};
-
-const MicToggle: React.FC<{ micEnabled: boolean; onToggle: () => void; showLabel?: boolean }> = ({
-  micEnabled,
-  onToggle,
-  showLabel = false,
-}) => {
-  const { t } = useTranslation("room");
-  return (
-    <Button
-      onClick={onToggle}
-      variant="outline"
-      size="sm"
-      aria-label={micEnabled ? t("mic.mute") : t("mic.unmute")}
-      aria-pressed={!micEnabled}
-      data-testid="mic-toggle"
-      className={`flex items-center gap-2 ${
-        micEnabled ? "bg-black bg-opacity-60 text-white border-white" : "bg-red-600 text-white border-red-500"
-      }`}
-    >
-      {micEnabled ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
-      {showLabel && <span aria-hidden="true">{micEnabled ? t("mic.on") : t("mic.off")}</span>}
-    </Button>
-  );
-};
+/** A short translucent line in the status strip under the top bar. */
+const StatusChip: React.FC<{ children: React.ReactNode; tone?: "info" | "warn" | "ok"; testId?: string; role?: string }> = ({
+  children,
+  tone = "info",
+  testId,
+  role = "status",
+}) => (
+  <span
+    role={role}
+    data-testid={testId}
+    className={`flex items-center gap-2 rounded-full bg-black/70 px-3 py-1.5 text-xs backdrop-blur-sm ${
+      tone === "warn" ? "text-orange-300" : tone === "ok" ? "text-green-400" : "text-white"
+    }`}
+  >
+    {children}
+  </span>
+);
 
 const TextOnlyPanel: React.FC<{
   partner: PublicProfile | null;
   partnerTyping: boolean;
   micEnabled: boolean;
-  onToggleMic: () => void;
   onSwitchToVideo: () => void;
-}> = ({ partner, partnerTyping, micEnabled, onToggleMic, onSwitchToVideo }) => {
+}> = ({ partner, partnerTyping, micEnabled, onSwitchToVideo }) => {
   const { t } = useTranslation("room");
   return (
-    <div className="flex-1 flex flex-col justify-center items-center text-center space-y-4">
-      <MessageCircle className="w-16 h-16 text-yellow-400" />
-      <div className="text-white space-y-2">
+    // Portrait phones: the chat sheet starts TEXT_ONLY_SHEET_TOP below the top; this panel keeps to the band above it.
+    <div className="absolute inset-0 z-[5] flex flex-col items-center space-y-2 bg-gray-900 px-6 pt-[calc(env(safe-area-inset-top)+4.5rem)] text-center max-lg:landscape:justify-center max-lg:landscape:pl-[52vw] max-lg:landscape:pr-36 lg:justify-center lg:space-y-3">
+      <MessageCircle className="hidden h-12 w-12 text-yellow-400 max-lg:landscape:block lg:block lg:h-16 lg:w-16" aria-hidden="true" />
+      <div className="space-y-1 text-white">
         <h3 className="text-xl font-bold">{t("textOnly.title")}</h3>
         <p className="text-gray-300">{t("textOnly.chattingWith", { name: partner?.name || t("textOnly.stranger") })}</p>
         <p className="text-sm text-gray-400">{micEnabled ? t("textOnly.cameraOff") : t("textOnly.cameraAndMicOff")}</p>
         {partnerTyping && <PartnerTyping />}
       </div>
-      <div className="flex items-center gap-3">
-        <MicToggle micEnabled={micEnabled} onToggle={onToggleMic} showLabel />
-        <Button onClick={onSwitchToVideo} variant="outline" className="bg-yellow-500 text-black hover:bg-yellow-400">
-          <Video className="w-4 h-4 mr-2" />
-          {t("textOnly.switchToVideo")}
-        </Button>
-      </div>
+      <button
+        type="button"
+        onClick={onSwitchToVideo}
+        className="flex min-h-[2.75rem] items-center gap-2 rounded-full border-2 border-black bg-yellow-400 px-5 font-bold text-black shadow-[0_3px_0_#000] hover:bg-yellow-300"
+      >
+        <Video className="h-5 w-5" aria-hidden="true" />
+        {t("textOnly.switchToVideo")}
+      </button>
     </div>
   );
 };
@@ -176,14 +165,15 @@ const RoomSession: React.FC<RoomProps> = ({
   frontCamera = true,
 }) => {
   const { t } = useTranslation(["room", "safety"]);
-  const isMobile = useIsMobile();
+  const desktop = useMediaQuery(DESKTOP_QUERY);
+  const landscape = useMediaQuery(LANDSCAPE_QUERY);
   const [preferences, setPreferences] = useState<Preferences>(initialPreferences);
   const signaling = useSignaling(profile, initialPreferences, { mode });
   useWalletSync(signaling);
   const { state, updatePreferences, send } = signaling;
-  const remoteTileRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const safety = useCallSafety(signaling, () =>
-    remoteTileRef.current?.querySelector<HTMLVideoElement>('video[data-testid="remote-video"]') ?? null,
+    stageRef.current?.querySelector<HTMLVideoElement>('video[data-testid="remote-video"]') ?? null,
   );
 
   const inCall = state.status === "in-call";
@@ -205,7 +195,7 @@ const RoomSession: React.FC<RoomProps> = ({
   /** Entering text-only muted the mic, and the user has not touched it since. */
   const textOnlyMutedMicRef = useRef(false);
 
-  // Text-only mutes the mic too; its toggle moves into the text panel.
+  // Text-only mutes the mic too; the mic button in the action bar keeps working.
   const enterTextOnly = () => {
     textOnlyMutedMicRef.current = micEnabled;
     if (micEnabled) onMicEnabledChange(false);
@@ -275,8 +265,10 @@ const RoomSession: React.FC<RoomProps> = ({
   useWakeLock(inCall);
   const canSkip = inCall || matchPhase;
   useNextShortcut(canSkip, signaling.skip);
-  const pip = usePipDrag(isMobile && inCall && !textOnlyMode);
   const instantConnecting = matchPhase && state.matchMode === "instant";
+  // In a call your own video shrinks to a draggable picture-in-picture; otherwise it is the backdrop.
+  const pipActive = inCall && !textOnlyMode;
+  const pip = usePipDrag(pipActive, { start: { top: PIP_START_TOP_PX, right: landscape && !desktop ? PIP_START_RIGHT_RAIL_PX : 12 } });
 
   // Text-only is per call: a new call starts with video again.
   useEffect(() => {
@@ -318,6 +310,53 @@ const RoomSession: React.FC<RoomProps> = ({
     void signaling.sendChat(text).then(safety.noteChatAck);
   };
 
+  // The chat is open as a side column (desktop) or sheet (phones); text-only keeps it open.
+  const chatVisible = inCall && (showChat || textOnlyMode);
+
+  // Unread badge and toast: partner messages that arrived while the chat was closed.
+  const [seenCount, setSeenCount] = useState(0);
+  const [toast, setToast] = useState<ChatEntry | null>(null);
+  const messageCount = state.messages.length;
+  useEffect(() => {
+    if (chatVisible) {
+      setSeenCount(messageCount);
+      setToast(null);
+    }
+  }, [chatVisible, messageCount]);
+  useEffect(() => {
+    setSeenCount(0);
+    setToast(null);
+  }, [state.roomId]);
+  const lastToastedId = useRef<string | null>(null);
+  useEffect(() => {
+    if (chatVisible || messageCount === 0) return;
+    const last = state.messages[messageCount - 1];
+    if (last?.from !== "partner" || last.id === lastToastedId.current) return;
+    lastToastedId.current = last.id;
+    setToast(last);
+  }, [chatVisible, messageCount, state.messages]);
+  const unreadCount = useMemo(
+    () => state.messages.slice(seenCount).filter((m) => m.from === "partner").length,
+    [state.messages, seenCount],
+  );
+  const dismissToast = useCallback(() => setToast(null), []);
+
+  // The phone chat sheet sits on top of the action bar, whatever its height.
+  const actionBarRef = useRef<HTMLDivElement>(null);
+  const [actionBarHeight, setActionBarHeight] = useState(0);
+  const showActionBar = inCall || instantConnecting;
+  useLayoutEffect(() => {
+    const el = actionBarRef.current;
+    if (!el || desktop || typeof ResizeObserver === "undefined") {
+      setActionBarHeight(0);
+      return;
+    }
+    const observer = new ResizeObserver(() => setActionBarHeight(el.offsetHeight));
+    observer.observe(el);
+    setActionBarHeight(el.offsetHeight);
+    return () => observer.disconnect();
+  }, [desktop, showActionBar]);
+
   // The call (timer, and coins on the server) starts when the media connects, not at call:start.
   const callConnectedAt = inCall ? peer.connectedAt : null;
   const { reportConnected } = signaling;
@@ -336,311 +375,274 @@ const RoomSession: React.FC<RoomProps> = ({
     const t = setTimeout(skip, FAILED_SKIP_MS + (state.initiator ? 0 : FAILED_SKIP_STAGGER_MS));
     return () => clearTimeout(t);
   }, [autoSkip, state.initiator, skip]);
-  // Length of the border beam: whatever is left of the accept window when the match arrives.
-  const beamSeconds = useMemo(
-    () => (state.expiresAt !== null ? Math.max(0, (state.expiresAt - Date.now()) / 1000) : 0),
-    [state.expiresAt],
-  );
-  const beamStyle = matchPhase && beamSeconds > 0 ? ({ "--beam-duration": `${beamSeconds}s` } as React.CSSProperties) : undefined;
   const noticeKey = state.notice ? NOTICE_KEYS[state.notice] : undefined;
 
+  const sharedTopic = useMemo(() => {
+    const topic = state.partner?.topics.find((candidate) => profile.topics.includes(candidate));
+    return topic ? t(`landing:topics.${topic}`, { defaultValue: topic }) : null;
+  }, [state.partner, profile.topics, t]);
+
+  const chatPanel = inCall && (
+    <ChatPanel
+      messages={state.messages}
+      partnerTyping={state.partnerTyping}
+      textOnly={textOnlyMode}
+      onClose={textOnlyMode ? undefined : () => setShowChat(false)}
+      onSend={handleSend}
+      onTyping={signaling.setTyping}
+      redactedIds={safety.redactedIds}
+      safetyNotice={safety.chatNudge ? t(NUDGE_KEYS[safety.chatNudge].body, { ns: "safety" }) : null}
+    />
+  );
+
   return (
-    <div className="min-h-screen bg-gray-900 flex flex-col">
-      <RoomHeader
-        isMobile={isMobile}
-        coins={state.coins}
-        coinBump={state.coinBump}
-        isFriend={state.isFriend}
-        inCall={inCall}
-        callStartedAt={callConnectedAt}
-        quality={connectionFailed ? "DISCONNECTED" : peer.quality}
-        reconnecting={state.reconnecting}
-        onHome={onBackToHome}
-        onSettings={() => setShowSettings(true)}
-        onSkip={signaling.skip}
-      />
-
-      {noticeKey && (
-        <div role="status" className="bg-orange-600 text-white text-sm text-center py-1">
-          {t(noticeKey)}
-        </div>
-      )}
-
-      {inCall && (privateAllowed || peer.privateRequested || peer.lowBandwidth || onFlipCamera) && (
-        <div className="flex flex-wrap items-center gap-3 px-4 py-2 bg-black bg-opacity-70 text-white border-b border-gray-700">
-          {peer.privateMode && (
-            <span className="flex items-center gap-1 text-xs text-green-400" data-testid="private-badge">
-              <Lock className="w-4 h-4" aria-hidden="true" />
-              {t("privacy.ipHidden")}
-            </span>
-          )}
-          {peer.privateRequested && !peer.privateMode && (
-            <span className="text-xs text-orange-300" role="status" data-testid="private-unavailable">
-              {t("privacy.unavailable")}
-            </span>
-          )}
-          {privateAllowed && onHideIpChange && (
-            <HideIpToggle
-              checked={hideIp}
-              onChange={onHideIpChange}
-              note={hideIp !== peer.privateRequested ? t("privacy.appliesNextCall") : undefined}
+    <div className="flex h-screen w-full flex-col overflow-hidden bg-gray-900 lg:flex-row" style={{ height: "100dvh" }}>
+      {/* Stage: the partner's video full-bleed, everything else floats over it. */}
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+        <div ref={stageRef} className="relative min-h-0 flex-1 overflow-hidden bg-black">
+          {inCall && (
+            <VideoTile
+              stream={peer.remoteStream}
+              muted={false}
+              hidden={textOnlyMode}
+              testId="remote-video"
+              loadingLabel={connectionFailed ? undefined : t("connecting.video")}
+              blurred={remoteBlurred}
+              onVideoElement={setRemoteVideo}
             />
           )}
-          {peer.lowBandwidth && (
-            <span className="text-xs text-orange-300" role="status">
-              {t("privacy.lowBandwidth")}
-            </span>
-          )}
-          {onFlipCamera && !textOnlyMode && (
-            <Button
-              onClick={onFlipCamera}
-              variant="outline"
-              size="sm"
-              aria-label={frontCamera ? t("camera.switchToBack") : t("camera.switchToFront")}
-              data-testid="flip-camera"
-              className="ml-auto bg-black bg-opacity-60 text-white border-white"
-            >
-              <SwitchCamera className="w-4 h-4" />
-            </Button>
-          )}
-        </div>
-      )}
 
-      {/* Main content */}
-      <div className="flex-1 flex relative">
-        <div
-          className={`flex-1 grid ${
-            textOnlyMode && inCall
-              ? "grid-cols-1 gap-4 p-4"
-              : isMobile
-                ? "grid-cols-1 gap-2 p-2"
-                : showChat
-                  ? "lg:grid-cols-2 gap-4 p-4"
-                  : "grid-cols-2 gap-4 p-4"
-          }`}
-        >
-          {/* Local Video */}
-          {!(textOnlyMode && inCall) && (
-            <div
-              className={`retro-video-card ${localIsSpeaking ? "speaking" : ""} ${pip.style ? "!w-28 !h-40 !min-h-0" : ""}`}
-              style={pip.style}
-              data-testid={pip.style ? "local-pip" : undefined}
-              {...pip.handlers}
-            >
-              <VideoTile stream={localStream} mirrored={frontCamera} muted testId="local-video" />
-
-              {faceGate.paused && (
-                <div
-                  className="absolute inset-x-2 top-2 bg-black bg-opacity-80 text-white text-xs rounded px-2 py-1 flex items-center gap-2"
-                  style={{ zIndex: 6 }}
-                  role="status"
-                  data-testid="face-paused"
-                >
-                  <VideoOff className="w-4 h-4 shrink-0 text-yellow-400" aria-hidden="true" />
-                  {t("camera.facePaused")}
-                </div>
-              )}
-
-              {!pip.style && (
-                <div className="absolute bottom-4 left-4 flex items-center gap-2" style={{ zIndex: 5 }}>
-                  {profile.photo && (
-                    <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-white">
-                      <img src={profile.photo} alt={t("camera.profileAlt")} className="w-full h-full object-cover" />
-                    </div>
-                  )}
-                  <NameBadge name={profile.name} country={profile.country} />
-                </div>
-              )}
-
-              <div className={`absolute ${pip.style ? "bottom-1 right-1" : "bottom-4 right-4"}`} style={{ zIndex: 5 }}>
-                <MicToggle micEnabled={micEnabled} onToggle={toggleMic} />
-              </div>
-
-              {/* Chat toggle button */}
-              {inCall && (
-                <div className={`absolute ${pip.style ? "top-1 right-1" : "top-4 right-4"}`} style={{ zIndex: 5 }}>
-                  <Button
-                    onClick={() => setShowChat((v) => !v)}
-                    variant={showChat ? "default" : "outline"}
-                    size="sm"
-                    data-testid="chat-toggle"
-                    aria-pressed={showChat}
-                    aria-label={t("chat.toggle")}
-                    className={`flex items-center gap-2 ${
-                      showChat ? "bg-yellow-500 text-black" : "bg-black bg-opacity-60 text-white border-white"
-                    }`}
-                  >
-                    <MessageCircle className="w-4 h-4" />
-                    {!pip.style && t("chat.toggle")}
-                  </Button>
-                </div>
-              )}
-            </div>
+          {/* The partner's live captions sit over the remote video, just above the action bar. */}
+          {inCall && !textOnlyMode && (
+            <CaptionsOverlay captions={captions} style={{ bottom: `calc(${actionBarHeight}px + 0.75rem)` }} />
           )}
 
-          {/* Remote Video / Text Chat Area */}
-          <div
-            ref={remoteTileRef}
-            className={
-              textOnlyMode && inCall
-                ? "relative bg-gray-800 rounded-lg p-6 border border-gray-700 h-full flex flex-col"
-                : `retro-video-card ${remoteIsSpeaking && inCall ? "speaking" : ""} ${
-                    matchPhase && beamSeconds > 0 ? "timer-border-beam" : ""
-                  }`
-            }
-            style={beamStyle}
-          >
-            {inCall && (
-              <VideoTile
-                stream={peer.remoteStream}
-                muted={false}
-                hidden={textOnlyMode}
-                testId="remote-video"
-                loadingLabel={connectionFailed ? undefined : t("connecting.video")}
-                blurred={remoteBlurred}
-                onVideoElement={setRemoteVideo}
-              />
-            )}
-
-            {inCall && !textOnlyMode && !connectionFailed && peer.remoteStream && (
+          {inCall && !textOnlyMode && !connectionFailed && peer.remoteStream && (
+            <div className="absolute inset-x-0 bottom-0 top-[calc(env(safe-area-inset-top)+3.5rem)]">
               <RemoteBlurOverlay
                 status={blur.status}
                 onReveal={blur.reveal}
                 onReport={() => setShowSettings(true)}
                 onNext={signaling.skip}
               />
+            </div>
+          )}
+
+          {inCall && !textOnlyMode && state.roomId && <Watermark roomId={state.roomId} />}
+
+          {inCall && textOnlyMode && (
+            <TextOnlyPanel
+              partner={state.partner}
+              partnerTyping={state.partnerTyping}
+              micEnabled={micEnabled}
+              onSwitchToVideo={leaveTextOnly}
+            />
+          )}
+
+          {/* Your own camera: the backdrop while waiting, a draggable picture-in-picture in a call. */}
+          {!(textOnlyMode && inCall) && (
+            <div
+              className={
+                pipActive
+                  ? `h-32 w-24 overflow-hidden rounded-xl border-2 border-black bg-black shadow-[0_3px_0_#000] lg:h-52 lg:w-40 ${
+                      localIsSpeaking ? "ring-2 ring-yellow-400" : ""
+                    }`
+                  : "absolute inset-0 opacity-50"
+              }
+              style={pip.style}
+              data-testid={pipActive ? "local-pip" : "local-preview"}
+              {...pip.handlers}
+            >
+              <VideoTile stream={localStream} mirrored={frontCamera} muted testId="local-video" />
+              {faceGate.paused && pipActive && (
+                <span className="absolute inset-x-0 bottom-0 flex items-center justify-center bg-black/70 py-1" style={{ zIndex: 6 }} aria-hidden="true">
+                  <VideoOff className="h-4 w-4 text-yellow-400" />
+                </span>
+              )}
+            </div>
+          )}
+
+          {/* Status strip under the top bar: notices, face gate, Hide my IP. */}
+          <div
+            className="pointer-events-none absolute inset-x-0 z-[34] flex flex-col items-center gap-2 px-3"
+            style={{ top: "calc(env(safe-area-inset-top) + 4rem)" }}
+          >
+            {noticeKey && (
+              <StatusChip tone="warn">
+                <span className="pointer-events-auto">{t(noticeKey)}</span>
+              </StatusChip>
             )}
-
-            {inCall && !textOnlyMode && state.roomId && <Watermark roomId={state.roomId} />}
-
-            {inCall && (
-              <div className="absolute top-4 right-4" style={{ zIndex: 6 }}>
-                <ReportButton onClick={() => safety.openReport("call")} />
+            {faceGate.paused && inCall && !textOnlyMode && (
+              <StatusChip testId="face-paused">
+                <VideoOff className="h-4 w-4 shrink-0 text-yellow-400" aria-hidden="true" />
+                {t("camera.facePaused")}
+              </StatusChip>
+            )}
+            {inCall && peer.privateMode && (
+              <StatusChip tone="ok" testId="private-badge" role="note">
+                <Lock className="h-4 w-4" aria-hidden="true" />
+                {t("privacy.ipHidden")}
+              </StatusChip>
+            )}
+            {inCall && peer.privateRequested && !peer.privateMode && (
+              <StatusChip tone="warn" testId="private-unavailable">
+                {t("privacy.unavailable")}
+              </StatusChip>
+            )}
+            {inCall && peer.lowBandwidth && <StatusChip tone="warn">{t("privacy.lowBandwidth")}</StatusChip>}
+            {privateAllowed && onHideIpChange && (
+              <div className="pointer-events-auto w-full max-w-sm rounded-xl bg-black/70 p-3 text-white backdrop-blur-sm">
+                <HideIpToggle
+                  checked={hideIp}
+                  onChange={onHideIpChange}
+                  note={hideIp !== peer.privateRequested ? t("privacy.appliesNextCall") : undefined}
+                />
               </div>
-            )}
-
-            {inCall && textOnlyMode && (
-              <TextOnlyPanel
-                partner={state.partner}
-                partnerTyping={state.partnerTyping}
-                micEnabled={micEnabled}
-                onToggleMic={toggleMic}
-                onSwitchToVideo={leaveTextOnly}
-              />
-            )}
-
-            {inCall && !textOnlyMode && (
-              <>
-                {state.partner && (
-                  <div className="absolute bottom-4 left-4" style={{ zIndex: 5 }}>
-                    <NameBadge name={state.partner.name} country={state.partner.country} />
-                  </div>
-                )}
-                <div className="absolute top-4 left-4 flex items-center gap-2" style={{ zIndex: 5 }}>
-                  <Button
-                    onClick={enterTextOnly}
-                    variant="outline"
-                    size="sm"
-                    data-testid="text-only-toggle"
-                    className="bg-black bg-opacity-60 text-white border-white hover:bg-gray-800"
-                  >
-                    <MessageCircle className="w-4 h-4 mr-2" />
-                    {t("textOnly.toggle")}
-                  </Button>
-                  <SparkButton spark={spark} />
-                  <CaptionsToggle captions={captions} />
-                </div>
-                <CaptionsOverlay captions={captions} />
-              </>
-            )}
-
-            {connectionFailed && !textOnlyMode && (
-              <div className="video-loading-overlay" role="alert">
-                <div className="text-center text-white space-y-4 px-4">
-                  <WifiOff className="w-12 h-12 text-red-400 mx-auto" />
-                  <p className="text-lg font-medium">{t("callFailed.title")}</p>
-                  <p className="text-sm text-gray-300">{t("callFailed.body")}</p>
-                  <button type="button" onClick={signaling.skip} className="retro-button">
-                    {t("callFailed.skip")}
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {instantConnecting && state.partner && <ConnectingPanel partner={state.partner} />}
-
-            {(inCall || instantConnecting) && (
-              <div className="absolute bottom-4 right-4" style={{ zIndex: 25 }}>
-                <button
-                  type="button"
-                  onClick={signaling.skip}
-                  data-testid="next-button"
-                  aria-keyshortcuts="Escape ArrowRight"
-                  title={t("next.title")}
-                  className="retro-button bg-orange-500 text-white text-lg px-6 py-3 flex items-center gap-2"
-                >
-                  <SkipForward className="w-6 h-6" aria-hidden="true" />
-                  {t("next.label")}
-                </button>
-              </div>
-            )}
-
-            {matchPhase && !instantConnecting && state.partner && (
-              <MatchPrompt
-                partner={state.partner}
-                isFriend={state.isFriend}
-                expiresAt={state.expiresAt}
-                accepted={state.status === "starting-call"}
-                partnerAccepted={state.partnerAccepted}
-                onAccept={signaling.accept}
-                onDecline={signaling.decline}
-              />
-            )}
-
-            {matchPhase && state.partner && (
-              <div className="absolute top-4 left-4" style={{ zIndex: 6 }}>
-                <ReportButton testId="match-report-button" onClick={() => safety.openReport("match")} />
-              </div>
-            )}
-
-            {!inCall && !matchPhase && (
-              <WaitingPanel
-                status={state.status}
-                reconnecting={state.reconnecting}
-                lastEndReason={state.lastEndReason}
-                error={state.error}
-                photo={profile.photo}
-                topics={profile.topics}
-                onRetry={signaling.retry}
-                onSearch={signaling.search}
-                onHome={onBackToHome}
-              />
             )}
           </div>
+
+          {connectionFailed && !textOnlyMode && (
+            <div className="video-loading-overlay" role="alert">
+              <div className="space-y-4 px-4 text-center text-white">
+                <WifiOff className="mx-auto h-12 w-12 text-red-400" aria-hidden="true" />
+                <p className="text-lg font-medium">{t("callFailed.title")}</p>
+                <p className="text-sm text-gray-300">{t("callFailed.body")}</p>
+                <button type="button" onClick={signaling.skip} className="retro-button">
+                  {t("callFailed.skip")}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {instantConnecting && state.partner && <ConnectingPanel partner={state.partner} />}
+
+          {matchPhase && !instantConnecting && state.partner && (
+            <MatchPrompt
+              partner={state.partner}
+              myTopics={profile.topics}
+              isFriend={state.isFriend}
+              expiresAt={state.expiresAt}
+              accepted={state.status === "starting-call"}
+              partnerAccepted={state.partnerAccepted}
+              onAccept={signaling.accept}
+              onDecline={signaling.decline}
+              onReport={() => safety.openReport("match")}
+            />
+          )}
+
+          {!inCall && !matchPhase && (
+            <WaitingPanel
+              status={state.status}
+              reconnecting={state.reconnecting}
+              lastEndReason={state.lastEndReason}
+              error={state.error}
+              photo={profile.photo}
+              topics={profile.topics}
+              relaxStep={state.relaxStep}
+              online={state.online}
+              onRetry={signaling.retry}
+              onSearch={signaling.search}
+              onHome={onBackToHome}
+            />
+          )}
+
+          <RoomHeader
+            coins={state.coins}
+            coinBump={state.coinBump}
+            isFriend={state.isFriend}
+            inCall={inCall}
+            callStartedAt={callConnectedAt}
+            quality={connectionFailed ? "DISCONNECTED" : peer.quality}
+            reconnecting={state.reconnecting}
+            partner={inCall || matchPhase ? state.partner : null}
+            sharedTopic={sharedTopic}
+            partnerSpeaking={inCall && remoteIsSpeaking}
+            onHome={onBackToHome}
+            onSettings={() => setShowSettings(true)}
+          />
+
+          <ShortcutHint active={desktop && inCall} />
+
+          {/* Phones: the action bar floats over the bottom of the stage. */}
+          {showActionBar && !desktop && (
+            <CallActionBar
+              ref={actionBarRef}
+              onNext={signaling.skip}
+              onStop={onBackToHome}
+              chatOpen={chatVisible}
+              unreadCount={unreadCount}
+              onToggleChat={() => setShowChat((v) => !v)}
+              onReport={() => safety.openReport("call")}
+              micEnabled={micEnabled}
+              onToggleMic={toggleMic}
+              textOnly={textOnlyMode}
+              onToggleTextOnly={textOnlyMode ? leaveTextOnly : enterTextOnly}
+              onFlipCamera={onFlipCamera}
+              frontCamera={frontCamera}
+              connecting={instantConnecting}
+              spark={spark}
+              captions={captions}
+            />
+          )}
         </div>
 
-        {/* Chat Panel: always shown in text-only mode */}
-        {inCall && (showChat || textOnlyMode) && (
-          <ChatPanel
-            messages={state.messages}
-            partnerTyping={state.partnerTyping}
+        {/* Desktop: the same bar sits under the video. */}
+        {showActionBar && desktop && (
+          <CallActionBar
+            onNext={signaling.skip}
+            onStop={onBackToHome}
+            chatOpen={chatVisible}
+            unreadCount={unreadCount}
+            onToggleChat={() => setShowChat((v) => !v)}
+            onReport={() => safety.openReport("call")}
+            micEnabled={micEnabled}
+            onToggleMic={toggleMic}
             textOnly={textOnlyMode}
-            isMobile={isMobile}
-            onClose={() => setShowChat(false)}
-            onSend={handleSend}
-            onTyping={signaling.setTyping}
-            redactedIds={safety.redactedIds}
-            safetyNotice={safety.chatNudge ? t(NUDGE_KEYS[safety.chatNudge].body, { ns: "safety" }) : null}
+            onToggleTextOnly={textOnlyMode ? leaveTextOnly : enterTextOnly}
+            onFlipCamera={onFlipCamera}
+            frontCamera={frontCamera}
+            connecting={instantConnecting}
+            spark={spark}
+            captions={captions}
           />
         )}
-
-        <ChatSettings
-          isOpen={showSettings}
-          onClose={() => setShowSettings(false)}
-          preferences={preferences}
-          onUpdatePreferences={handleUpdatePreferences}
-        />
       </div>
+
+      {/* Desktop: chat as a side column. Phones: a sheet over the video. */}
+      {desktop ? (
+        chatVisible && (
+          <aside className="hidden w-80 shrink-0 border-l-2 border-black lg:block xl:w-96" aria-label={t("chat.title")}>
+            {chatPanel}
+          </aside>
+        )
+      ) : (
+        <ChatSheet
+          open={chatVisible}
+          dismissable={!textOnlyMode}
+          landscape={landscape}
+          bottomOffset={actionBarHeight}
+          title={t("chat.title")}
+          onClose={() => setShowChat(false)}
+        >
+          {chatPanel}
+        </ChatSheet>
+      )}
+
+      {toast && !chatVisible && (
+        <ChatToast
+          message={toast}
+          partnerName={state.partner?.name ?? t("textOnly.stranger")}
+          onOpen={() => setShowChat(true)}
+          onDismiss={dismissToast}
+        />
+      )}
+
+      <ChatSettings
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
+        preferences={preferences}
+        onUpdatePreferences={handleUpdatePreferences}
+      />
 
       {safety.target && (
         <ReportSheet

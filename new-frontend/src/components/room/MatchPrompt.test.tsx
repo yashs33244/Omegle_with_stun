@@ -8,12 +8,14 @@ const partner: PublicProfile = { name: "Bo", country: "IN", language: "en", topi
 function renderPrompt(expiresAt: number) {
   const props = {
     partner,
+    myTopics: ["music", "gaming"],
     isFriend: false,
     expiresAt,
     accepted: false,
     partnerAccepted: false,
     onAccept: vi.fn(),
     onDecline: vi.fn(),
+    onReport: vi.fn(),
   };
   render(<MatchPrompt {...props} />);
   return props;
@@ -35,6 +37,14 @@ describe("MatchPrompt", () => {
     expect(props.onAccept).toHaveBeenCalledTimes(1);
     expect(props.onDecline).toHaveBeenCalledTimes(1);
     expect(screen.queryByText(/Time's up/)).not.toBeInTheDocument();
+  });
+
+  it("highlights the topics you share and keeps the report entry point", () => {
+    const props = renderPrompt(Date.now() + 30_000);
+    expect(screen.getByTestId("shared-topics")).toHaveTextContent("Music");
+    expect(screen.getByTestId("match-prompt")).toHaveTextContent("Interested in: Music");
+    fireEvent.click(screen.getByTestId("match-report-button"));
+    expect(props.onReport).toHaveBeenCalledTimes(1);
   });
 
   it("disables Accept and Pass once the countdown reaches 0", () => {

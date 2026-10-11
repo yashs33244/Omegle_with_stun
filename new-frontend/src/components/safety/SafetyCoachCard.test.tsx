@@ -89,7 +89,6 @@ describe("redacted chat", () => {
         ]}
         partnerTyping={false}
         textOnly={false}
-        isMobile={false}
         onClose={vi.fn()}
         onSend={vi.fn()}
         onTyping={vi.fn()}

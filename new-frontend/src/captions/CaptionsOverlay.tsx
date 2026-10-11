@@ -3,7 +3,7 @@
  *
  * The partner's last two caption lines, over the bottom of the remote video
  * (position it inside the remote tile; it is absolutely placed and ignores
- * pointer events). A line fades out as it reaches FADE_MS since its last
+ * pointer events; `style` sets the bottom offset, e.g. the action bar height). A line fades out as it reaches FADE_MS since its last
  * update. Final lines translated on-device show the translation; untranslated
  * lines in another language carry a small "original" tag.
  * data-testid="captions-overlay"; lines are data-testid="caption-line" with
@@ -23,9 +23,10 @@ const TICK_MS = 500;
 export interface CaptionsOverlayProps {
   captions: CaptionsHandle;
   className?: string;
+  style?: React.CSSProperties;
 }
 
-export const CaptionsOverlay: React.FC<CaptionsOverlayProps> = ({ captions, className }) => {
+export const CaptionsOverlay: React.FC<CaptionsOverlayProps> = ({ captions, className, style }) => {
   const { t } = useTranslation("spark");
   const hasLines = captions.lines.length > 0;
   // Re-render on a clock so a line's opacity follows its age between buffer updates.
@@ -45,7 +46,8 @@ export const CaptionsOverlay: React.FC<CaptionsOverlayProps> = ({ captions, clas
       aria-live="polite"
       aria-label={t("captions.overlay")}
       data-testid="captions-overlay"
-      className={cn("pointer-events-none absolute inset-x-2 bottom-20 z-[7] flex flex-col items-center gap-1", className)}
+      style={style}
+      className={cn("pointer-events-none absolute inset-x-2 bottom-4 z-[7] flex flex-col items-center gap-1", className)}
     >
       {captions.lines.map((line) => {
         const fading = now - line.at >= FADE_MS - FADE_LEAD_MS;

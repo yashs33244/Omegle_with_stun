@@ -1,10 +1,10 @@
 /**
  * <CaptionsToggle captions={useCaptions(...)} />
  *
- * A 44 px CC button (aria-pressed) that turns live captions on and off; the
+ * A 56 px CC button (aria-pressed) that turns live captions on and off; the
  * choice is remembered on the device. Disabled with a "Captions need Chrome"
  * tooltip where the browser has no SpeechRecognition. The first time captions
- * go on, a small privacy notice opens under the button until dismissed.
+ * go on, a small privacy notice opens above the button until dismissed.
  * data-testid="captions-toggle"; the notice is data-testid="captions-notice".
  */
 import React from "react";
@@ -36,12 +36,12 @@ export const CaptionsToggle: React.FC<CaptionsToggleProps> = ({ captions, classN
         data-testid="captions-toggle"
         data-listening={listening ? "1" : undefined}
         className={cn(
-          "relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full border-2 border-black shadow-[2px_2px_0_0_#000] transition-colors",
+          "relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full border-2 border-black shadow-[0_3px_0_#000] transition-colors",
           "focus:outline-none focus-visible:ring-2 focus-visible:ring-yellow-400 disabled:cursor-not-allowed disabled:opacity-50",
           enabled ? "bg-yellow-400 text-black hover:bg-yellow-300" : "bg-black/60 text-white hover:bg-gray-800",
         )}
       >
-        <Captions className="h-5 w-5" aria-hidden="true" />
+        <Captions className="h-6 w-6" aria-hidden="true" />
         {enabled && listening && (
           <span className="absolute -right-0.5 -top-0.5 h-2.5 w-2.5 rounded-full border border-black bg-red-500" aria-hidden="true" />
         )}
@@ -51,7 +51,7 @@ export const CaptionsToggle: React.FC<CaptionsToggleProps> = ({ captions, classN
           id="captions-notice"
           role="note"
           data-testid="captions-notice"
-          className="absolute left-0 top-full z-[30] mt-2 w-64 rounded-lg border-2 border-black bg-gray-900 p-3 text-sm text-white shadow-[3px_3px_0_0_#000]"
+          className="absolute bottom-full left-1/2 z-[30] mb-2 w-64 -translate-x-1/2 rounded-lg border-2 border-black bg-gray-900 p-3 text-sm text-white shadow-[3px_3px_0_0_#000]"
         >
           <p>{t("captions.privacy")}</p>
           <button

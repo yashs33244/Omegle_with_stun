@@ -19,7 +19,7 @@ test("Skip sends both strangers back to waiting and they are not rematched", asy
   await startCall(gus, hana, acceptTimeoutMs);
   await expectRemoteVideoPlaying(gus.page);
 
-  await gus.page.getByTestId("skip-button").click();
+  await gus.page.getByTestId("next-button").click();
 
   await expectWaiting(gus.page, "skipped");
   await expectWaiting(hana.page, "partner-skipped");
@@ -37,7 +37,7 @@ test("after a Skip both strangers meet someone new and the new calls have video"
   const bo = await openStranger("Bo");
   await startCall(ana, bo, acceptTimeoutMs);
   await expectRemoteVideoPlaying(ana.page);
-  await ana.page.getByTestId("skip-button").click();
+  await ana.page.getByTestId("next-button").click();
   await expectWaiting(ana.page, "skipped");
   await expectWaiting(bo.page, "partner-skipped");
 

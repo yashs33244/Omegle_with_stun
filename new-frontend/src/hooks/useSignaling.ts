@@ -79,6 +79,10 @@ export interface SignalingState {
   error: string | null;
   /** Short-lived server notice such as rate limiting. */
   notice: ErrorCode | null;
+  /** How far the server widened the search while waiting: 0 topic + language, 1 language, 2 anyone. */
+  relaxStep: number;
+  /** People online, when the server shares the real count. */
+  online: number | null;
 }
 
 export const initialSignalingState: SignalingState = {
@@ -100,6 +104,8 @@ export const initialSignalingState: SignalingState = {
   lastEndReason: null,
   error: null,
   notice: null,
+  relaxStep: 0,
+  online: null,
 };
 
 export type SignalingEvent =
@@ -107,7 +113,7 @@ export type SignalingEvent =
   | { type: "connect-failed" }
   | { type: "hello-ok"; coins: number; iceServers: IceServer[] }
   | { type: "hello-failed"; error: ErrorCode | "timeout"; message?: string }
-  | { type: "queue-waiting" }
+  | { type: "queue-waiting"; relaxStep?: number; online?: number | null }
   | {
       type: "match-found";
       roomId: string;
@@ -202,7 +208,7 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
       };
 
     case "queue-waiting":
-      return { ...clearRoom(state), status: "waiting" };
+      return { ...clearRoom(state), status: "waiting", relaxStep: event.relaxStep ?? 0, online: event.online ?? null };
 
     case "match-found":
       return {
@@ -490,7 +496,7 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
       }
     });
 
-    socket.on("queue:waiting", () => dispatch({ type: "queue-waiting" }));
+    socket.on("queue:waiting", (p) => dispatch({ type: "queue-waiting", relaxStep: p?.relaxStep ?? 0, online: p?.online ?? null }));
     socket.on("match:found", (p) => {
       pendingSignals.current = [];
       dispatch({ type: "match-found", ...p, receivedAt: Date.now() });
