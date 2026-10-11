@@ -196,7 +196,7 @@ const Select = React.forwardRef<HTMLDivElement, SelectProps>(
           aria-label={labelId ? undefined : ariaLabel}
           aria-labelledby={labelId ? `${labelId} ${valueId}` : undefined}
           data-testid={testId}
-          className="flex min-h-tap w-full items-center justify-between rounded-md border-2 border-black bg-white px-3 py-2 text-sm shadow-sm transition-all hover:shadow-md focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
+          className="flex min-h-tap w-full items-center justify-between rounded-md border-2 border-black bg-white px-3 py-2 text-sm shadow-sm transition-all hover:shadow-md focus:outline-none focus-visible:ring-2 focus-visible:ring-yellow-400 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-900 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <span id={valueId} className={cn("truncate", selectedLabel ? "text-black" : "text-gray-500")}>
             {selectedLabel || placeholder}
@@ -258,7 +258,7 @@ const SelectItem = React.forwardRef<HTMLDivElement, SelectItemProps>(
             onSelect?.();
           }
         }}
-        className="flex min-h-10 cursor-pointer items-center rounded-sm px-2 py-1.5 text-sm text-black hover:bg-gray-100 hover:text-black focus:bg-gray-100 focus:text-black focus:outline-none"
+        className="flex min-h-10 cursor-pointer items-center rounded-sm px-2 py-1.5 text-sm text-black hover:bg-gray-100 hover:text-black focus:bg-gray-100 focus:text-black focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-yellow-500"
       >
         {children}
       </div>
