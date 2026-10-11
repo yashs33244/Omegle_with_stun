@@ -107,7 +107,11 @@ export const ChatToast: React.FC<ChatToastProps> = ({ message, partnerName, onOp
   }, [message.id, onDismiss]);
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 z-[40] flex justify-center px-4" style={{ top: "calc(env(safe-area-inset-top) + 4.5rem)" }}>
+    // Phones: left of the local picture-in-picture column (and the landscape rail); desktop: centred.
+    <div
+      className="pointer-events-none fixed left-3 right-[7.5rem] z-[40] flex justify-center max-lg:landscape:right-auto max-lg:landscape:w-[min(28rem,50vw)] lg:inset-x-0 lg:px-4"
+      style={{ top: "calc(env(safe-area-inset-top) + 4.5rem)" }}
+    >
       <button
         type="button"
         onClick={onOpen}
