@@ -2,6 +2,7 @@ import { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { RouteMeta } from "./lib/seo";
 import NotFound from "./pages/NotFound";
 import { Landing } from "./pages/Landing";
 import { Gate } from "./pages/gate/Gate";
@@ -22,6 +23,7 @@ const AdminPage = lazy(() => import("./pages/admin/AdminPage"));
 const App = () => (
   <ErrorBoundary>
     <BrowserRouter>
+      <RouteMeta />
       <Suspense fallback={<PageFallback />}>
         <Routes>
           <Route
