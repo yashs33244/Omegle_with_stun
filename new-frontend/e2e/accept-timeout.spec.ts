@@ -1,7 +1,7 @@
 import { expect, test } from "./fixtures";
 import { expectMatchPrompt, expectNoRematch, expectWaiting, onboard } from "./helpers";
 
-test("an unanswered match times out for both strangers", async ({ openStranger, acceptTimeoutMs }) => {
+test("an unanswered match re-queues the accepter and idles the other stranger", async ({ openStranger, acceptTimeoutMs }) => {
   // The server's accept window, plus its 750 ms grace and sweep interval, plus slack.
   test.setTimeout(60_000 + acceptTimeoutMs * 2);
   const quinn = await openStranger("Quinn");
@@ -17,10 +17,16 @@ test("an unanswered match times out for both strangers", async ({ openStranger, 
 
   const ended = { timeout: acceptTimeoutMs + 10_000 };
   await expect(quinn.page.getByTestId("end-reason")).toHaveAttribute("data-reason", "timeout", ended);
-  await expect(rosa.page.getByTestId("end-reason")).toHaveAttribute("data-reason", "timeout", ended);
   await expectWaiting(quinn.page, "timeout");
-  await expectWaiting(rosa.page, "timeout");
-  await expect(rosa.page.getByTestId("end-reason")).toHaveText("The match timed out. Looking for someone else...");
+  await expect(quinn.page.getByTestId("end-reason")).toHaveText(
+    "The other user didn't accept in time. Looking for someone else...",
+  );
+  // Rosa never accepted: she is idle, not searching, until she asks to search again.
+  await expect(rosa.page.getByTestId("status-idle")).toBeVisible(ended);
+  await expect(rosa.page.getByText("You didn't accept in time")).toBeVisible();
+  await expect(rosa.page.getByTestId("status-waiting")).toHaveCount(0);
+  await rosa.page.getByRole("button", { name: "Search again" }).click();
+  await expectWaiting(rosa.page);
   // The pair is blocked for a while after a timeout.
   await expectNoRematch([quinn.page, rosa.page]);
 });
