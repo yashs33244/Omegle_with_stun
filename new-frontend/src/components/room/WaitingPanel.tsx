@@ -36,8 +36,13 @@ const Shell: React.FC<{ children: React.ReactNode; footer?: React.ReactNode; tes
   </div>
 );
 
+/** The one action of a waiting-family screen: the same pill as Stop searching, in yellow. */
 const PrimaryButton: React.FC<{ onClick: () => void; children: React.ReactNode }> = ({ onClick, children }) => (
-  <button type="button" onClick={onClick} className="retro-button min-h-[3.5rem] text-lg">
+  <button
+    type="button"
+    onClick={onClick}
+    className="flex min-h-[3.5rem] items-center justify-center rounded-full border-2 border-black bg-yellow-400 px-6 text-lg font-bold text-black shadow-[0_4px_0_#000] transition-transform hover:bg-yellow-300 active:translate-y-0.5 active:shadow-none focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+  >
     {children}
   </button>
 );
