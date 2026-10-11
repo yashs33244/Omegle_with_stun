@@ -58,7 +58,10 @@ test("an under-18 date of birth locks the device out", async ({ openStranger }) 
   expect(await page.evaluate(() => window.__e2eStreams.length), "the camera never starts").toBe(0);
 });
 
-test("a blocked country sees that Chizzy is not available there yet", async ({ openStranger }) => {
+test("a blocked country sees that Chizzy is not available there yet", async ({ openStranger, apiUrl }) => {
+  // The country rides on CF-IPCountry, which only the Playwright-managed
+  // backend trusts; the gateway drops it from non-Cloudflare peers.
+  test.skip(!apiUrl, "needs the Playwright-managed backend to trust CF-IPCountry");
   const tom = await openStranger("Tom", { country: "GB", allowedProblems: [REFUSED_REQUEST] });
   const { page } = tom;
   await page.goto("/");
