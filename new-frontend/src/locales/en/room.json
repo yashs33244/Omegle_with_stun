@@ -182,6 +182,7 @@
     "title": "Chat Settings",
     "close": "Close settings",
     "genderLabel": "Who do you want to meet?",
+    "genderLocked": "Unlock",
     "gender": {
       "all": "Everyone",
       "male": "Male",
