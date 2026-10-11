@@ -5,11 +5,11 @@ guide is for the people who have write access.
 
 ## Branches and merges
 
-- `new-v` is production. Vercel (frontend) and Render (backend) deploy from it;
+- `main` is production. Vercel (frontend) and Render (backend) deploy from it;
   the EC2 path in `deploy.yml` is paused behind `EC2_DEPLOY_ENABLED`.
-- Work on a feature branch, open a PR into `new-v`, wait for CI, merge with a
+- Work on a feature branch, open a PR into `main`, wait for CI, merge with a
   merge commit. Squash and rebase merges are not used: the branch history is
-  the record, and `git log --merges new-v` is the release summary.
+  the record, and `git log --merges main` is the release summary.
 - Dependabot branches are not built by Vercel (`ignoreCommand` in
   `new-frontend/vercel.json`); they still run CI.
 
@@ -77,11 +77,11 @@ same PR. Runtime image majors (Node, nginx, Redis) also need the pins in
 
 ## Releases
 
-Versions are SemVer tags `vX.Y.Z` on `new-v`; the version lives in
+Versions are SemVer tags `vX.Y.Z` on `main`; the version lives in
 `backend/package.json` and `new-frontend/package.json` (kept equal).
 
 1. Make sure `## [Unreleased]` in CHANGELOG.md lists what shipped.
-2. On an up-to-date, clean `new-v` with green CI:
+2. On an up-to-date, clean `main` with green CI:
    `scripts/release.sh --dry-run patch` to preview, then
    `scripts/release.sh patch` (or `minor`, `major`, `X.Y.Z`).
    The script bumps the versions, dates the CHANGELOG section, commits
@@ -93,7 +93,7 @@ Versions are SemVer tags `vX.Y.Z` on `new-v`; the version lives in
 
 To undo a release that has not been deployed anywhere:
 `gh release delete vX.Y.Z --cleanup-tag`, then `git revert` the release commit
-on `new-v`. Rolling back production is covered in DEPLOYMENT.md.
+on `main`. Rolling back production is covered in DEPLOYMENT.md.
 
 ## Code owners
 

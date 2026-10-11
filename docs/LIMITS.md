@@ -8,7 +8,7 @@ system enforces, the weak points, and what is lost when something restarts.
 Every number below is quoted from a file in this repository. Where a value was
 measured, the measurement is in [capacity.md](capacity.md). Anything that is an
 estimate rather than a measurement is marked **estimate**. Base: branch
-`new-v`, commit `472644e`.
+`main`, commit `472644e`.
 
 ## 1. How many users can talk at once?
 
@@ -53,7 +53,7 @@ Reading the measurement against the Render Free allowance:
   slow. This has not been measured on Render; the 2026-10-04 runs were on a
   laptop with the memory store, which is the same code path.
 - The practical ceiling on the free tier is usually not users at all but
-  the platform: a redeploy (every push to `new-v`,
+  the platform: a redeploy (every push to `main`,
   `autoDeployTrigger: commit`) or a spin-down restarts the process and the
   memory store with it, dropping every socket, session, room and ban
   (section 4). The keep-alive pair only reduces how often a spin-down
@@ -156,7 +156,7 @@ room is gone: the pair is re-queued, not reunited.
 What the free tier adds:
 
 - **Every deploy restarts the process, so every call drops.** Render
-  redeploys on each commit to `new-v`; the process gets `SIGTERM`, emits
+  redeploys on each commit to `main`; the process gets `SIGTERM`, emits
   `server:shutdown` to local sockets, and exits within `SHUTDOWN_GRACE_MS`
   (default 10,000 ms; `backend/src/config.ts:46`, `backend/src/index.ts:62-70`).
   With the memory store, nothing survives.

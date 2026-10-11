@@ -3,9 +3,13 @@
 All notable changes to Chizzy are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Releases are tags
-`vX.Y.Z` on `new-v`, cut with `scripts/release.sh` (see CONTRIBUTING.md).
+`vX.Y.Z` on `main`, cut with `scripts/release.sh` (see CONTRIBUTING.md).
 
 ## [Unreleased]
+
+### Changed
+
+- The production branch is `main` (renamed from `new-v`); workflows, Render, Vercel and the docs follow it.
 
 ## [1.0.0] - 2026-10-11
 

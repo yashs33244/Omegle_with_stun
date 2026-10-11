@@ -4,12 +4,12 @@ name: Deploy
 #
 # The EC2 path is paused: the images and deploy jobs run only when the
 # repository variable EC2_DEPLOY_ENABLED is "true" or the workflow is started
-# by hand (workflow_dispatch). The ci job still runs on every push to new-v
-# because ci.yml ignores pushes to new-v and relies on this workflow_call.
+# by hand (workflow_dispatch). The ci job still runs on every push to main
+# because ci.yml ignores pushes to main and relies on this workflow_call.
 # Versioned images are built by release.yml on a v* tag.
 on:
   push:
-    branches: [new-v]
+    branches: [main]
   workflow_dispatch:
 
 permissions:

@@ -1,6 +1,6 @@
 name: Release
 
-# A SemVer tag vX.Y.Z (pushed by scripts/release.sh from new-v) runs the full
+# A SemVer tag vX.Y.Z (pushed by scripts/release.sh from main) runs the full
 # CI, pushes the backend and frontend images to Docker Hub tagged X.Y.Z and
 # latest, and publishes a GitHub Release whose body is the CHANGELOG.md
 # section for that version plus the generated notes, with new-frontend/dist

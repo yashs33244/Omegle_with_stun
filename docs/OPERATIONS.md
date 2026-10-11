@@ -4,7 +4,7 @@ How Chizzy is run today: one founder, free tiers, no on-call rota. This page
 is the map; the exact commands for a bad day are in the runbooks
 ([rollback](runbooks/rollback.md), [release](runbooks/release.md),
 [host down](runbooks/host-down.md), [abuse wave](runbooks/abuse-wave.md),
-[TURN cost spike](runbooks/turn-cost-spike.md)). Base: branch `new-v`.
+[TURN cost spike](runbooks/turn-cost-spike.md)). Base: branch `main`.
 
 ## Environments
 
@@ -12,11 +12,11 @@ is the map; the exact commands for a bad day are in the runbooks
 |---|---|---|---|
 | local | `bun run dev` in `new-frontend/` (Vite, :5173) | `bun run dev` in `backend/` (:3004, memory store) | README "Quick start" |
 | PR preview | Vercel preview deployment per branch (`<branch>-chizzy-chat.vercel.app`) | none: previews talk to the production Render backend (`VITE_API_URL`) | Vercel Git integration builds every pushed branch |
-| production | https://chizzy-chat.vercel.app (Vercel project `chizzy-chat`, Hobby plan, pre-payments mirror) | https://chizzy-api.onrender.com (Render Free web service `srv-db5nnass728c738ek0o0`, region singapore, `render.yaml`) | merge to `new-v` |
-| production (Pages) | https://chizzy.pages.dev (Cloudflare Pages project `chizzy`) | same Render backend | `pages.yml` on push to `new-v`, only while repo variable `PAGES_ENABLED=true` |
+| production | https://chizzy-chat.vercel.app (Vercel project `chizzy-chat`, Hobby plan, pre-payments mirror) | https://chizzy-api.onrender.com (Render Free web service `srv-db5nnass728c738ek0o0`, region singapore, `render.yaml`) | merge to `main` |
+| production (Pages) | https://chizzy.pages.dev (Cloudflare Pages project `chizzy`) | same Render backend | `pages.yml` on push to `main`, only while repo variable `PAGES_ENABLED=true` |
 | production (EC2 compose) | nginx :5173 | gateway + replicas + Redis | **paused**: the host is gone; `deploy.yml` runs only by `workflow_dispatch` or with `EC2_DEPLOY_ENABLED=true` (DEPLOYMENT.md) |
 
-The production branch is `new-v`. Vercel and Render both auto-deploy it on
+The production branch is `main`. Vercel and Render both auto-deploy it on
 every push; a merged PR is therefore live within about two minutes (Vercel)
 and three to five minutes (Render Docker build). Nothing is deployed from
 tags; tags are for releases ([release runbook](runbooks/release.md)).
@@ -26,7 +26,7 @@ anything that creates reports, bans or purchases.
 
 ## Who deploys what
 
-Automatic on merge to `new-v`:
+Automatic on merge to `main`:
 
 - Vercel builds `new-frontend/` with `npm run build` (`new-frontend/vercel.json`),
   environment variables `VITE_API_URL` and `VITE_SITE_URL` from the project settings.
@@ -41,7 +41,7 @@ needed without a commit):
 # frontend: production deploy from the working tree
 cd new-frontend && vercel deploy --prod
 
-# backend: redeploy HEAD of new-v, or a specific commit, and wait for the result
+# backend: redeploy HEAD of main, or a specific commit, and wait for the result
 render deploys create srv-db5nnass728c738ek0o0 --wait
 render deploys create srv-db5nnass728c738ek0o0 --commit <sha> --wait
 ```

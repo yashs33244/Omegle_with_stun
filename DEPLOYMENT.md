@@ -1,11 +1,11 @@
 # Deployment
 
-Production runs on one EC2 host with Docker Compose. A push to `new-v` builds,
+Production runs on one EC2 host with Docker Compose. A push to `main` builds,
 tests and deploys automatically; there is no manual step after the first-time
 setup below.
 
 ```
-push to new-v
+push to main
   -> CI (ci.yml via workflow_call): protocol check, backend, frontend, docker builds
   -> images: build and push yashs3324/omegle-backend and yashs3324/omegle-frontend
              tagged <commit sha> and latest
@@ -20,7 +20,7 @@ for the running deploy). `workflow_dispatch` re-runs a deploy by hand.
 `deploy` jobs in `deploy.yml` are gated: they run only when the repository
 variable `EC2_DEPLOY_ENABLED` is `true` (Settings -> Secrets and variables ->
 Actions -> Variables) or the workflow is started by hand with
-`workflow_dispatch`. Until then a push to `new-v` only runs CI through this
+`workflow_dispatch`. Until then a push to `main` only runs CI through this
 workflow; the live site is served by Vercel + Render (see
 [Free hosting](README.md#free-hosting-cloudflare-pages-or-vercel--render))
 and versioned images come from `release.yml` on a `v*` tag. To bring a new host
@@ -43,7 +43,7 @@ configured, not by the branch:
 |---|---|---|
 | local | `bun run dev` in `backend/` and `new-frontend/` (README "Quick start") | never |
 | PR preview | Vercel preview deployment per pushed branch, talking to the production backend | every push |
-| production | frontend https://chizzy-chat.vercel.app (Vercel) or https://chizzy.pages.dev (Pages, opt-in); backend https://chizzy-api.onrender.com (Render Free, `render.yaml`) | merge to `new-v` |
+| production | frontend https://chizzy-chat.vercel.app (Vercel) or https://chizzy.pages.dev (Pages, opt-in); backend https://chizzy-api.onrender.com (Render Free, `render.yaml`) | merge to `main` |
 | compose on a host | this page's EC2 path | paused; `workflow_dispatch` or `EC2_DEPLOY_ENABLED` |
 
 The ops model (who deploys, health checks, canary, metrics, logs, secrets,
@@ -139,7 +139,7 @@ Secrets nothing reads any more and that can be deleted: `JWT_SECRET`,
 removed from the stack; the next deploy removes a running coturn container
 as an orphan).
 
-Also recommended: protect `new-v` (require the CI checks and a review) and add
+Also recommended: protect `main` (require the CI checks and a review) and add
 reviewers to the `production` environment if deploys should need approval.
 
 ## Host prerequisites
@@ -226,7 +226,7 @@ whose free plan allows commercial sites (unlimited bandwidth and requests,
 where it is (Render on the free tier, the EC2 stack in production).
 Everything is committed; only the account and two secrets are missing:
 
-- `.github/workflows/pages.yml` builds `new-frontend` on every push to `new-v`
+- `.github/workflows/pages.yml` builds `new-frontend` on every push to `main`
   (and on `workflow_dispatch`) with `VITE_API_URL` and `VITE_SITE_URL` from
   the repository variables, re-runs the frontend checks, and uploads `dist/`
   with `wrangler pages deploy --project-name chizzy --branch <branch>`. The
@@ -262,8 +262,8 @@ Everything is committed; only the account and two secrets are missing:
    cd new-frontend
    VITE_API_URL=https://chizzy-api.onrender.com VITE_SITE_URL=https://chizzy.pages.dev npm run build
    npx wrangler login
-   npx wrangler pages project create chizzy --production-branch new-v
-   npx wrangler pages deploy dist --project-name chizzy --branch new-v
+   npx wrangler pages project create chizzy --production-branch main
+   npx wrangler pages deploy dist --project-name chizzy --branch main
    ```
    `npx wrangler pages dev dist --port 8788` serves the build locally with
    the `_headers` rules applied, for checking a change before it is pushed.
@@ -287,7 +287,7 @@ Everything is committed; only the account and two secrets are missing:
    change.
 7. Vercel: keep the project as a preview-only mirror (Vercel project ->
    Settings -> Git: point the production branch at a branch that never
-   moves, so pushes to `new-v` only create preview deployments) or delete the
+   moves, so pushes to `main` only create preview deployments) or delete the
    project. Nothing in the repository depends on it; `vercel.json` stays so
    `scripts/check-frontend-headers.sh` keeps the three header sets in step.
    The Hobby plan must not serve the paid product, so do this before the
@@ -305,7 +305,7 @@ the previous commit via `workflow_dispatch`.
    `deploy/`, `.env` and its state files.
 2. Add the secrets. At minimum check `CORS_ORIGINS` and `VITE_API_URL` match
    the real domains.
-3. Push to `new-v` (or run the Deploy workflow by hand).
+3. Push to `main` (or run the Deploy workflow by hand).
 
 Migrating from the old two-container setup needs nothing special: the compose
 project name is still the directory name, so the first deploy replaces the old
@@ -365,7 +365,7 @@ moderation) needs new secrets and a few Cloudflare settings. In order:
    Cloudflare: `TRUST_CLOUDFLARE=true`, then the security group, then
    `CLOUDFLARE_ONLY=true` (in that order; `CLOUDFLARE_ONLY` before the DNS is
    proxied answers 403 to everyone).
-4. **Deploy** (push to `new-v`) at a quiet time, then check:
+4. **Deploy** (push to `main`) at a quiet time, then check:
    `https://chizzyapi.itsyash.space/api/config` shows a `turnstileSiteKey`;
    the SPA shows the date of birth gate and passes it; `/admin` accepts
    `ADMIN_TOKEN` and shows the queue; one test report reaches the queue with
@@ -462,7 +462,7 @@ bash scripts/backup-redis.sh                   # Redis snapshot (and S3 upload w
 ```
 
 Every workflow deploy rewrites `.env` from the GitHub secrets, so a hand edit
-only lasts until the next push to `new-v`. To change a setting for good, set
+only lasts until the next push to `main`. To change a setting for good, set
 its secret.
 
 Container logs rotate at 10 MB x 3 files per container. Backend logs are JSON
