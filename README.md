@@ -117,6 +117,7 @@ flowchart LR
 | `deploy/` | gateway nginx configs, the Cloudflare IP script and the host deploy script |
 | `scripts/` | protocol sync, lockfile check, Redis backup and restore, `loadtest/` (load test and canary) |
 | `docs/` | runbooks, capacity, retention, risk assessment, safety decision log, launch checklist |
+| `docs/engineering-conventions.md` | backend module boundaries, the constants and enums-as-const rules, the patterns in use, test layering and the add-a-feature checklist |
 | `.github/workflows/` | CI (`ci.yml`), the EC2 deploy (`deploy.yml`), the synthetic canary (`canary.yml`), the free-tier pinger (`keepalive.yml`) |
 | `render.yaml`, `new-frontend/vercel.json` | the free-tier deployment: backend on Render, frontend on Vercel |
 
