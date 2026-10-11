@@ -1,6 +1,7 @@
 {
   "appName": "Chizzy",
   "loading": "लोड हो रहा है...",
+  "close": "बंद करें",
   "language": {
     "label": "भाषा",
     "switchTo": "{{language}} में बदलें"

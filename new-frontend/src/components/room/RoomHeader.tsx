@@ -61,7 +61,7 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
           aria-label={t("header.home")}
           className="text-yellow-400 hover:text-yellow-300 transition-colors"
         >
-          <h1 className={`${isMobile ? "text-lg" : "text-2xl"} font-bold`}>Chizzy</h1>
+          <h1 className={`${isMobile ? "text-lg" : "text-2xl"} font-bold`}>{t("appName", { ns: "common" })}</h1>
         </button>
         <div
           key={coinBump}

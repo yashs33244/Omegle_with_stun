@@ -1,6 +1,7 @@
 {
   "appName": "Chizzy",
   "loading": "Loading...",
+  "close": "Close",
   "language": {
     "label": "Language",
     "switchTo": "Switch to {{language}}"

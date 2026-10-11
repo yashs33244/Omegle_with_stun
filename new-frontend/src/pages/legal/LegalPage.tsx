@@ -7,6 +7,7 @@ import { Footer } from "@/components/Footer";
 /** Placeholder the lawyer or owner must fill in before launch. */
 export const Todo: React.FC<{ children?: React.ReactNode }> = ({ children }) => (
   <mark className="bg-yellow-200 px-1 rounded" data-testid="legal-todo">
+    {/* eslint-disable-line no-restricted-syntax -- developer placeholder, removed before launch */}
     [TODO: {children}]
   </mark>
 );
