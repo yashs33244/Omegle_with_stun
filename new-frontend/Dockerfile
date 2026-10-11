@@ -23,7 +23,7 @@ RUN npm run build
 RUN find dist/models -type f \( -name '*.wasm' -o -name '*.js' -o -name '*.json' -o -name '*.bin' -o -name '*.tflite' \) \
     -exec gzip -9 -n -k {} +
 
-FROM nginxinc/nginx-unprivileged:1.28.2-alpine3.23 AS runtime
+FROM nginxinc/nginx-unprivileged:1.31.2-alpine3.23 AS runtime
 # The CSP connect-src is derived from this at container start (see
 # nginx-api-origin.envsh). Defaults to the URL the bundle was built with.
 ARG VITE_API_URL=https://chizzyapi.itsyash.space
