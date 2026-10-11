@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { Signaling } from "@/hooks/useSignaling";
 import { track, trackOnce } from "@/lib/observability";
 import { ClosedContent } from "./GateScreens";
@@ -26,6 +27,7 @@ export function useRoomGate(
   signaling: Pick<Signaling, "state" | "subscribe" | "retry">,
   { onLeave, connected }: RoomGateOptions,
 ): { overlay: React.ReactNode } {
+  const { t } = useTranslation("gate");
   const gate = useGate();
   // Stable functions only: the context value changes whenever the config is re-read.
   const setBanner = gate?.setBanner;
@@ -59,7 +61,8 @@ export function useRoomGate(
     if (state.status !== "error" || !refreshConfig) return;
     let cancelled = false;
     void refreshConfig().then((config) => {
-      if (!cancelled && config && !config.matchingOpen) setClosed({ reopensAt: config.reopensAt, message: null });
+      if (!cancelled && config && !config.matchingOpen)
+        setClosed({ reopensAt: config.reopensAt, message: null });
     });
     return () => {
       cancelled = true;
@@ -82,7 +85,10 @@ export function useRoomGate(
     if (before === state.status) return;
     if (state.status === "match-found") trackOnce("first_match");
     // Instant mode skips "starting-call": the server accepts for us.
-    if (state.status === "starting-call" || (state.status === "in-call" && before === "match-found")) {
+    if (
+      state.status === "starting-call" ||
+      (state.status === "in-call" && before === "match-found")
+    ) {
       track("match_accepted");
     }
   }, [state.status]);
@@ -95,13 +101,16 @@ export function useRoomGate(
     if (calls.current === 3) trackOnce("third_call");
   }, [connected]);
 
-  const busy = state.status === "in-call" || state.status === "match-found" || state.status === "starting-call";
+  const busy =
+    state.status === "in-call" ||
+    state.status === "match-found" ||
+    state.status === "starting-call";
   const overlay =
     closed && gate && !busy ? (
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="Chizzy is closed"
+        aria-label={t("closed.roomAria")}
         className="fixed inset-0 z-[55] bg-black/80 flex items-center justify-center p-4"
       >
         <div className="w-full max-w-md rounded-lg border-2 border-black bg-white p-6 shadow-md text-black">
@@ -111,8 +120,12 @@ export function useRoomGate(
             message={closed.message}
             onReopen={reopenCheck}
           >
-            <button type="button" onClick={onLeave} className="retro-button w-full">
-              Back to home
+            <button
+              type="button"
+              onClick={onLeave}
+              className="retro-button w-full"
+            >
+              {t("actions.backToHome")}
             </button>
           </ClosedContent>
         </div>

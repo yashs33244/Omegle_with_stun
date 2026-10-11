@@ -1,10 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Banner } from "@/components/Banner";
 import { api as defaultApi, type Api } from "@/lib/api";
 import { getDeviceId } from "@/lib/device";
 import { initObservability, trackOnce } from "@/lib/observability";
-import type { PublicConfig, Restriction, SessionRequest, SessionResponse } from "@/lib/protocol";
+import type {
+  PublicConfig,
+  Restriction,
+  SessionRequest,
+  SessionResponse,
+} from "@/lib/protocol";
 import {
   clearAgeToken,
   fingerprint as defaultFingerprint,
@@ -17,7 +23,7 @@ import {
 } from "@/lib/session";
 import { RestrictedScreen } from "../Restricted";
 import { GateContext, type GateContextValue } from "./GateContext";
-import { GateForm, type GateSubmit } from "./GateForm";
+import { GateForm, type GateNotice, type GateSubmit } from "./GateForm";
 import {
   ClosedScreen,
   GateShell,
@@ -28,7 +34,7 @@ import {
   UnderageScreen,
 } from "./GateScreens";
 
-type FormState = { returning: boolean; notice: string | null };
+type FormState = { returning: boolean; notice: GateNotice | null };
 
 type View =
   | { kind: "loading" }
@@ -43,9 +49,6 @@ type View =
   | { kind: "passed" };
 
 const CLOSED_POLL_MS = 30_000;
-
-const NOTICE_DOB_AGAIN = "Please confirm your date of birth again.";
-const NOTICE_TOS_CHANGED = "Our Terms have changed. Please review them and accept them again to continue.";
 
 /** Shown when the server refuses a device without sending the restriction itself. */
 function unknownRestriction(): Restriction {
@@ -82,7 +85,12 @@ export interface GateProps {
  * If the socket later rejects the session, a Turnstile-only check opens over
  * the page and the socket reconnects once a new token is saved.
  */
-export const Gate: React.FC<GateProps> = ({ children, api = defaultApi, fingerprint = defaultFingerprint }) => {
+export const Gate: React.FC<GateProps> = ({
+  children,
+  api = defaultApi,
+  fingerprint = defaultFingerprint,
+}) => {
+  const { t } = useTranslation("gate");
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [view, setView] = useState<View>({ kind: "loading" });
   const [banner, setBanner] = useState<string | null>(null);
@@ -130,7 +138,10 @@ export const Gate: React.FC<GateProps> = ({ children, api = defaultApi, fingerpr
       onSessionInvalidated(() => {
         if (viewRef.current.kind !== "passed" || !config) return;
         setFormError(null);
-        setReverify({ returning: getAgeToken(config.tosVersion) !== null, notice: null });
+        setReverify({
+          returning: getAgeToken(config.tosVersion) !== null,
+          notice: null,
+        });
       }),
     [config],
   );
@@ -138,7 +149,8 @@ export const Gate: React.FC<GateProps> = ({ children, api = defaultApi, fingerpr
   // Closed: check again every 30 s (the countdown also triggers a check at the reopening time).
   const recheckClosed = useCallback(async () => {
     const next = await loadConfig();
-    if (next && next.matchingOpen && viewRef.current.kind === "closed") setView(entryView(next));
+    if (next && next.matchingOpen && viewRef.current.kind === "closed")
+      setView(entryView(next));
   }, [loadConfig]);
 
   useEffect(() => {
@@ -174,21 +186,24 @@ export const Gate: React.FC<GateProps> = ({ children, api = defaultApi, fingerpr
         return leave({ kind: "turnstile-failed" });
       case "age_token_invalid":
         clearAgeToken();
-        return showForm({ returning: false, notice: NOTICE_DOB_AGAIN });
+        return showForm({ returning: false, notice: "dobAgain" });
       case "tos_outdated":
         clearAgeToken();
-        return showForm({ returning: false, notice: NOTICE_TOS_CHANGED });
+        return showForm({ returning: false, notice: "tosChanged" });
       case "closed":
         return leave({ kind: "paused" });
       case "banned":
-        return leave({ kind: "restricted", restriction: res.restriction ?? unknownRestriction() });
+        return leave({
+          kind: "restricted",
+          restriction: res.restriction ?? unknownRestriction(),
+        });
       case "rate_limited":
-        setFormError("Too many tries. Wait a minute and try again.");
+        setFormError(t("errors.rateLimited"));
         setTurnstileReset((n) => n + 1);
         return;
       case "invalid":
       default:
-        setFormError("We could not accept that. Check your date of birth and try again.");
+        setFormError(t("errors.invalid"));
         setTurnstileReset((n) => n + 1);
     }
   };
@@ -200,7 +215,7 @@ export const Gate: React.FC<GateProps> = ({ children, api = defaultApi, fingerpr
     let age: SessionRequest["age"];
     if (input.dob) age = { dob: input.dob, attest18: true, tosVersion };
     else if (ageToken) age = { ageToken, tosVersion };
-    else return showForm({ returning: false, notice: NOTICE_DOB_AGAIN });
+    else return showForm({ returning: false, notice: "dobAgain" });
 
     setSubmitting(true);
     setFormError(null);
@@ -208,12 +223,14 @@ export const Gate: React.FC<GateProps> = ({ children, api = defaultApi, fingerpr
       const res = await api.createSession({
         deviceId: getDeviceId(),
         fingerprint: await fingerprint(),
-        ...(input.turnstileToken ? { turnstileToken: input.turnstileToken } : {}),
+        ...(input.turnstileToken
+          ? { turnstileToken: input.turnstileToken }
+          : {}),
         age,
       });
       handleResponse(res, tosVersion);
     } catch {
-      setFormError("Cannot reach Chizzy. Check your connection and try again.");
+      setFormError(t("errors.unreachable"));
       setTurnstileReset((n) => n + 1);
     } finally {
       setSubmitting(false);
@@ -227,7 +244,13 @@ export const Gate: React.FC<GateProps> = ({ children, api = defaultApi, fingerpr
 
   // Every function in here is stable; only `config` changes the value.
   const contextValue = useMemo<GateContextValue | null>(
-    () => config && { config, setBanner, showRestriction, refreshConfig: loadConfig },
+    () =>
+      config && {
+        config,
+        setBanner,
+        showRestriction,
+        refreshConfig: loadConfig,
+      },
     [config, showRestriction, loadConfig],
   );
 
@@ -241,7 +264,7 @@ export const Gate: React.FC<GateProps> = ({ children, api = defaultApi, fingerpr
       error={formError}
       turnstileReset={turnstileReset}
       onSubmit={(input) => void submit(input)}
-      onTurnstileError={() => setFormError("The security check could not load. Check your connection and try again.")}
+      onTurnstileError={() => setFormError(t("errors.turnstile"))}
     />
   );
 
@@ -249,9 +272,12 @@ export const Gate: React.FC<GateProps> = ({ children, api = defaultApi, fingerpr
   switch (view.kind) {
     case "loading":
       content = (
-        <div className="min-h-screen bg-gray-900 flex items-center justify-center text-white" role="status">
+        <div
+          className="min-h-screen bg-gray-900 flex items-center justify-center text-white"
+          role="status"
+        >
           <Loader className="w-10 h-10 animate-spin" aria-hidden="true" />
-          <span className="sr-only">Loading</span>
+          <span className="sr-only">{t("loading")}</span>
         </div>
       );
       break;
@@ -281,7 +307,11 @@ export const Gate: React.FC<GateProps> = ({ children, api = defaultApi, fingerpr
       break;
     case "restricted":
       content = (
-        <RestrictedScreen restriction={view.restriction} api={api} onContinue={() => config && setView(entryView(config))} />
+        <RestrictedScreen
+          restriction={view.restriction}
+          api={api}
+          onContinue={() => config && setView(entryView(config))}
+        />
       );
       break;
     case "turnstile-failed":
@@ -303,11 +333,13 @@ export const Gate: React.FC<GateProps> = ({ children, api = defaultApi, fingerpr
             <div
               role="dialog"
               aria-modal="true"
-              aria-label="Confirm to continue"
+              aria-label={t("reverify.aria")}
               data-testid="gate-reverify"
               className="fixed inset-0 z-[70] bg-black/70 flex items-center justify-center p-4"
             >
-              <div className="w-full max-w-md rounded-lg border-2 border-black bg-white p-6 shadow-md">{form(reverify)}</div>
+              <div className="w-full max-w-md rounded-lg border-2 border-black bg-white p-6 shadow-md">
+                {form(reverify)}
+              </div>
             </div>
           )}
         </>
