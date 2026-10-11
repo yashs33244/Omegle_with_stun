@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
-import { User } from "lucide-react";
+import { Camera, User } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/retroui/Button";
 import { Input } from "@/components/retroui/Input";
@@ -209,14 +209,14 @@ export const ProfileEditor: React.FC<ProfileEditorProps> = ({
                 <User className="w-7 h-7 text-gray-300" aria-hidden="true" />
               </div>
             )}
-            <Button
+            <button
+              type="button"
               onClick={retakePhoto}
-              variant="outline"
-              size="sm"
-              className="min-h-tap border-gray-500 text-white hover:bg-white/10"
+              className="flex min-h-tap items-center gap-1.5 rounded-full border-2 border-black bg-white px-4 text-sm font-bold text-black shadow-[0_3px_0_#000] hover:bg-gray-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-yellow-400"
             >
+              <Camera className="h-4 w-4" aria-hidden="true" />
               {form.photo ? t("setup.retake") : t("setup.take")}
-            </Button>
+            </button>
           </div>
 
           <div className="space-y-1">
