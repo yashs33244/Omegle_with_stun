@@ -12,8 +12,9 @@ function productionSecurityHeaders(apiUrl: string): Record<string, string> {
   const origin = new URL(apiUrl).origin;
   const connectSrc = `'self' ${origin} ${origin.replace(/^http/, "ws")}`;
   const headers: Record<string, string> = {};
-  for (const m of conf.matchAll(/^\s*add_header\s+(\S+)\s+"([^"]*)"\s+always;/gm)) {
-    headers[m[1].toLowerCase()] = m[2].replace("${CSP_CONNECT_SRC}", connectSrc);
+  // nginx double-quoted strings may contain \" (Permissions-Policy allowlists quote origins).
+  for (const m of conf.matchAll(/^\s*add_header\s+(\S+)\s+"((?:[^"\\]|\\.)*)"\s+always;/gm)) {
+    headers[m[1].toLowerCase()] = m[2].replace(/\\(.)/g, "$1").replace("${CSP_CONNECT_SRC}", connectSrc);
   }
   if (!headers["content-security-policy"]) throw new Error("No CSP found in nginx-security-headers.conf");
   headers["content-security-policy"] = allowTurnstile(headers["content-security-policy"]);

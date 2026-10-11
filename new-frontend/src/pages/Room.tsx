@@ -26,6 +26,7 @@ import { useSignaling } from "@/hooks/useSignaling";
 import { useWakeLock } from "@/hooks/useWakeLock";
 import { getCountryByCode } from "@/lib/data";
 import { useRoomGate } from "@/pages/gate/useRoomGate";
+import { useWalletSync } from "@/premium";
 import type { ErrorCode, MatchMode, ModerationSignalPayload, Preferences, Profile, PublicProfile, SimpleAck } from "@/lib/protocol";
 import { RemoteBlurOverlay } from "@/moderation/RemoteBlurOverlay";
 import { isBlurred } from "@/moderation/blurGate";
@@ -176,6 +177,7 @@ const RoomSession: React.FC<RoomProps> = ({
   const isMobile = useIsMobile();
   const [preferences, setPreferences] = useState<Preferences>(initialPreferences);
   const signaling = useSignaling(profile, initialPreferences, { mode });
+  useWalletSync(signaling);
   const { state, updatePreferences, send } = signaling;
   const remoteTileRef = useRef<HTMLDivElement>(null);
   const safety = useCallSafety(signaling, () =>

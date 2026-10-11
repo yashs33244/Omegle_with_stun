@@ -56,3 +56,12 @@ services:
         value: "30000"
       - key: EVIDENCE_DIR
         value: /data/evidence
+      # Razorpay (coin packs). Fill in the dashboard (Environment tab) with the
+      # live key pair and the webhook secret; sync: false keeps the blueprint
+      # from overwriting them. Empty keeps /api/billing orders off.
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false

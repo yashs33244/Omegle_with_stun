@@ -42,9 +42,18 @@ The scope and the owner decisions behind it are in `.planning/BUILD_V1.md`
   the flags editor and the audit log.
 - **Operator flags**: a kill switch for matching and new sessions, staffed
   hours, a banner, the country blocklist, TURN and bitrate caps, the default
-  match mode. Changed in the admin console, cached 2 s per instance.
+  match mode, and the premium prices (`premium_filters_enabled`,
+  `gender_filter_coins_per_day`, `coin_packs`). Changed in the admin console,
+  cached 2 s per instance.
 - Text chat with a typing indicator, a text-only mode, coins and Friends
   (kept as built, owner decision D-2).
+- **Premium gender filter** (owner decision 2026-10-11): picking anything but
+  "Everyone" needs an active unlock bought with coins (1, 7 or 30 days at
+  `gender_filter_coins_per_day`). Coins are earned in calls or bought as
+  Razorpay packs (`coin_packs`, default 99 INR = 700 and 299 INR = 3000). The
+  server enforces it (`premium_required` on `session:hello` and
+  `session:preferences`); `premium_filters_enabled=false` makes the filter
+  free again. Wallets and orders are visible in the admin API.
 - Horizontal scaling: N backend replicas share state through Redis.
 
 ## Architecture
@@ -206,6 +215,9 @@ Empty values mean "use the default". Compose passes every variable below.
 | EVIDENCE_DIR | compose: `/data/evidence` | the `evidence-data` volume, shared by the replicas |
 | EVIDENCE_S3_BUCKET / EVIDENCE_S3_REGION | unset | store evidence in S3 instead (instance role credentials); the region is required with a bucket |
 | EVIDENCE_S3_KMS_KEY_ID | unset | SSE-KMS key for evidence objects (SSE-S3 without it) |
+| RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET | unset | Razorpay API key pair for coin packs; unset keeps `/api/billing` orders off (503 `billing_disabled`) while earned coins still work. Set both or neither |
+| RAZORPAY_WEBHOOK_SECRET | unset | secret of the Razorpay webhook (`payment.captured` to `https://<api host>/api/billing/webhook`); unset means only the Checkout success path credits coins |
+| RAZORPAY_FAKE | false | test only (refused in production): fake gateway with no HTTP, used by the e2e suite |
 
 ### Frontend build
 
@@ -369,9 +381,15 @@ validated with zod; the server derives everything it can itself. In short:
   connects earns nothing.
 - `chat:send` / `chat:message` (with `redacted`), `report:submit` with
   evidence, `call:failed`, `call:telemetry`, `moderation:signal`,
-  `safety:nudge`, `server:banner`, `matching:status`, `session:restricted`.
-- REST: `/api/appeals`, `/api/takedowns`, `/api/restrictions/:id`; admin API
-  under `/admin/api/*` with `Authorization: Bearer ADMIN_TOKEN`.
+  `safety:nudge`, `server:banner`, `matching:status`, `session:restricted`,
+  `wallet:update` (coins and premium unlocks after hello, purchases, unlocks
+  and admin adjustments).
+- REST: `/api/appeals`, `/api/takedowns`, `/api/restrictions/:id`; billing
+  under `/api/billing/*` (`GET packs` public; `GET wallet`, `POST orders`,
+  `POST verify`, `POST unlock` with `Authorization: Bearer <sessionToken>`;
+  `POST webhook` for Razorpay); admin API under `/admin/api/*` with
+  `Authorization: Bearer ADMIN_TOKEN` (adds `GET wallets/:deviceId`,
+  `POST wallets/:deviceId/adjust`, `GET billing/orders`).
 
 ## Scaling notes
 

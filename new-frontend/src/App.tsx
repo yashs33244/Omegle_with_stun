@@ -9,6 +9,7 @@ import { RouteMeta } from "./lib/seo";
 import NotFound from "./pages/NotFound";
 import { Landing } from "./pages/Landing";
 import { Gate } from "./pages/gate/Gate";
+import { PremiumProvider } from "./premium";
 
 const Terms = lazy(() => import("./pages/legal/Terms"));
 const Privacy = lazy(() => import("./pages/legal/Privacy"));
@@ -45,27 +46,29 @@ const App = () => (
   <ErrorBoundary>
     <BrowserRouter>
       <RouteMeta />
-      <Suspense fallback={<PageFallback />}>
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route
-            path="/admin/*"
-            element={
-              <Suspense fallback={<AdminFallback />}>
-                <AdminPage />
-              </Suspense>
-            }
-          />
-          <Route path="/terms" element={<Terms />} />
-          <Route path="/privacy" element={<Privacy />} />
-          <Route path="/guidelines" element={<Guidelines />} />
-          <Route path="/safety" element={<Safety />} />
-          <Route path="/grievance" element={<Grievance />} />
-          <Route path="/law-enforcement" element={<LawEnforcement />} />
-          <Route path="/takedown" element={<Takedown />} />
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </Suspense>
+      <PremiumProvider>
+        <Suspense fallback={<PageFallback />}>
+          <Routes>
+            <Route path="/" element={<Home />} />
+            <Route
+              path="/admin/*"
+              element={
+                <Suspense fallback={<AdminFallback />}>
+                  <AdminPage />
+                </Suspense>
+              }
+            />
+            <Route path="/terms" element={<Terms />} />
+            <Route path="/privacy" element={<Privacy />} />
+            <Route path="/guidelines" element={<Guidelines />} />
+            <Route path="/safety" element={<Safety />} />
+            <Route path="/grievance" element={<Grievance />} />
+            <Route path="/law-enforcement" element={<LawEnforcement />} />
+            <Route path="/takedown" element={<Takedown />} />
+            <Route path="*" element={<NotFound />} />
+          </Routes>
+        </Suspense>
+      </PremiumProvider>
     </BrowserRouter>
   </ErrorBoundary>
 );

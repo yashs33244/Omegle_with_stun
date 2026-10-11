@@ -42,7 +42,7 @@ describe("razorpay signatures", () => {
   const secret = "test_key_secret_123";
   const expectedCheckout = createHmac("sha256", secret).update("order_A1|pay_B2").digest("hex");
   const body = Buffer.from('{"event":"payment.captured"}');
-  const expectedWebhook = createHmac("sha256", "whsec").update(body).digest("hex");
+  const expectedWebhook = createHmac("sha256", "whsec").update(new Uint8Array(body)).digest("hex");
 
   test("checkout signature is HMAC-SHA256(key_secret, order_id|payment_id) in hex", () => {
     expect(checkoutSignature(secret, "order_A1", "pay_B2")).toBe(expectedCheckout);

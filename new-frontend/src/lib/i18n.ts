@@ -12,12 +12,14 @@ import enCommon from "@/locales/en/common.json";
 import enGate from "@/locales/en/gate.json";
 import enLanding from "@/locales/en/landing.json";
 import enLegal from "@/locales/en/legal.json";
+import enPremium from "@/locales/en/premium.json";
 import enRoom from "@/locales/en/room.json";
 import enSafety from "@/locales/en/safety.json";
 import hiCommon from "@/locales/hi/common.json";
 import hiGate from "@/locales/hi/gate.json";
 import hiLanding from "@/locales/hi/landing.json";
 import hiLegal from "@/locales/hi/legal.json";
+import hiPremium from "@/locales/hi/premium.json";
 import hiRoom from "@/locales/hi/room.json";
 import hiSafety from "@/locales/hi/safety.json";
 
@@ -41,6 +43,7 @@ export const resources = {
     room: enRoom,
     safety: enSafety,
     legal: enLegal,
+    premium: enPremium,
     admin: enAdmin,
   },
   hi: {
@@ -50,6 +53,7 @@ export const resources = {
     room: hiRoom,
     safety: hiSafety,
     legal: hiLegal,
+    premium: hiPremium,
   },
 } as const;
 
