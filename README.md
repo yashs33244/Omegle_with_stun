@@ -176,6 +176,7 @@ Empty values mean "use the default". Compose passes every variable below.
 | REDIS_URL | unset | set -> RedisStore + redis adapter + Redis feature stores |
 | TRUST_PROXY | false | true -> client IP from `X-Real-IP` (set by our gateway) |
 | MAX_CONNECTIONS_PER_IP | 10 | per instance |
+| CONNECT_BURST_PER_IP / CONNECT_RATE_PER_IP_PER_SEC | 20 / 1 | new connections per client IP per instance (burst, then per second); raise for load tests |
 | MATCH_ACCEPT_TIMEOUT_MS | 30000 | Preview mode accept window |
 | LOG_LEVEL / METRICS_TOKEN / SHUTDOWN_GRACE_MS | info / unset / 10000 | |
 | SESSION_SECRET | unset | HMAC key for session and age tokens; required in production (32+ characters) |

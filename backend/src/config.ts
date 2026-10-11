@@ -29,6 +29,8 @@ const envSchema = z
     REDIS_URL: z.string().url().optional(),
     TRUST_PROXY: bool.default("false"),
     MAX_CONNECTIONS_PER_IP: int(1).default(10),
+    CONNECT_BURST_PER_IP: int(1).default(20),
+    CONNECT_RATE_PER_IP_PER_SEC: int(1).default(1),
     MATCH_ACCEPT_TIMEOUT_MS: int(1000).default(30000),
     STUN_URLS: z.string().default("stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302"),
     TURN_URLS: z.string().optional(),
@@ -163,7 +165,9 @@ export interface Config extends MatchConfig {
   /**
    * New connections per client IP (per instance): a burst, then a steady
    * rate. Per-socket rate limits start full, so without this a client could
-   * reconnect to refill them. Not an env var; tests loosen it.
+   * reconnect to refill them. CONNECT_BURST_PER_IP and
+   * CONNECT_RATE_PER_IP_PER_SEC; raise them only for load tests, where every
+   * virtual user comes from one address.
    */
   connectRatePerIp: { capacity: number; refillPerSec: number };
   stunUrls: string[];
@@ -283,7 +287,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     redisUrl: e.REDIS_URL,
     trustProxy: e.TRUST_PROXY,
     maxConnectionsPerIp: e.MAX_CONNECTIONS_PER_IP,
-    connectRatePerIp: { capacity: 20, refillPerSec: 1 },
+    connectRatePerIp: { capacity: e.CONNECT_BURST_PER_IP, refillPerSec: e.CONNECT_RATE_PER_IP_PER_SEC },
     stunUrls: csv(e.STUN_URLS),
     turnUrls: csv(e.TURN_URLS),
     turnSecret: e.TURN_SECRET,
