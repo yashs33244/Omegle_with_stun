@@ -22,7 +22,7 @@ RUN bun run build
 FROM base AS prod-deps
 RUN bun install --frozen-lockfile --production
 
-FROM node:22.23.3-alpine3.24 AS runtime
+FROM node:26.10.0-alpine3.24 AS runtime
 ENV NODE_ENV=production \
     PORT=3004
 WORKDIR /app
