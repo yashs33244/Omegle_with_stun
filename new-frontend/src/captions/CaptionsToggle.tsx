@@ -47,11 +47,12 @@ export const CaptionsToggle: React.FC<CaptionsToggleProps> = ({ captions, classN
         )}
       </button>
       {noticeOpen && (
+        // Hangs from the button's right edge (the button sits near the screen edge); on landscape phones it opens to the left of the rail.
         <div
           id="captions-notice"
           role="note"
           data-testid="captions-notice"
-          className="absolute bottom-full left-1/2 z-[30] mb-2 w-64 -translate-x-1/2 rounded-lg border-2 border-black bg-gray-900 p-3 text-sm text-white shadow-[3px_3px_0_0_#000]"
+          className="absolute bottom-full right-0 z-[30] mb-2 w-[min(16rem,calc(100vw-1.5rem))] rounded-xl border-2 border-black bg-gray-900 p-3 text-sm text-white shadow-[3px_3px_0_0_#000] max-lg:landscape:bottom-auto max-lg:landscape:right-full max-lg:landscape:top-1/2 max-lg:landscape:mb-0 max-lg:landscape:mr-2 max-lg:landscape:-translate-y-1/2"
         >
           <p>{t("captions.privacy")}</p>
           <button
