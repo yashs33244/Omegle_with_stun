@@ -21,6 +21,19 @@ const bool = z
 
 const int = (min: number) => z.coerce.number().int().min(min);
 
+/**
+ * Headers that carry a client-controlled list (every hop appends), so the
+ * first element is whatever the client sent. The proxy IP header must be one
+ * the last trusted hop overwrites with a single address.
+ */
+const LIST_IP_HEADERS: Record<string, true> = { "x-forwarded-for": true, forwarded: true, via: true };
+/**
+ * A secret made of a handful of repeated characters is a placeholder, not a
+ * secret. `openssl rand -hex 32` has 16 possible characters; 64 draws from
+ * them reach this floor with overwhelming probability.
+ */
+const MIN_DISTINCT_SECRET_CHARS = 8;
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
@@ -128,6 +141,29 @@ const envSchema = z
         path: ["TURN_URLS"],
         message: "is required when TURN_SECRET or TURN_USERNAME is set",
       });
+    }
+    if (LIST_IP_HEADERS[env.PROXY_IP_HEADER.toLowerCase()]) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["PROXY_IP_HEADER"],
+        message: `${env.PROXY_IP_HEADER} is a list that clients can prepend to; use a header the proxy sets to one address (x-real-ip, true-client-ip, cf-connecting-ip)`,
+      });
+    }
+    if (env.NODE_ENV === "production") {
+      const secrets = [
+        ["SESSION_SECRET", env.SESSION_SECRET],
+        ["SESSION_SECRET_PREVIOUS", env.SESSION_SECRET_PREVIOUS],
+        ["ADMIN_TOKEN", env.ADMIN_TOKEN],
+      ] as const;
+      for (const [key, value] of secrets) {
+        if (value && new Set(value).size < MIN_DISTINCT_SECRET_CHARS) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: `looks like a placeholder (fewer than ${MIN_DISTINCT_SECRET_CHARS} distinct characters); use openssl rand -hex 32`,
+          });
+        }
+      }
     }
     if (env.NODE_ENV === "production" && !env.SESSION_SECRET) {
       ctx.addIssue({

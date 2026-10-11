@@ -11,17 +11,13 @@ import type { EnforcementService } from "../enforcement/EnforcementService";
 import type { Logger } from "../logger";
 import { appealRequestSchema, takedownRequestSchema, type AppealResponse, type TakedownResponse } from "../protocol";
 import { TokenBucket, type BucketSpec } from "../rateLimit";
+import { UNKNOWN_IP } from "../session/constants";
+import { requestIp as clientIp } from "../session/geo";
 
-/** Client IP: the trusted proxy header when TRUST_PROXY is on, else the TCP peer. IPv4-mapped IPv6 is unwrapped. */
+/** Client IP of an Express request (see session/geo.ts requestIp), or null when unknown. */
 export function requestIp(req: Request, proxyIpHeader: string | null): string | null {
-  let ip: string | undefined;
-  if (proxyIpHeader) {
-    const header = req.get(proxyIpHeader)?.trim();
-    if (header) ip = header;
-  }
-  ip ??= req.socket.remoteAddress;
-  if (!ip) return null;
-  return ip.startsWith("::ffff:") && ip.includes(".") ? ip.slice(7) : ip;
+  const ip = clientIp(req.headers, req.socket.remoteAddress, proxyIpHeader);
+  return ip === UNKNOWN_IP ? null : ip;
 }
 
 /** Per-IP token buckets for one instance. Cleared when it grows large, so it cannot leak memory. */

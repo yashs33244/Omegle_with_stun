@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { ConfigError, loadConfig } from "../../src/config";
 import { originAllowed } from "../../src/realtime/socket";
 
-const ADMIN = "a".repeat(32);
+const ADMIN = "admin-token-0123456789-abcdefghij";
 
 describe("loadConfig", () => {
   test("defaults outside production", () => {
@@ -31,7 +31,7 @@ describe("loadConfig", () => {
   const PROD = {
     NODE_ENV: "production",
     CORS_ORIGINS: "https://a.com",
-    SESSION_SECRET: "s".repeat(32),
+    SESSION_SECRET: "0123456789abcdef0123456789abcdef",
     TURNSTILE_SECRET: "1x0000000000000000000000000000000AA",
     TURNSTILE_SITE_KEY: "1x00000000000000000000AA",
     ADMIN_TOKEN: ADMIN,
@@ -131,7 +131,7 @@ describe("loadConfig", () => {
   test("Razorpay keys come in pairs and the fake gateway is refused in production", () => {
     expect(() => loadConfig({ RAZORPAY_KEY_ID: "rzp_test_x" })).toThrow(/RAZORPAY_KEY_SECRET/);
     expect(() =>
-      loadConfig({ NODE_ENV: "production", CORS_ORIGINS: "https://a.b", ADMIN_TOKEN: "a".repeat(24), SESSION_SECRET: "s".repeat(32), TURNSTILE_DISABLED: "true", RAZORPAY_FAKE: "1" }),
+      loadConfig({ NODE_ENV: "production", CORS_ORIGINS: "https://a.b", ADMIN_TOKEN: ADMIN, SESSION_SECRET: PROD.SESSION_SECRET, TURNSTILE_DISABLED: "true", RAZORPAY_FAKE: "1" }),
     ).toThrow(/RAZORPAY_FAKE/);
     const c = loadConfig({ RAZORPAY_KEY_ID: "rzp_test_x", RAZORPAY_KEY_SECRET: "s", RAZORPAY_WEBHOOK_SECRET: "w", RAZORPAY_FAKE: "true" });
     expect(c.razorpayKeyId).toBe("rzp_test_x");
@@ -158,6 +158,25 @@ describe("loadConfig", () => {
       "https://ping.example/up",
     );
     expect(() => loadConfig({ KEEPALIVE_URL: "not a url" })).toThrow();
+  });
+
+  test("PROXY_IP_HEADER must be a single-address header, never a client-appendable list", () => {
+    expect(() => loadConfig({ PROXY_IP_HEADER: "X-Forwarded-For" })).toThrow(/PROXY_IP_HEADER: X-Forwarded-For is a list/);
+    expect(() => loadConfig({ TRUST_PROXY: "true", PROXY_IP_HEADER: "forwarded" })).toThrow(/PROXY_IP_HEADER/);
+    expect(loadConfig({ TRUST_PROXY: "true", PROXY_IP_HEADER: "CF-Connecting-IP" }).proxyIpHeader).toBe("cf-connecting-ip");
+  });
+
+  test("production refuses placeholder secrets made of a few repeated characters", () => {
+    expect(() => loadConfig({ ...PROD, SESSION_SECRET: "s".repeat(32) })).toThrow(/SESSION_SECRET: looks like a placeholder/);
+    expect(() => loadConfig({ ...PROD, SESSION_SECRET_PREVIOUS: "abababababababababababababababab" })).toThrow(
+      /SESSION_SECRET_PREVIOUS: looks like a placeholder/,
+    );
+    expect(() => loadConfig({ ...PROD, ADMIN_TOKEN: "1234".repeat(8) })).toThrow(/ADMIN_TOKEN: looks like a placeholder/);
+    expect(loadConfig({ ...PROD, SESSION_SECRET_PREVIOUS: "fedcba9876543210fedcba9876543210" }).sessionSecretPrevious).toBe(
+      "fedcba9876543210fedcba9876543210",
+    );
+    // Outside production a weak local secret is still accepted.
+    expect(loadConfig({ SESSION_SECRET: "s".repeat(32) }).sessionSecretGenerated).toBe(false);
   });
 
   test("TURN provider and spend poller settings", () => {

@@ -96,7 +96,7 @@ launch build"); the backend itself also refuses to start without them.
 | `TURN_MAX_PER_DEVICE_HOUR`, `TURN_MAX_PER_IP_HOUR` | `20`, `100` | TURN credential sets per hour per device and per client IP |
 | `SENTRY_DSN`, `SENTRY_DSN_FRONTEND` | unset | Sentry projects for the backend and the SPA |
 | `POSTHOG_KEY`, `POSTHOG_HOST` | unset | PostHog Cloud project (cookieless) |
-| `ADMIN_ALLOWED_IPS` | unset | comma list of IPs or CIDRs allowed to call the admin API, on top of the token |
+| `ADMIN_ALLOWED_IPS` | unset | comma list of client IPs (exact match, no CIDRs) allowed to call the admin API, on top of the token |
 | `EVIDENCE_S3_BUCKET`, `EVIDENCE_S3_REGION` | unset | evidence in S3 instead of the `evidence-data` volume (credentials from the instance role). The region is required with a bucket; the deploy stops without it |
 | `EVIDENCE_S3_KMS_KEY_ID` | unset (SSE-S3) | KMS key for SSE-KMS encryption of evidence objects |
 | `CLOUDFLARE_ONLY` | `false` | `true`: the gateway refuses requests that did not come through Cloudflare |
