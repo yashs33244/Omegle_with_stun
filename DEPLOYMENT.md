@@ -16,6 +16,16 @@ push to new-v
 Deploys are serialized (`concurrency: deploy-production`, a newer push waits
 for the running deploy). `workflow_dispatch` re-runs a deploy by hand.
 
+**The EC2 path is paused.** The original host is gone, so the `images` and
+`deploy` jobs in `deploy.yml` are gated: they run only when the repository
+variable `EC2_DEPLOY_ENABLED` is `true` (Settings -> Secrets and variables ->
+Actions -> Variables) or the workflow is started by hand with
+`workflow_dispatch`. Until then a push to `new-v` only runs CI through this
+workflow; the live site is served by Vercel + Render (see
+[Free hosting](README.md#free-hosting-cloudflare-pages-or-vercel--render))
+and versioned images come from `release.yml` on a `v*` tag. To bring a new host
+online, finish [First-time setup](#first-time-setup) and set the variable.
+
 Production layout:
 
 ```
@@ -23,6 +33,23 @@ browser -> Cloudflare (proxy, Turnstile; TURN for relayed media)
         -> host proxy on EC2 (TLS) -> frontend :5173 (SPA, /admin, /models)
                                    -> gateway :3004 -> backend replicas -> Redis
 ```
+
+## Environments
+
+Three ways to run the stack exist; which one is live is decided by what is
+configured, not by the branch:
+
+| environment | where | deploys on |
+|---|---|---|
+| local | `bun run dev` in `backend/` and `new-frontend/` (README "Quick start") | never |
+| PR preview | Vercel preview deployment per pushed branch, talking to the production backend | every push |
+| production | frontend https://chizzy-chat.vercel.app (Vercel) or https://chizzy.pages.dev (Pages, opt-in); backend https://chizzy-api.onrender.com (Render Free, `render.yaml`) | merge to `new-v` |
+| compose on a host | this page's EC2 path | paused; `workflow_dispatch` or `EC2_DEPLOY_ENABLED` |
+
+The ops model (who deploys, health checks, canary, metrics, logs, secrets,
+cost, SLOs) is in [docs/OPERATIONS.md](docs/OPERATIONS.md); step-by-step
+pages are [docs/runbooks/rollback.md](docs/runbooks/rollback.md) and
+[docs/runbooks/release.md](docs/runbooks/release.md).
 
 ## GitHub secrets
 

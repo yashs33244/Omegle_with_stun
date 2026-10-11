@@ -1,6 +1,12 @@
 name: Deploy
 
 # Every secret used here is documented in DEPLOYMENT.md.
+#
+# The EC2 path is paused: the images and deploy jobs run only when the
+# repository variable EC2_DEPLOY_ENABLED is "true" or the workflow is started
+# by hand (workflow_dispatch). The ci job still runs on every push to new-v
+# because ci.yml ignores pushes to new-v and relies on this workflow_call.
+# Versioned images are built by release.yml on a v* tag.
 on:
   push:
     branches: [new-v]
@@ -28,6 +34,7 @@ jobs:
   images:
     name: Build and push images
     needs: ci
+    if: vars.EC2_DEPLOY_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -65,6 +72,7 @@ jobs:
   deploy:
     name: Deploy to EC2
     needs: images
+    if: vars.EC2_DEPLOY_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: production

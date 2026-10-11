@@ -1,43 +1,104 @@
+# Weekly, grouped minor+patch updates. Majors are not opened as PRs: the
+# `ignore` rules below cover runtime images whose major is pinned on purpose
+# (Node, nginx, Redis; ci.yml and scripts/check-pins.sh track them) and
+# libraries whose major needs a migration (zod 4, ioredis 6, react-router 7,
+# eslint 10, pino 10, jsdom 30). A major is upgraded
+# deliberately: open an issue, do the migration on a branch, bump the pin and
+# the ignore rule in the same PR. See CONTRIBUTING.md "Dependencies".
 version: 2
 updates:
   - package-ecosystem: npm
     directory: /new-frontend
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+    labels: [dependencies, frontend]
     groups:
       frontend-minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      - dependency-name: zod
+        update-types: [version-update:semver-major]
+      - dependency-name: react-router-dom
+        update-types: [version-update:semver-major]
+      - dependency-name: eslint
+        update-types: [version-update:semver-major]
+      - dependency-name: eslint-plugin-react-hooks
+        update-types: [version-update:semver-major]
+      - dependency-name: jsdom
+        update-types: [version-update:semver-major]
+      # Pinned exactly: vite.config.ts fails the build unless the version
+      # matches src/moderation/modelAssets.ts. Bump both by hand.
+      - dependency-name: "@mediapipe/tasks-vision"
 
   - package-ecosystem: bun
     directory: /backend
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 3
+    cooldown:
+      default-days: 7
+    labels: [dependencies, backend]
     groups:
       backend-minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      - dependency-name: zod
+        update-types: [version-update:semver-major]
+      - dependency-name: ioredis
+        update-types: [version-update:semver-major]
+      - dependency-name: eslint
+        update-types: [version-update:semver-major]
+      - dependency-name: pino
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 2
+    labels: [dependencies, ci]
     groups:
       actions:
         patterns: ["*"]
 
+  # Runtime images: node (backend) and nginx (frontend). Majors stay pinned.
   - package-ecosystem: docker
     directory: /backend
     schedule:
       interval: weekly
+    open-pull-requests-limit: 2
+    labels: [dependencies, docker]
+    ignore:
+      - dependency-name: node
+        update-types: [version-update:semver-major]
+      - dependency-name: oven/bun
+        update-types: [version-update:semver-major]
 
   - package-ecosystem: docker
     directory: /new-frontend
     schedule:
       interval: weekly
+    open-pull-requests-limit: 2
+    labels: [dependencies, docker]
+    ignore:
+      - dependency-name: node
+        update-types: [version-update:semver-major]
+      # nginx 1.28 is the stable branch; odd minors (1.29, 1.31) are mainline.
+      - dependency-name: nginxinc/nginx-unprivileged
+        update-types: [version-update:semver-major, version-update:semver-minor]
 
   # Pinned images in docker-compose.yml (redis, gateway nginx).
   - package-ecosystem: docker-compose
     directory: /
     schedule:
       interval: weekly
+    open-pull-requests-limit: 2
+    labels: [dependencies, docker]
+    ignore:
+      - dependency-name: redis
+        update-types: [version-update:semver-major]
+      - dependency-name: nginxinc/nginx-unprivileged
+        update-types: [version-update:semver-major, version-update:semver-minor]

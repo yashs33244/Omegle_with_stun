@@ -1,0 +1,58 @@
+name: Bug report
+description: Something does not work as described in the README or on the site.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Do not include other people's chat content, video frames or personal data. Security issues go to SECURITY.md, not here.
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open https://chizzy-chat.vercel.app
+        2. Pass the gate, choose Instant, press Start
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device, OS and browser
+      placeholder: Pixel 7, Android 15, Chrome 130 / MacBook, macOS 15, Safari 18
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      options:
+        - Live site (Vercel + Render)
+        - Local dev (bun run dev / npm run dev)
+        - Docker Compose stack
+        - Other (say which in the logs field)
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: v1.0.0 or a commit sha from `git rev-parse HEAD`
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, console output or screenshots
+      description: Browser console, backend logs (`docker compose logs backend`), network errors. Redact session tokens.
+      render: text
