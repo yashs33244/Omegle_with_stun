@@ -1,3 +1,4 @@
+import * as React from "react";
 import { describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -40,6 +41,26 @@ describe("BottomSheet", () => {
       await userEvent.tab();
       expect(inside).toContain(document.activeElement);
     }
+  });
+
+  it("hands focus back to the button that opened it", async () => {
+    function Host() {
+      const [open, setOpen] = React.useState(false);
+      return (
+        <>
+          <button onClick={() => setOpen(true)}>Open</button>
+          <BottomSheet open={open} title="Sheet title" onOpenChange={setOpen}>
+            <input aria-label="Field" />
+          </BottomSheet>
+        </>
+      );
+    }
+    render(<Host />);
+    const opener = screen.getByRole("button", { name: "Open" });
+    await userEvent.click(opener);
+    await waitFor(() => expect(screen.getByRole("dialog")).toContainElement(document.activeElement as HTMLElement));
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() => expect(opener).toHaveFocus());
   });
 
   it("renders no backdrop when non-modal", () => {

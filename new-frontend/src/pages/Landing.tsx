@@ -244,7 +244,7 @@ export const Landing: React.FC<LandingProps> = ({
         </main>
 
         {/* Phones: pinned above the home indicator. Desktop: a plain row under the two columns. */}
-        <StickyBar className="md:static md:border-0 md:bg-transparent md:pb-8" data-testid="start-bar">
+        <StickyBar aria-label={t("start")} className="md:static md:border-0 md:bg-transparent md:pb-8" data-testid="start-bar">
           <div className="mx-auto w-full max-w-5xl md:max-w-sm">
             <Button
               onClick={openSetup}

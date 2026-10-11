@@ -2,7 +2,10 @@
  * BottomSheet: the one modal surface for phones. Slides up from the bottom
  * with a drag handle; from the `md` breakpoint it becomes a centred dialog.
  * Built on Radix Dialog, which provides the focus trap, Escape, `aria-modal`,
- * scroll lock and the portal. Design: dark gray-900 panel, 2 px black border,
+ * the title/description wiring, scroll lock and the portal. Closing hands
+ * focus back to whatever opened the sheet (Radix would only do that for its
+ * own Trigger). The enter/exit animations are off under
+ * `prefers-reduced-motion`. Design: dark gray-900 panel, 2 px black border,
  * yellow primary actions live in the caller's `footer`.
  *
  * Props
@@ -93,14 +96,14 @@ const TONE = {
     panel: "bg-gray-900 text-white border-black",
     muted: "text-gray-300",
     handle: "bg-gray-600",
-    close: "text-gray-300 hover:text-white hover:bg-white/10",
+    close: "text-gray-300 hover:text-white hover:bg-white/10 focus-visible:ring-offset-gray-900",
     footer: "border-gray-800 bg-gray-900",
   },
   light: {
     panel: "bg-white text-black border-black",
     muted: "text-gray-600",
     handle: "bg-gray-300",
-    close: "text-gray-600 hover:text-black hover:bg-black/5",
+    close: "text-gray-600 hover:text-black hover:bg-black/5 focus-visible:ring-offset-white",
     footer: "border-gray-200 bg-white",
   },
 } as const;
@@ -132,6 +135,21 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
     countModalSheet(1);
     return () => countModalSheet(-1);
   }, [countsAsModal]);
+  // Radix's modal Content hands focus to a DialogPrimitive.Trigger on close; the sheets are
+  // opened from plain buttons, so remember what was focused and give it back ourselves.
+  const opener = React.useRef<HTMLElement | null>(null);
+  const rememberOpener: ContentProps["onOpenAutoFocus"] = (e) => {
+    // Fires before Radix moves focus into the sheet, so this is still the opener.
+    const active = document.activeElement;
+    opener.current = active instanceof HTMLElement && active !== document.body ? active : null;
+    onOpenAutoFocus?.(e);
+  };
+  const restoreOpener: ContentProps["onCloseAutoFocus"] = (e) => {
+    e.preventDefault();
+    const target = opener.current;
+    opener.current = null;
+    if (target?.isConnected) target.focus({ preventScroll: true });
+  };
 
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange} modal={modal}>
@@ -139,7 +157,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
         {modal && (
           <DialogPrimitive.Overlay
             data-testid="sheet-backdrop"
-            className="fixed inset-0 z-50 bg-black/70 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
+            className="fixed inset-0 z-50 bg-black/70 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 motion-reduce:animate-none"
           />
         )}
         <DialogPrimitive.Content
@@ -147,7 +165,8 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
           aria-modal={modal || undefined}
           onEscapeKeyDown={onEscapeKeyDown}
           onPointerDownOutside={onPointerDownOutside}
-          onOpenAutoFocus={onOpenAutoFocus}
+          onOpenAutoFocus={rememberOpener}
+          onCloseAutoFocus={restoreOpener}
           {...(description ? {} : { "aria-describedby": undefined })}
           style={offset ? { transform: `translateY(${offset}px)`, transition: "none" } : undefined}
           className={cn(
@@ -156,6 +175,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
             "md:inset-auto md:left-1/2 md:top-1/2 md:w-full md:max-w-md md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-xl md:border-b-2 md:max-h-[calc(var(--app-height)-4rem)]",
             "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
             "data-[state=open]:slide-in-from-bottom-10 data-[state=closed]:slide-out-to-bottom-10 md:data-[state=open]:slide-in-from-bottom-0 md:data-[state=closed]:slide-out-to-bottom-0",
+            "motion-reduce:animate-none",
             styles.panel,
             className,
           )}
@@ -182,7 +202,7 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
             </div>
             <DialogPrimitive.Close
               className={cn(
-                "-mr-2 -mt-2 flex h-tap w-tap shrink-0 items-center justify-center rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-yellow-400",
+                "-mr-2 -mt-2 flex h-tap w-tap shrink-0 items-center justify-center rounded-full transition-colors motion-reduce:transition-none focus:outline-none focus-visible:ring-2 focus-visible:ring-yellow-400 focus-visible:ring-offset-2",
                 styles.close,
               )}
               aria-label={closeLabel ?? t("close")}
