@@ -14,6 +14,20 @@
  */
 import { createHash } from "node:crypto";
 import {
+  HANDLE_MAX_CHARS,
+  HANDLE_MIN_CHARS,
+  HIDDEN,
+  MAX_CONNECTOR_TOKENS,
+  NICKNAME_DOMAIN,
+  NICKNAME_MIN,
+  NICKNAME_PREFIX,
+  NICKNAME_RANGE,
+  PHONE_MAX_DIGITS,
+  PHONE_MIN_DIGITS,
+  SPAN_KIND,
+  SQUASHED_SLUR_MIN_CHARS,
+} from "./constants";
+import {
   ALWAYS_CONTACT_PLATFORMS,
   CONTACT_PHRASES,
   HANDLE_CONNECTORS,
@@ -23,9 +37,8 @@ import {
   SOLICITATION_PHRASES,
   STRONG_PLATFORMS,
   WEAK_PLATFORMS,
+  WORD_ONLY_SLURS,
 } from "./phrases";
-
-export const HIDDEN = "[hidden for safety]";
 
 /* ------------------------------------------------------------------ */
 /* Normalization for phrase matching                                   */
@@ -65,8 +78,7 @@ function hasPhrase(normalized: string, phrases: string[]): boolean {
 interface Span {
   start: number;
   end: number;
-  /** contact: handles, phones, messaging apps, social links. link: other URLs. */
-  kind: "contact" | "link";
+  kind: (typeof SPAN_KIND)[keyof typeof SPAN_KIND];
 }
 
 const TLDS =
@@ -76,7 +88,7 @@ const URL_RE = new RegExp(
   "gi",
 );
 const EMAIL_RE = /[^\s@]+@[^\s@]+\.[a-z]{2,}/gi;
-const AT_HANDLE_RE = /(?<![\w@])@[a-z0-9_.]{2,30}/gi;
+const AT_HANDLE_RE = new RegExp(String.raw`(?<![\w@])@[a-z0-9_.]{${HANDLE_MIN_CHARS},${HANDLE_MAX_CHARS}}`, "gi");
 const PHONE_RE = /\+?[\d०-९][\d०-९\s().-]{5,}[\d०-९]/g;
 const TOKEN_RE = /[\p{L}\p{M}\p{N}_.@']+|[:=-]/gu;
 
@@ -91,20 +103,24 @@ function isPlatform(word: string): boolean {
 }
 
 function urlSpans(text: string, spans: Span[]): void {
-  for (const m of text.matchAll(EMAIL_RE)) spans.push({ start: m.index, end: m.index + m[0].length, kind: "contact" });
+  for (const m of text.matchAll(EMAIL_RE)) spans.push({ start: m.index, end: m.index + m[0].length, kind: SPAN_KIND.contact });
   for (const m of text.matchAll(URL_RE)) {
     const lower = m[0].toLowerCase();
     const social = SOCIAL_HOSTS.some((h) => new RegExp(String.raw`(^|[/.])${h.replace(/\./g, "\\.")}(\/|$|\?)`).test(lower));
-    spans.push({ start: m.index, end: m.index + m[0].length, kind: social ? "contact" : "link" });
+    spans.push({ start: m.index, end: m.index + m[0].length, kind: social ? SPAN_KIND.contact : SPAN_KIND.link });
   }
 }
 
 function phoneSpans(text: string, spans: Span[]): void {
   for (const m of text.matchAll(PHONE_RE)) {
     const digits = m[0].replace(/[^\d०-९]/g, "").length;
-    if (digits >= 7 && digits <= 15) spans.push({ start: m.index, end: m.index + m[0].length, kind: "contact" });
+    if (digits >= PHONE_MIN_DIGITS && digits <= PHONE_MAX_DIGITS) {
+      spans.push({ start: m.index, end: m.index + m[0].length, kind: SPAN_KIND.contact });
+    }
   }
 }
+
+const HANDLE_RE = new RegExp(String.raw`^@?[\p{L}\p{N}_.]{${HANDLE_MIN_CHARS},${HANDLE_MAX_CHARS}}$`, "u");
 
 /** "snap: priya", "insta priya_k", "my ig is @x", "add me on whatsapp". */
 function platformSpans(text: string, spans: Span[]): void {
@@ -119,7 +135,7 @@ function platformSpans(text: string, spans: Span[]): void {
     if (!isPlatform(t.word)) continue;
     let j = i + 1;
     let explicit = false;
-    while (j < tokens.length && j <= i + 3) {
+    while (j < tokens.length && j <= i + MAX_CONNECTOR_TOKENS) {
       const w = tokens[j]!.word;
       if (w === ":" || w === "=" || w === "-") explicit = true;
       else if (!CONNECTORS.has(w)) break;
@@ -127,19 +143,21 @@ function platformSpans(text: string, spans: Span[]): void {
     }
     const cand = tokens[j];
     let end = -1;
-    if (cand && /^@?[\p{L}\p{N}_.]{2,30}$/u.test(cand.raw.replace(/\.+$/, "")) && !NOT_HANDLE.has(cand.word) && !isPlatform(cand.word)) {
+    if (cand && HANDLE_RE.test(cand.raw.replace(/\.+$/, "")) && !NOT_HANDLE.has(cand.word) && !isPlatform(cand.word)) {
       const weakOk = explicit || cand.raw.startsWith("@") || /[\d_.]/.test(cand.word);
       if (!WEAK.has(t.word) || weakOk) end = cand.end;
     }
-    if (end >= 0) spans.push({ start: t.start, end, kind: "contact" });
-    else if (ALWAYS.has(t.word)) spans.push({ start: t.start, end: t.end, kind: "contact" });
+    if (end >= 0) spans.push({ start: t.start, end, kind: SPAN_KIND.contact });
+    else if (ALWAYS.has(t.word)) spans.push({ start: t.start, end: t.end, kind: SPAN_KIND.contact });
   }
 }
 
 function findSpans(text: string): Span[] {
   const spans: Span[] = [];
   urlSpans(text, spans);
-  for (const m of text.matchAll(AT_HANDLE_RE)) spans.push({ start: m.index, end: m.index + m[0].length, kind: "contact" });
+  for (const m of text.matchAll(AT_HANDLE_RE)) {
+    spans.push({ start: m.index, end: m.index + m[0].length, kind: SPAN_KIND.contact });
+  }
   phoneSpans(text, spans);
   platformSpans(text, spans);
   return spans;
@@ -186,26 +204,29 @@ export interface ChatGuardResult {
 export function guardChat(text: string, opts: { redact: boolean }): ChatGuardResult {
   const spans = findSpans(text);
   const normalized = normalize(text);
-  const contactSharing = spans.some((s) => s.kind === "contact") || hasPhrase(normalized, CONTACT);
+  const contactSharing = spans.some((s) => s.kind === SPAN_KIND.contact) || hasPhrase(normalized, CONTACT);
   const solicitation = hasPhrase(normalized, SOLICITATION);
   if (!opts.redact || spans.length === 0) return { text, redacted: false, contactSharing, solicitation };
   return { text: redact(text, spans), redacted: true, contactSharing, solicitation };
 }
 
 const SLURS = NAME_SLURS.map((s) => normalize(s).trim());
-/** Slurs that are also substrings of ordinary words; matched as whole words only. */
-const WORD_ONLY = new Set(["rapist", "chamar"].map((s) => normalize(s).trim()));
+const WORD_ONLY = new Set(WORD_ONLY_SLURS.map((s) => normalize(s).trim()));
 
 export function containsSlur(text: string): boolean {
   const normalized = normalize(text);
   const squashed = normalized.replace(/\s+/g, "");
-  return SLURS.some((s) => normalized.includes(` ${s} `) || (s.length >= 5 && !WORD_ONLY.has(s) && squashed.includes(s)));
+  return SLURS.some(
+    (s) =>
+      normalized.includes(` ${s} `) ||
+      (s.length >= SQUASHED_SLUR_MIN_CHARS && !WORD_ONLY.has(s) && squashed.includes(s)),
+  );
 }
 
 /** Stable per device, so a rejected name does not change on every hello. */
 export function nicknameFor(deviceId: string): string {
-  const n = createHash("sha256").update(`chizzy-nick:${deviceId}`).digest().readUInt32BE(0);
-  return `Stranger ${1000 + (n % 9000)}`;
+  const n = createHash("sha256").update(`${NICKNAME_DOMAIN}${deviceId}`).digest().readUInt32BE(0);
+  return `${NICKNAME_PREFIX}${NICKNAME_MIN + (n % NICKNAME_RANGE)}`;
 }
 
 /** Display-name guard: contact details or a slur -> generated nickname. */

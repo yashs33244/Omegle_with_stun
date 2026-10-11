@@ -14,12 +14,18 @@ import type { Config } from "../config";
 import type { Logger } from "../logger";
 import type { MatchMetrics } from "../match/matchMetrics";
 import type { ModerationSignalPayload } from "../protocol";
-
-const RISK_WINDOW_MS = 24 * 60 * 60_000;
-const CALLS_TTL_MS = 7 * 24 * 60 * 60_000;
-const LOW_PRIORITY_CACHE_MS = 1_000;
-const NUDGE_COOLDOWN_MS = 60_000;
-const DEDUPE_MAX = 50_000;
+import {
+  CALLS_TTL_MS,
+  DEDUPE_MAX,
+  LOW_PRIORITY_CACHE_MS,
+  LOW_PRIORITY_CAUSE,
+  NUDGE_COOLDOWN_MS,
+  RISK_WINDOW_MS,
+  SIGNALS_KEY_PREFIX,
+  SIGNAL_RISK,
+  SIGNAL_TARGET,
+  type LowPriorityCause,
+} from "./constants";
 
 export interface CallStats {
   calls: number;
@@ -82,7 +88,7 @@ export class MemorySignalStore implements SignalStore {
 export class RedisSignalStore implements SignalStore {
   constructor(
     private readonly redis: Redis,
-    private readonly prefix = "chizzy:signals:",
+    private readonly prefix = SIGNALS_KEY_PREFIX,
   ) {}
 
   async addRisk(deviceId: string, points: number, windowMs: number): Promise<number> {
@@ -115,16 +121,6 @@ export class RedisSignalStore implements SignalStore {
     return this.redis.zrangebyscore(`${this.prefix}lowpri`, `(${now}`, "+inf");
   }
 }
-
-/** Risk points per moderation signal kind, and who they count against. */
-const SIGNAL_RISK: Record<ModerationSignalPayload["kind"], { points: number; against: "self" | "partner" }> = {
-  // The sender's own camera label looks like OBS, ManyCam or similar.
-  "virtual-camera": { points: 3, against: "self" },
-  // The receiver's on-device model blurred the partner's video.
-  "nsfw-blur": { points: 2, against: "partner" },
-  "no-face": { points: 0, against: "self" },
-  "model-unavailable": { points: 0, against: "self" },
-};
 
 export const NUDGE_RISK = { solicitation: 2, "contact-sharing": 1 } as const;
 
@@ -180,7 +176,7 @@ export class SafetySignals {
     this.background(
       this.store.recordEarlySkip(skipped).then(async (s) => {
         if (s.calls >= this.config.earlySkipMinCalls && s.early / s.calls >= this.config.earlySkipShare) {
-          await this.markLow(skipped, "early-skip");
+          await this.markLow(skipped, LOW_PRIORITY_CAUSE.earlySkip);
         }
       }),
       "early skip",
@@ -195,14 +191,14 @@ export class SafetySignals {
     if (!this.firstTime(`${socketId}:${roomId}:${kind}`)) return;
     this.metrics.moderationSignalsTotal.inc({ kind });
     const rule = SIGNAL_RISK[kind];
-    const target = rule.against === "self" ? self : partner;
+    const target = rule.against === SIGNAL_TARGET.self ? self : partner;
     if (rule.points > 0 && target) this.addRisk(target, rule.points, kind);
   }
 
   addRisk(deviceId: string, points: number, cause: string): void {
     this.background(
       this.store.addRisk(deviceId, points, RISK_WINDOW_MS).then(async (total) => {
-        if (total >= this.config.riskThreshold) await this.markLow(deviceId, "risk");
+        if (total >= this.config.riskThreshold) await this.markLow(deviceId, LOW_PRIORITY_CAUSE.risk);
       }),
       `risk ${cause}`,
     );
@@ -228,7 +224,7 @@ export class SafetySignals {
     return true;
   }
 
-  private async markLow(deviceId: string, cause: "risk" | "early-skip"): Promise<void> {
+  private async markLow(deviceId: string, cause: LowPriorityCause): Promise<void> {
     const already = (await this.lowPriority()).has(deviceId);
     await this.store.setLowPriority(deviceId, this.now() + this.config.lowPriorityMs);
     this.lowCache?.set.add(deviceId);
