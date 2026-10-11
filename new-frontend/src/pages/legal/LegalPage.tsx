@@ -1,10 +1,11 @@
 import { useEffect } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { FileWarning } from "lucide-react";
 import { Footer } from "@/components/Footer";
 
 /** Placeholder the lawyer or owner must fill in before launch. */
-export const Todo: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+export const Todo: React.FC<{ children?: React.ReactNode }> = ({ children }) => (
   <mark className="bg-yellow-200 px-1 rounded" data-testid="legal-todo">
     [TODO: {children}]
   </mark>
@@ -17,11 +18,14 @@ export interface LegalPageProps {
   title: string;
   /** Shown under the title, e.g. "Last updated: draft of October 2026". */
   updated?: string;
+  /** Long legal text whose body is only authoritative in English. */
+  englishAuthoritative?: boolean;
   children: React.ReactNode;
 }
 
 /** Shell for legal and safety pages. Every one is a DRAFT until the lawyer signs it off. */
-export const LegalPage: React.FC<LegalPageProps> = ({ title, updated = "Draft of October 2026", children }) => {
+export const LegalPage: React.FC<LegalPageProps> = ({ title, updated, englishAuthoritative = false, children }) => {
+  const { t } = useTranslation(["legal", "common"]);
   useEffect(() => {
     document.title = `${title} | Chizzy`;
     window.scrollTo(0, 0);
@@ -32,10 +36,10 @@ export const LegalPage: React.FC<LegalPageProps> = ({ title, updated = "Draft of
       <header className="bg-gray-900 px-4 py-3">
         <div className="max-w-3xl mx-auto flex items-center justify-between">
           <Link to="/" className="text-2xl font-bold text-yellow-400">
-            Chizzy
+            {t("common:appName")}
           </Link>
           <Link to="/" className="text-sm text-gray-200 underline">
-            Back to Chizzy
+            {t("back")}
           </Link>
         </div>
       </header>
@@ -48,12 +52,12 @@ export const LegalPage: React.FC<LegalPageProps> = ({ title, updated = "Draft of
           >
             <FileWarning className="w-5 h-5 shrink-0 text-yellow-700" aria-hidden="true" />
             <p>
-              <strong>Draft, pending legal review.</strong> This page is a template. It is not final and may change
-              before Chizzy launches publicly.
+              <Trans t={t} i18nKey="draftNotice" />
             </p>
           </div>
           <h1 className="text-3xl font-bold">{title}</h1>
-          <p className="text-sm text-gray-600 mt-1">{updated}</p>
+          <p className="text-sm text-gray-600 mt-1">{updated ?? t("draftOf")}</p>
+          {englishAuthoritative && <p className="text-sm text-gray-600 mt-1">{t("englishAuthoritative")}</p>}
           <div className={prose}>{children}</div>
         </article>
       </main>

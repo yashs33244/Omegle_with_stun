@@ -1,1 +1,325 @@
-{}
+{
+  "back": "Chizzy पर वापस जाएँ",
+  "draftNotice": "<strong>मसौदा, कानूनी समीक्षा लंबित।</strong> यह पृष्ठ एक टेम्पलेट है। यह अंतिम नहीं है और Chizzy के सार्वजनिक लॉन्च से पहले बदल सकता है।",
+  "draftOf": "अक्टूबर 2026 का मसौदा",
+  "englishAuthoritative": "इस पाठ का अंग्रेज़ी संस्करण ही आधिकारिक (प्रामाणिक) संस्करण है।",
+  "terms": {
+    "title": "सेवा की शर्तें",
+    "version": "संस्करण {{version}}",
+    "intro": "These Terms are an agreement between you and <todo>legal entity name and registered address</todo> (\"Chizzy\", \"we\"). By using Chizzy you agree to them. If you do not agree, do not use Chizzy.",
+    "who": {
+      "title": "1. Chizzy का उपयोग कौन कर सकता है",
+      "age": "You must be 18 or older. We ask for your date of birth before the camera turns on, and a device that gives an under-18 date is locked out.",
+      "regions": "Chizzy is not available in some countries. Do not use a VPN or other tools to get around a regional block.",
+      "banned": "You may not use Chizzy if we have banned you, or to get around a restriction."
+    },
+    "what": {
+      "title": "2. Chizzy क्या है",
+      "body": "Chizzy connects you with a random adult stranger for a one-to-one video and text chat. You do not need an account. We do not record calls. Read the <privacy>Privacy Policy</privacy> to understand what data we handle, including how peer-to-peer calls share your IP address with your partner."
+    },
+    "rules": {
+      "title": "3. नियम",
+      "intro": "You must follow the <guidelines>Community Guidelines</guidelines>. In short, you must not share, show or ask for:",
+      "minors": "any sexual content involving a minor, or any contact with a minor of a sexual nature;",
+      "nudity": "nudity or sexual acts, or intimate images of anyone without their consent;",
+      "harassment": "harassment, threats, bullying or hate against a person or group;",
+      "violence": "violence, self-harm encouragement, or illegal goods and services;",
+      "spam": "spam, scams, advertising, or attempts to move people to other platforms for these purposes;",
+      "fake": "pre-recorded, fake or impersonating video;",
+      "unlawful": "content that breaks the law of India or of the country you are in, or that infringes someone's rights.",
+      "recording": "You must not record, screenshot or redistribute other people's video without their consent."
+    },
+    "tools": {
+      "title": "4. स्वचालित सुरक्षा उपकरण",
+      "body": "Chizzy uses automated tools to reduce abuse: a bot check (Cloudflare Turnstile), on-device checks that can blur video that looks unsafe or hide your video when no face is visible, filters that hide links, handles and phone numbers in chat for the first minutes of a call, and rate limits. These tools make mistakes in both directions. They lower risk; they do not remove it."
+    },
+    "enforcement": {
+      "title": "5. रिपोर्ट और प्रवर्तन",
+      "body": "You can report a partner during a call or shortly after it. Reports and the material attached to them (one image from the call and recent chat lines) are reviewed by people on our team. Depending on what happened we may warn you or restrict your access: a warning, then pauses of 10 minutes, 24 hours and 7 days, then a permanent ban. Automated actions are limited to temporary pauses; a permanent ban is decided by a person. Serious cases, such as child sexual abuse material, may lead straight to a ban and a report to the authorities."
+    },
+    "appeals": {
+      "title": "6. अपील और शिकायतें",
+      "body": "You can appeal a restriction for free from the restriction screen. You can also raise a complaint with our <grievance>Grievance Officer</grievance>."
+    },
+    "content": {
+      "title": "7. आपकी सामग्री",
+      "body": "You are responsible for what you show and say. You keep any rights you have in it. You allow us to process it only as needed to run Chizzy and keep it safe (for example, to review a report)."
+    },
+    "liability": {
+      "title": "8. अस्वीकरण और दायित्व",
+      "body": "Chizzy is provided \"as is\". You meet strangers at your own risk and should not share personal information. To the extent the law allows, our liability is limited to <todo>liability cap to be set by the lawyer</todo>."
+    },
+    "changes": {
+      "title": "9. बदलाव और समाप्ति",
+      "body": "We may change these Terms. When we do, we will ask you to accept the new version before you continue. You may stop using Chizzy at any time. We may suspend or end access for anyone who breaks these Terms."
+    },
+    "law": {
+      "title": "10. लागू कानून",
+      "body": "These Terms are governed by the laws of India. Courts at <todo>city</todo> have jurisdiction, subject to any rights you have under the law of the country you live in."
+    },
+    "contact": {
+      "title": "11. संपर्क",
+      "body": "<todo>contact email address</todo>"
+    }
+  },
+  "privacy": {
+    "title": "गोपनीयता नीति",
+    "intro": "This policy explains what <todo>legal entity name</todo> (\"Chizzy\", \"we\") collects when you use Chizzy, why, who we share it with and how long we keep it. Chizzy has no accounts. We do not use advertising or analytics cookies.",
+    "ip": {
+      "title": "आपका IP पता और आपका चैट पार्टनर",
+      "body": "<strong>In the default peer-to-peer mode, your video call connects your browser directly to your partner's browser, so your partner's browser receives your IP address.</strong> An IP address can reveal your approximate location and your internet provider. If you turn on <strong>Hide my IP</strong>, the call goes through a relay server (run by Cloudflare) and your partner's browser receives the relay's address instead of yours. Hide my IP may sometimes be unavailable; when it is off, calls are peer-to-peer."
+    },
+    "collect": {
+      "title": "हम क्या इकट्ठा करते हैं",
+      "age": "<strong>Age check:</strong> you enter your date of birth, our server works out whether you are 18 or older and keeps only that outcome, the Terms version you accepted and the time. We do not store your date of birth.",
+      "profile": "<strong>Profile you choose:</strong> display name, country, language, gender (used only for matching filters, not shown to partners), topics and an optional photo. These are passed to your partners during a match and are not saved by us after you leave.",
+      "signals": "<strong>Device and network signals for anti-abuse:</strong> a random device id stored in your browser, a hash of coarse browser traits (browser version, language, time zone, screen size and processor count), your IP address and the country it maps to, the result of the Cloudflare Turnstile bot check, whether your camera looks like a virtual camera, how quickly calls are skipped, and counts (not content) from on-device safety checks. We use these to stop bots, enforce bans and lockouts, and limit abuse.",
+      "reports": "<strong>Reports:</strong> when someone reports you, or you report someone, we keep the report, one image from the video captured by the reporter's device, and up to the last 20 chat lines.",
+      "telemetry": "<strong>Call telemetry:</strong> whether the call connected, how long it took, connection type and quality figures. No IP addresses and no content.",
+      "errors": "<strong>Errors and product analytics:</strong> crash reports with names, chat text and images removed, and anonymous usage events (for example \"call connected\") without cookies and without your IP address.",
+      "noRecording": "We do not record video, audio or chat."
+    },
+    "processors": {
+      "title": "हमारे लिए डेटा कौन प्रोसेस करता है",
+      "cloudflare": "<strong>Cloudflare</strong>: content delivery and protection, the Turnstile bot check, and the relay servers used for Hide my IP and for calls that cannot connect directly.",
+      "sentry": "<strong>Sentry</strong>: error reports from the app and the server.",
+      "posthog": "<strong>PostHog</strong>: anonymous, cookieless product analytics.",
+      "hosting": "<strong>Hosting:</strong> <todo>hosting provider and region</todo>.",
+      "transfers": "Some of these providers store data outside India, including in the United States. <todo>cross-border transfer basis, to be written by the lawyer</todo>"
+    },
+    "retention": {
+      "title": "हम डेटा कितने समय तक रखते हैं",
+      "colData": "डेटा",
+      "colRetention": "अवधारण अवधि",
+      "rows": {
+        "logs": {
+          "data": "Connection and application logs (connections, IP addresses, matches)",
+          "period": "180 days rolling, stored in India"
+        },
+        "reports": {
+          "data": "Reports and their evidence (non-CSAM)",
+          "period": "1 year, then deleted automatically"
+        },
+        "csam": {
+          "data": "Suspected child sexual abuse material and its report metadata",
+          "period": "1 year after the report, in a restricted store that can be put on legal hold"
+        },
+        "bans": {
+          "data": "Ban records (hashed device keys)",
+          "period": "Length of the ban plus 1 year"
+        },
+        "ageCheck": {
+          "data": "Age check outcome (18 or older, Terms version, time)",
+          "period": "While the device is active, plus 180 days"
+        },
+        "lockout": {
+          "data": "Under-18 lockout",
+          "period": "A salted hash and the date only; nothing else"
+        },
+        "dob": {
+          "data": "Date of birth",
+          "period": "Not stored. Only the outcome is kept"
+        },
+        "chat": {
+          "data": "Chat messages",
+          "period": "Not stored, except the lines attached to a report"
+        },
+        "media": {
+          "data": "Video and audio",
+          "period": "Not recorded. A single image is kept only when someone reports a call"
+        },
+        "telemetry": {
+          "data": "Call quality telemetry",
+          "period": "No IP addresses; aggregated after 90 days"
+        }
+      }
+    },
+    "storage": {
+      "title": "आपके डिवाइस पर संग्रहण",
+      "body": "Chizzy keeps a few items in your browser's local storage: the random device id, a token that proves you passed the age check (up to 180 days), a session token (24 hours) and, if your date of birth was under 18, a lockout marker. These are needed for the service to work and to keep it safe."
+    },
+    "children": {
+      "title": "बच्चे",
+      "body": "Chizzy is for adults. If we learn that a person under 18 is using it, we lock them out. For a locked-out device we aim to keep only a salted hash and the date, as set out in the table above, plus anything the law requires us to keep."
+    },
+    "rights": {
+      "title": "आपके अधिकार",
+      "body": "Depending on where you live, you can ask to access, correct or delete data about you, and complain to a data protection authority. Because Chizzy has no accounts, we may ask for details such as when you used Chizzy so we can find data about you. Contact <todo>privacy contact email</todo> or our <grievance>Grievance Officer</grievance>."
+    },
+    "law": {
+      "title": "कानून प्रवर्तन",
+      "body": "We share data with authorities when the law requires it, and we report child sexual abuse material to the authorities (NCMEC in the United States and the relevant Indian authorities)."
+    },
+    "changes": {
+      "title": "बदलाव",
+      "body": "We will update this page and the date above when this policy changes."
+    }
+  },
+  "guidelines": {
+    "title": "सामुदायिक दिशानिर्देश",
+    "intro": "Chizzy तभी काम करता है जब अजनबी भरोसा कर सकें कि अगला व्यक्ति एक वयस्क है जो बात करने आया है। ये नियम हर कॉल और हर चैट पर लागू होते हैं। यह पृष्ठ नियमों की हमारी नियमित याद दिलाने वाली सूचना भी है।",
+    "rules": {
+      "title": "नियम",
+      "adults": "<strong>केवल 18+।</strong> अगर आपको लगे कि आपका पार्टनर 18 से कम उम्र का है, तो कॉल समाप्त करें और उसे \"Underage\" के रूप में रिपोर्ट करें।",
+      "clothes": "<strong>कपड़े पहने रखें।</strong> कैमरे पर या चैट में नग्नता, यौन क्रियाएँ या यौन अनुरोध नहीं।",
+      "minors": "<strong>नाबालिगों से जुड़ी कोई भी यौन सामग्री नहीं, कभी नहीं।</strong> हम बाल यौन शोषण सामग्री की सूचना अधिकारियों को देते हैं।",
+      "respect": "<strong>सम्मान से पेश आएँ।</strong> किसी की पहचान के आधार पर उत्पीड़न, धमकी, बदमाशी या नफ़रत नहीं।",
+      "violence": "<strong>हिंसा या खून-खराबा नहीं,</strong> और आत्म-क्षति के लिए उकसाएँ नहीं।",
+      "spam": "<strong>स्पैम या धोखाधड़ी नहीं।</strong> विज्ञापन, बिक्री, वयस्क साइटों के लिंक, या पैसे या तस्वीरें भेजने के लिए लोगों को किसी दूसरे ऐप पर ले जाने के लिए कहना नहीं।",
+      "real": "<strong>असली रहें।</strong> पहले से रिकॉर्ड किया हुआ, लूप किया हुआ या नकली वीडियो नहीं, और किसी और का रूप न धरें।",
+      "privacy": "<strong>निजता का सम्मान करें।</strong> लोगों को रिकॉर्ड या स्क्रीनशॉट न करें, और किसी की व्यक्तिगत जानकारी साझा न करें।",
+      "law": "<strong>कानून का पालन करें</strong> जहाँ आप हैं वहाँ और भारत में।"
+    },
+    "enforcement": {
+      "title": "अगर कोई नियम तोड़े तो क्या होता है",
+      "intro": "रिपोर्टों की समीक्षा हमारी टीम के लोग करते हैं। जो हुआ उसके आधार पर, कदम ये हैं:",
+      "warning": "एक चेतावनी,",
+      "pause10m": "10 मिनट का विराम,",
+      "pause24h": "24 घंटे का विराम,",
+      "pause7d": "7 दिन का विराम,",
+      "ban": "स्थायी प्रतिबंध (केवल एक व्यक्ति द्वारा तय किया जाता है)।",
+      "outro": "गंभीर मामलों में कदम छोड़े जा सकते हैं। अकेली एक रिपोर्ट से अधिक से अधिक एक अस्थायी विराम लगता है, जब तक कोई व्यक्ति उसकी समीक्षा न कर ले। आप किसी भी प्रतिबंध के विरुद्ध प्रतिबंध स्क्रीन से निःशुल्क अपील कर सकते हैं।"
+    },
+    "staySafe": {
+      "title": "सुरक्षित रहें",
+      "personal": "अपना नाम, स्कूल, कार्यस्थल, पता, फ़ोन नंबर या सोशल मीडिया हैंडल साझा न करें।",
+      "sextortion": "अगर कोई आपकी तस्वीरें साझा करने की धमकी दे, तो पैसे न दें और जवाब देना बंद कर दें। हमारा <safety>सुरक्षा पृष्ठ</safety> देखें।",
+      "next": "जैसे ही कुछ गलत लगे, तुरंत Next या Report का उपयोग करें।"
+    }
+  },
+  "safety": {
+    "title": "सुरक्षा",
+    "danger": {
+      "title": "अगर आप खतरे में हैं",
+      "body": "<strong>अपने स्थानीय आपातकालीन नंबर पर कॉल करें</strong> (भारत में 112, संयुक्त राज्य अमेरिका में 911)।"
+    },
+    "helplines": {
+      "title": "हेल्पलाइन",
+      "india": "भारत",
+      "cyberCrime": "<strong>1930</strong>: राष्ट्रीय साइबर अपराध हेल्पलाइन। आप <cybercrime>cybercrime.gov.in</cybercrime> पर भी रिपोर्ट कर सकते हैं।",
+      "childline": "<strong>1098</strong>: चाइल्डलाइन, उन बच्चों और युवाओं के लिए जिन्हें मदद चाहिए।",
+      "us": "संयुक्त राज्य अमेरिका",
+      "lifeline": "<strong>988</strong>: Suicide and Crisis Lifeline। किसी भी समय कॉल या टेक्स्ट करें।",
+      "cyberTipline": "<strong>NCMEC CyberTipline</strong>: किसी बच्चे के ऑनलाइन यौन शोषण की रिपोर्ट <cybertip>report.cybertip.org</cybertip> पर करें या 1-800-843-5678 पर कॉल करें।",
+      "elsewhere": "कहीं और",
+      "elsewhereBody": "अपने स्थानीय आपातकालीन नंबर पर, या संकट सहायता के लिए किसी स्थानीय हेल्पलाइन पर कॉल करें।"
+    },
+    "sextortion": {
+      "title": "अगर कोई आपकी तस्वीरें साझा करने की धमकी दे (सेक्सटॉर्शन)",
+      "doNotPay": "पैसे न दें और आगे तस्वीरें न भेजें। पैसे देने से माँगें शायद ही कभी रुकती हैं।",
+      "stopReplying": "जवाब देना बंद कर दें, लेकिन संदेशों को सबूत के तौर पर सुरक्षित रखें।",
+      "report": "उस व्यक्ति की रिपोर्ट Chizzy में और पुलिस को करें (भारत में 1930)।",
+      "takeItDown": "अगर तस्वीरें 18 वर्ष से कम उम्र की आपकी हैं, तो <takeItDown>Take It Down</takeItDown> (NCMEC) उन्हें फैलने से रोकने में मदद कर सकता है। वयस्क <stopNcii>StopNCII.org</stopNcii> का उपयोग कर सकते हैं।",
+      "takedown": "अगर आपकी कोई तस्वीर Chizzy से आई है, तो हमारे <takedown>हटाने के अनुरोध फ़ॉर्म</takedown> से हमें उसे हटाने के लिए कहें।"
+    },
+    "measures": {
+      "title": "Chizzy कॉल को सुरक्षित रखने की कोशिश कैसे करता है",
+      "ageCheck": "कैमरा चालू होने से पहले आयु जाँच। यह ईमानदार बच्चों को रोकती है; यह झूठ बोलने वाले हर व्यक्ति को नहीं रोक सकती।",
+      "botCheck": "शुरू करने से पहले एक बॉट जाँच।",
+      "blur": "डिवाइस पर होने वाली जाँचें जो पार्टनर के असुरक्षित दिखने वाले वीडियो को धुंधला कर सकती हैं। इनसे कुछ चीज़ें छूट सकती हैं।",
+      "filters": "कॉल के पहले कुछ मिनटों तक चैट में लिंक, हैंडल और फ़ोन नंबर छिपाए जाते हैं।",
+      "reporting": "कॉल के दौरान और उसके थोड़ी देर बाद तक एक-टैप रिपोर्टिंग। हमारी टीम के लोग रिपोर्टों की समीक्षा करते हैं।",
+      "outro": "कोई भी उपकरण सब कुछ नहीं पकड़ पाता। जब भी कुछ गलत लगे, Next या Report से कॉल समाप्त करें, और अजनबियों के साथ व्यक्तिगत जानकारी साझा न करें।"
+    }
+  },
+  "grievance": {
+    "title": "शिकायत अधिकारी",
+    "intro": "भारत के Information Technology (Intermediary Guidelines and Digital Media Ethics Code) Rules, 2021 के अंतर्गत, आप Chizzy पर मौजूद सामग्री के बारे में या इस बारे में शिकायत कर सकते हैं कि हमने अपने नियम आप पर कैसे लागू किए।",
+    "contact": {
+      "title": "संपर्क",
+      "officer": "शिकायत अधिकारी: <todo>name of the Grievance Officer</todo>",
+      "email": "ईमेल: <todo>grievance email address</todo>",
+      "address": "पता: <todo>postal address</todo>"
+    },
+    "timelines": {
+      "title": "समय-सीमाएँ",
+      "acknowledge": "हम शिकायत मिलने के 24 घंटे के भीतर उसकी पावती देते हैं।",
+      "resolve": "हमारा लक्ष्य उसे 15 दिनों के भीतर हल करना है।",
+      "intimate": "आपकी अंतरंग तस्वीरों, या आपकी बदली हुई तस्वीरों से जुड़ी शिकायतों की कानूनी समय-सीमाएँ कम होती हैं। <takedown>हटाने के अनुरोध फ़ॉर्म</takedown> का उपयोग करें ताकि वे तुरंत सही कतार में पहुँचें।"
+    },
+    "include": {
+      "title": "क्या शामिल करें",
+      "what": "क्या हुआ और लगभग कब (तारीख, समय और समय क्षेत्र)।",
+      "name": "आपने जो भी प्रदर्शित नाम देखा, और आप हमसे क्या चाहते हैं।",
+      "email": "एक ईमेल पता जहाँ हम आपसे संपर्क कर सकें।"
+    },
+    "unsatisfied": {
+      "title": "अगर आप संतुष्ट नहीं हैं",
+      "body": "आप शिकायत अधिकारी के निर्णय के विरुद्ध 30 दिनों के भीतर Grievance Appellate Committee में <gac>gac.gov.in</gac> पर अपील कर सकते हैं।"
+    }
+  },
+  "lawEnforcement": {
+    "title": "कानून प्रवर्तन अनुरोध",
+    "intro": "This page is for police, courts and government agencies. Users looking for help should see the <safety>Safety page</safety>.",
+    "how": {
+      "title": "अनुरोध कैसे भेजें",
+      "email": "Email: <todo>law enforcement email address</todo>",
+      "official": "Send requests from an official address, citing the legal basis and the authority that issued it.",
+      "mlat": "Requests from outside India may need to go through the applicable mutual legal assistance process."
+    },
+    "emergencies": {
+      "title": "आपात स्थितियाँ",
+      "body": "If there is an imminent risk of death or serious harm, mark the request as an emergency and explain the risk. We review emergency requests as a priority. <todo>emergency contact route</todo>"
+    },
+    "data": {
+      "title": "कौन-सा डेटा मौजूद हो सकता है",
+      "intro": "Chizzy has no accounts and does not record video, audio or chat. What may exist, within the retention periods in the <privacy>Privacy Policy</privacy>:",
+      "logs": "connection logs: IP address, time, country and pseudonymous device identifiers;",
+      "matches": "match records: which pseudonymous devices were paired, and when;",
+      "reports": "reports: the reason, one image captured by the reporter's device and up to 20 chat lines;",
+      "bans": "restriction and ban records."
+    },
+    "preservation": {
+      "title": "संरक्षण",
+      "body": "We can preserve specific records while you obtain legal process. Send a preservation request with the details above."
+    },
+    "csam": {
+      "title": "बाल यौन शोषण सामग्री",
+      "body": "We report apparent child sexual abuse material to NCMEC in the United States and to the relevant Indian authorities, and we preserve the related records."
+    }
+  },
+  "takedown": {
+    "title": "सामग्री हटाने के लिए रिपोर्ट करें",
+    "intro": "इस फ़ॉर्म का उपयोग हमसे बिना सहमति साझा की गई अंतरंग तस्वीर, नाबालिग से जुड़ी यौन सामग्री, किसी के रूप धरने, या Chizzy से जुड़ी अन्य गैरकानूनी सामग्री को हटाने के लिए कहने हेतु करें।",
+    "noRecording": "Chizzy कॉल रिकॉर्ड नहीं करता। हमारे पास जो सामग्री हो सकती है वह किसी कॉल की रिपोर्ट किए जाने पर ली गई एक तस्वीर है। प्रोफ़ाइल फ़ोटो मैच के दौरान पार्टनरों के बीच भेजी जाती हैं और उसके बाद रखी नहीं जातीं।",
+    "deadlines": "बिना सहमति साझा की गई अंतरंग तस्वीरों के लिए, कानून (अमेरिका का TAKE IT DOWN Act, और भारत के IT Rules) वैध अनुरोध के बाद हटाने की कम समय-सीमाएँ तय करता है। यह फ़ॉर्म वह प्रक्रिया शुरू करता है।",
+    "childInDanger": "अगर कोई बच्चा खतरे में है, तो पहले पुलिस या हमारे <safety>सुरक्षा पृष्ठ</safety> पर दी गई हेल्पलाइनों से संपर्क करें।",
+    "kinds": {
+      "ncii": "मेरी (या जिसका मैं प्रतिनिधित्व करता/करती हूँ, उसकी) अंतरंग तस्वीर बिना सहमति साझा की गई",
+      "csam": "नाबालिग से जुड़ी यौन सामग्री",
+      "impersonation": "कोई मेरा रूप धर रहा है",
+      "other": "कुछ और"
+    },
+    "errors": {
+      "invalid": "कुछ फ़ील्ड मान्य नहीं हैं। फ़ॉर्म जाँचें और फिर से कोशिश करें।",
+      "turnstileFailed": "सुरक्षा जाँच विफल रही। कृपया फिर से कोशिश करें।",
+      "rateLimited": "बहुत अधिक अनुरोध। एक मिनट रुकें और फिर से कोशिश करें।",
+      "affected": "हमें बताएँ कि क्या आप ही प्रभावित व्यक्ति हैं।",
+      "email": "एक मान्य ईमेल पता दर्ज करें।",
+      "description": "सामग्री का वर्णन कम से कम 20 अक्षरों में करें।",
+      "goodFaith": "सद्भावना कथन की पुष्टि करें।",
+      "turnstilePending": "सुरक्षा जाँच पूरी होने तक प्रतीक्षा करें।",
+      "network": "Chizzy से संपर्क नहीं हो पा रहा। अपना कनेक्शन जाँचें और फिर से कोशिश करें।",
+      "turnstileLoad": "सुरक्षा जाँच लोड नहीं हो सकी। अपना कनेक्शन जाँचें और फिर से कोशिश करें।"
+    },
+    "success": {
+      "title": "हमें आपका अनुरोध मिल गया है।",
+      "body": "आपका संदर्भ क्रमांक <ref>{{ticketId}}</ref> है। हम आपके दिए गए ईमेल पते पर आपसे संपर्क करेंगे।"
+    },
+    "configFailed": "फ़ॉर्म अभी लोड नहीं हो पा रहा। अपना कनेक्शन जाँचें और पृष्ठ फिर से लोड करें।",
+    "form": {
+      "kind": "सामग्री क्या है?",
+      "affected": "क्या आप ही प्रभावित व्यक्ति हैं?",
+      "affectedYes": "हाँ, यह मैं हूँ",
+      "affectedNo": "नहीं, मैं किसी और के लिए या उनके प्रतिनिधि के रूप में रिपोर्ट कर रहा/रही हूँ",
+      "email": "आपका ईमेल पता",
+      "description": "सामग्री का वर्णन करें",
+      "descriptionHint": "तस्वीर को स्वयं संलग्न या पेस्ट न करें। उसका वर्णन करें ताकि हम उसे ढूँढ सकें (कम से कम 20 अक्षर)।",
+      "location": "यह कहाँ और कब दिखाई दी? (वैकल्पिक)",
+      "locationPlaceholder": "अनुमानित तारीख और समय, कोई प्रदर्शित नाम, कुछ भी जो मदद करे",
+      "goodFaith": "मैं सद्भावना से मानता/मानती हूँ कि यह सामग्री दिखाए गए व्यक्ति की सहमति के बिना साझा की गई, या अन्यथा कानून या Chizzy के नियमों का उल्लंघन करती है, और इस अनुरोध में दी गई जानकारी सही है।",
+      "sending": "भेजा जा रहा है...",
+      "submit": "अनुरोध भेजें"
+    }
+  }
+}
