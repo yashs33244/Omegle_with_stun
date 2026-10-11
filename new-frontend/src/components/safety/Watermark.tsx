@@ -29,6 +29,7 @@ export const Watermark: React.FC<{ roomId: string }> = ({ roomId }) => {
           className="absolute -rotate-12 font-mono text-xs tracking-widest text-white/20 whitespace-nowrap"
           style={spot}
         >
+          {/* eslint-disable-line no-restricted-syntax -- aria-hidden brand mark, not copy */}
           chizzy {code}
         </span>
       ))}

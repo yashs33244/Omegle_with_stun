@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Volume2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 interface VideoTileProps {
   stream: MediaStream | null;
@@ -32,6 +33,7 @@ export const VideoTile: React.FC<VideoTileProps> = ({
   blurred = false,
   onVideoElement,
 }) => {
+  const { t } = useTranslation("room");
   const videoRef = useRef<HTMLVideoElement>(null);
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -129,7 +131,7 @@ export const VideoTile: React.FC<VideoTileProps> = ({
         <div className="absolute inset-x-0 bottom-16 flex justify-center" style={{ zIndex: 25 }}>
           <button type="button" onClick={enableAudio} className="retro-button flex items-center gap-2">
             <Volume2 className="w-5 h-5" />
-            Tap to enable audio
+            {t("video.enableAudio")}
           </button>
         </div>
       )}

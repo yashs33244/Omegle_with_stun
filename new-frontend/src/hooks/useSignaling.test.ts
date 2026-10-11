@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  FRIENDS_MESSAGE,
+  friendsMessage,
   initialSignalingState,
   secondsLeft,
   signalingReducer,
@@ -226,7 +226,7 @@ describe("signalingReducer", () => {
 
     let s = run([hello, found, start, { type: "friends-new", roomId: ROOM }]);
     expect(s.isFriend).toBe(true);
-    expect(s.messages.filter((m) => m.from === "system").map((m) => m.text)).toEqual([FRIENDS_MESSAGE]);
+    expect(s.messages.filter((m) => m.from === "system").map((m) => m.text)).toEqual([friendsMessage()]);
     s = run([{ type: "friends-new", roomId: ROOM }], s);
     expect(s.messages).toHaveLength(1);
   });

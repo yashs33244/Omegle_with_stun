@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { RESTRICTION_REASONS, type AdminReport, type AdminReportAction, type RestrictionReason } from "@/lib/protocol";
 import { AdminApiError, type EvidenceImage } from "@/lib/adminApi";
 import { watermarkCode } from "@/components/safety/watermarkCode";
 import {
-  ADMIN_REASON_LABELS,
+  ADMIN_REASON_KEYS,
   DURATION_PRESETS,
   RESTRICTION_FOR_REPORT,
   SEVERITY_TONE,
@@ -22,6 +23,7 @@ type Confirm = { kind: "permanent" } | { kind: "csam" } | null;
 
 /** Evidence frame: blurred and greyscale until the reviewer explicitly unblurs it. Never loaded for restricted items. */
 const Evidence: React.FC<{ report: AdminReport }> = ({ report }) => {
+  const { t } = useTranslation("admin");
   const { api, fail } = useAdmin();
   const [image, setImage] = useState<EvidenceImage | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -41,7 +43,7 @@ const Evidence: React.FC<{ report: AdminReport }> = ({ report }) => {
         }
         current = img;
         setImage(img);
-        if (!img) setError("The server returned no image.");
+        if (!img) setError(t("detail.noImageReturned"));
       })
       .catch((err: unknown) => {
         if (!cancelled) setError(fail(err));
@@ -50,26 +52,25 @@ const Evidence: React.FC<{ report: AdminReport }> = ({ report }) => {
       cancelled = true;
       current?.revoke();
     };
-  }, [api, fail, report.id, canLoad]);
+  }, [api, fail, report.id, canLoad, t]);
 
   if (report.restricted) {
     return (
       <p className="rounded-md bg-purple-50 p-3 text-sm text-purple-900" data-testid="evidence-restricted">
-        Restricted: this item was routed to the CSAM store. The image is never shown in the console. Use Escalate CSAM to
-        build the report packet from metadata.
+        {t("detail.restrictedEvidence")}
       </p>
     );
   }
-  if (!report.hasFrame) return <p className="text-sm text-gray-500">No image was attached.</p>;
+  if (!report.hasFrame) return <p className="text-sm text-gray-500">{t("detail.noImage")}</p>;
   if (error) return <Notice tone="error">{error}</Notice>;
-  if (!image) return <p className="text-sm text-gray-500">Loading the image...</p>;
+  if (!image) return <p className="text-sm text-gray-500">{t("detail.imageLoading")}</p>;
 
   return (
     <div className="space-y-2">
       <div className="inline-block overflow-hidden rounded-md border border-gray-300 bg-gray-200">
         <img
           src={image.src}
-          alt={blurred ? "Evidence frame, blurred" : "Evidence frame"}
+          alt={blurred ? t("detail.altBlurred") : t("detail.alt")}
           data-testid="evidence-image"
           data-blurred={blurred ? "true" : "false"}
           className="block max-h-64 max-w-full"
@@ -78,7 +79,7 @@ const Evidence: React.FC<{ report: AdminReport }> = ({ report }) => {
       </div>
       <div>
         <Btn onClick={() => setBlurred((b) => !b)} aria-pressed={!blurred}>
-          {blurred ? "Unblur" : "Blur again"}
+          {blurred ? t("detail.unblur") : t("detail.blurAgain")}
         </Btn>
       </div>
     </div>
@@ -86,6 +87,7 @@ const Evidence: React.FC<{ report: AdminReport }> = ({ report }) => {
 };
 
 export const ReportDetail: React.FC<ReportDetailProps> = ({ report, onChanged }) => {
+  const { t } = useTranslation("admin");
   const { api, fail, now } = useAdmin();
   const [note, setNote] = useState("");
   const [restrictReason, setRestrictReason] = useState<RestrictionReason>(RESTRICTION_FOR_REPORT[report.reason]);
@@ -103,7 +105,7 @@ export const ReportDetail: React.FC<ReportDetailProps> = ({ report, onChanged })
     try {
       const res = await api.actOnReport(report.id, { ...action, ...(note.trim() ? { note: note.trim() } : {}) });
       if (action.action === "escalate_csam") {
-        if (!res.packet) throw new AdminApiError(500, "The server did not send the report packet.");
+        if (!res.packet) throw new AdminApiError(500, t("errors.noPacket"));
         downloadJson(`csam-packet-${report.id}.json`, res.packet);
       }
       setResult({ tone: "ok", text: done });
@@ -121,7 +123,7 @@ export const ReportDetail: React.FC<ReportDetailProps> = ({ report, onChanged })
       setConfirm({ kind: "permanent" });
       return;
     }
-    void run({ action: "restrict", reason: restrictReason, durationMs: duration.ms }, `Restricted for ${duration.label}.`);
+    void run({ action: "restrict", reason: restrictReason, durationMs: duration.ms }, t("detail.restrictedFor", { duration: t(duration.key) }));
   };
 
   return (
@@ -131,57 +133,58 @@ export const ReportDetail: React.FC<ReportDetailProps> = ({ report, onChanged })
           <span className={`rounded px-1.5 py-0.5 text-xs font-semibold uppercase ${SEVERITY_TONE[report.severity]}`}>
             {report.severity}
           </span>
-          <h2 className="text-lg font-semibold">{ADMIN_REASON_LABELS[report.reason]}</h2>
+          <h2 className="text-lg font-semibold">{t(ADMIN_REASON_KEYS[report.reason])}</h2>
           <span className="text-sm text-gray-500">{report.status}</span>
         </div>
         {!closed && (
           <div className="flex flex-wrap gap-2">
-            {report.status === "open" && <SlaChip label="Acknowledge" dueAt={report.ackDueAt} now={now} />}
-            <SlaChip label="Resolve" dueAt={report.resolveDueAt} now={now} />
+            {report.status === "open" && <SlaChip label={t("detail.acknowledgeChip")} dueAt={report.ackDueAt} now={now} />}
+            <SlaChip label={t("detail.resolveChip")} dueAt={report.resolveDueAt} now={now} />
           </div>
         )}
       </header>
 
       <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-1 text-sm">
-        <dt className="text-gray-500">Received</dt>
+        <dt className="text-gray-500">{t("detail.received")}</dt>
         <dd>{formatTime(report.createdAt)}</dd>
-        <dt className="text-gray-500">Watermark code</dt>
+        <dt className="text-gray-500">{t("detail.watermark")}</dt>
         <dd className="font-mono" data-testid="detail-watermark">
           {watermarkCode(report.roomId)}
         </dd>
-        <dt className="text-gray-500">Reported device</dt>
+        <dt className="text-gray-500">{t("detail.reportedDevice")}</dt>
         <dd className="break-all font-mono text-xs">{report.reported}</dd>
-        <dt className="text-gray-500">Prior reports against</dt>
+        <dt className="text-gray-500">{t("detail.priorAgainst")}</dt>
         <dd>{report.priorReportsAgainst}</dd>
-        <dt className="text-gray-500">Reporter</dt>
+        <dt className="text-gray-500">{t("detail.reporter")}</dt>
         <dd className="break-all">
-          <span className="font-mono text-xs">{report.reporter}</span> (weight {report.reporterWeight.toFixed(2)})
+          <span className="font-mono text-xs">{report.reporter}</span>{" "}
+          {t("detail.reporterWeight", { weight: report.reporterWeight.toFixed(2) })}
         </dd>
-        <dt className="text-gray-500">Classifier score</dt>
-        <dd data-testid="detail-score">{report.nsfwScore === null ? "not available" : report.nsfwScore.toFixed(2)}</dd>
-        <dt className="text-gray-500">Details</dt>
-        <dd className="whitespace-pre-wrap [overflow-wrap:anywhere]">{report.details ?? "none"}</dd>
+        <dt className="text-gray-500">{t("detail.classifierScore")}</dt>
+        <dd data-testid="detail-score">{report.nsfwScore === null ? t("detail.notAvailable") : report.nsfwScore.toFixed(2)}</dd>
+        <dt className="text-gray-500">{t("detail.details")}</dt>
+        <dd className="whitespace-pre-wrap [overflow-wrap:anywhere]">{report.details ?? t("detail.none")}</dd>
       </dl>
 
       <section aria-labelledby="evidence-title" className="space-y-2">
         <h3 id="evidence-title" className="font-semibold">
-          Evidence <span className="text-xs font-normal text-gray-500">submitted by the reporter, unverified</span>
+          {t("detail.evidenceTitle")} <span className="text-xs font-normal text-gray-500">{t("detail.evidenceHint")}</span>
         </h3>
         <Evidence report={report} />
       </section>
 
       <section aria-labelledby="chat-title" className="space-y-2">
         <h3 id="chat-title" className="font-semibold">
-          Chat ({report.chat.length})
+          {t("detail.chatTitle", { count: report.chat.length })}
         </h3>
         {report.chat.length === 0 ? (
-          <p className="text-sm text-gray-500">No chat lines were attached.</p>
+          <p className="text-sm text-gray-500">{t("detail.noChat")}</p>
         ) : (
           <ol className="space-y-1 text-sm" data-testid="detail-chat">
             {report.chat.map((line, i) => (
               <li key={i} className="[overflow-wrap:anywhere]">
                 <span className={`font-semibold ${line.from === "reported" ? "text-red-700" : "text-gray-700"}`}>
-                  {line.from === "reported" ? "Reported" : "Reporter"}:
+                  {line.from === "reported" ? t("detail.chatReported") : t("detail.chatReporter")}
                 </span>{" "}
                 {line.text}
               </li>
@@ -192,10 +195,10 @@ export const ReportDetail: React.FC<ReportDetailProps> = ({ report, onChanged })
 
       <section aria-labelledby="actions-title" className="space-y-3 border-t border-gray-200 pt-3">
         <h3 id="actions-title" className="font-semibold">
-          Actions
+          {t("detail.actionsTitle")}
         </h3>
         <label className="block text-sm">
-          <span className="mb-1 block text-gray-600">Note (kept in the audit log)</span>
+          <span className="mb-1 block text-gray-600">{t("detail.noteLabel")}</span>
           <textarea
             value={note}
             onChange={(e) => setNote(e.target.value)}
@@ -206,24 +209,24 @@ export const ReportDetail: React.FC<ReportDetailProps> = ({ report, onChanged })
         </label>
         <div className="flex flex-wrap gap-2">
           {report.status === "open" && (
-            <Btn disabled={busy} onClick={() => void run({ action: "acknowledge" }, "Acknowledged.")}>
-              Acknowledge
+            <Btn disabled={busy} onClick={() => void run({ action: "acknowledge" }, t("detail.acknowledged"))}>
+              {t("detail.acknowledge")}
             </Btn>
           )}
-          <Btn disabled={busy} onClick={() => void run({ action: "dismiss" }, "Dismissed.")}>
-            Dismiss
+          <Btn disabled={busy} onClick={() => void run({ action: "dismiss" }, t("detail.dismissed"))}>
+            {t("detail.dismiss")}
           </Btn>
           <Btn
             disabled={busy}
-            onClick={() => void run({ action: "warn", reason: restrictReason }, "Warning sent.")}
+            onClick={() => void run({ action: "warn", reason: restrictReason }, t("detail.warningSent"))}
           >
-            Warn
+            {t("detail.warn")}
           </Btn>
         </div>
         <fieldset className="flex flex-wrap items-end gap-2 rounded-md border border-gray-200 p-3">
-          <legend className="px-1 text-sm font-medium">Restrict</legend>
+          <legend className="px-1 text-sm font-medium">{t("detail.restrictLegend")}</legend>
           <label className="text-sm">
-            <span className="mb-1 block text-gray-600">Reason</span>
+            <span className="mb-1 block text-gray-600">{t("detail.reasonLabel")}</span>
             <select
               value={restrictReason}
               onChange={(e) => setRestrictReason(e.target.value as RestrictionReason)}
@@ -237,26 +240,26 @@ export const ReportDetail: React.FC<ReportDetailProps> = ({ report, onChanged })
             </select>
           </label>
           <label className="text-sm">
-            <span className="mb-1 block text-gray-600">Duration</span>
+            <span className="mb-1 block text-gray-600">{t("detail.durationLabel")}</span>
             <select
               value={durationIndex}
               onChange={(e) => setDurationIndex(Number(e.target.value))}
               className="rounded-md border border-gray-300 p-1.5"
             >
               {DURATION_PRESETS.map((d, i) => (
-                <option key={d.label} value={i}>
-                  {d.label}
+                <option key={d.key} value={i}>
+                  {t(d.key)}
                 </option>
               ))}
             </select>
           </label>
           <Btn tone="primary" disabled={busy} onClick={restrict}>
-            Restrict
+            {t("detail.restrict")}
           </Btn>
         </fieldset>
         <div>
           <Btn tone="danger" disabled={busy} onClick={() => setConfirm({ kind: "csam" })}>
-            Escalate CSAM
+            {t("detail.escalateCsam")}
           </Btn>
         </div>
         {result && <Notice tone={result.tone}>{result.text}</Notice>}
@@ -264,29 +267,29 @@ export const ReportDetail: React.FC<ReportDetailProps> = ({ report, onChanged })
 
       <ConfirmDialog
         open={confirm?.kind === "permanent"}
-        title="Restrict permanently?"
-        description={<p>This device will not be able to match again unless an appeal overturns it.</p>}
-        confirmLabel="Restrict permanently"
+        title={t("detail.permanentTitle")}
+        description={<p>{t("detail.permanentBody")}</p>}
+        confirmLabel={t("detail.permanentConfirm")}
         onCancel={() => setConfirm(null)}
         onConfirm={() => {
           setConfirm(null);
-          void run({ action: "restrict", reason: restrictReason, durationMs: null }, "Restricted permanently.");
+          void run({ action: "restrict", reason: restrictReason, durationMs: null }, t("detail.restrictedPermanently"));
         }}
       />
       <ConfirmDialog
         open={confirm?.kind === "csam"}
-        title="Escalate as CSAM?"
+        title={t("detail.csamTitle")}
         description={
           <>
-            <p>The evidence is frozen for 1 year and the report packet for the NCMEC CyberTipline and NCRP is downloaded.</p>
-            <p>The packet is built from metadata; you do not need to open the image. Follow the CSAM runbook.</p>
+            <p>{t("detail.csamBody1")}</p>
+            <p>{t("detail.csamBody2")}</p>
           </>
         }
-        confirmLabel="Escalate and download packet"
+        confirmLabel={t("detail.csamConfirm")}
         onCancel={() => setConfirm(null)}
         onConfirm={() => {
           setConfirm(null);
-          void run({ action: "escalate_csam" }, "Escalated. The packet was downloaded.");
+          void run({ action: "escalate_csam" }, t("detail.escalated"));
         }}
       />
     </article>

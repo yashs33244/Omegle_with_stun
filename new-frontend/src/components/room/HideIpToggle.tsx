@@ -1,5 +1,6 @@
 import React, { useId } from "react";
 import { Lock, LockOpen } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 interface HideIpToggleProps {
   checked: boolean;
@@ -11,6 +12,7 @@ interface HideIpToggleProps {
 
 /** "Hide my IP": relay-only connections. The copy says what it does not hide. */
 export const HideIpToggle: React.FC<HideIpToggleProps> = ({ checked, onChange, note, tone = "dark" }) => {
+  const { t } = useTranslation("room");
   const descriptionId = useId();
   const muted = tone === "dark" ? "text-gray-300" : "text-gray-600";
   return (
@@ -29,15 +31,15 @@ export const HideIpToggle: React.FC<HideIpToggleProps> = ({ checked, onChange, n
         <span
           className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${checked ? "left-[1.1rem]" : "left-0.5"}`}
         />
-        <span className="sr-only">Hide my IP</span>
+        <span className="sr-only">{t("hideIp.label")}</span>
       </button>
       <div className="min-w-0">
         <p className="text-sm font-medium flex items-center gap-1">
           {checked ? <Lock className="w-4 h-4 text-green-400" aria-hidden="true" /> : <LockOpen className="w-4 h-4" aria-hidden="true" />}
-          Hide my IP
+          {t("hideIp.label")}
         </p>
         <p id={descriptionId} className={`text-xs ${muted}`}>
-          Your partner sees our relay, not your IP. Chizzy and Cloudflare still see it.
+          {t("hideIp.description")}
         </p>
         {note && <p className={`text-xs ${muted}`}>{note}</p>}
       </div>

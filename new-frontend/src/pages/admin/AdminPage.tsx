@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { AdminApiError, createAdminApi, loadAdminToken, saveAdminToken } from "@/lib/adminApi";
 import { AdminContext, errorText, type AdminContextValue } from "./adminShared";
 import { Btn, Notice } from "./AdminUi";
@@ -9,11 +10,11 @@ import { FlagsEditor } from "./FlagsEditor";
 import { AuditView } from "./AuditView";
 
 const SECTIONS = [
-  { id: "reports", label: "Reports", view: ReportsView },
-  { id: "appeals", label: "Appeals", view: AppealsView },
-  { id: "takedowns", label: "Takedowns", view: TakedownsView },
-  { id: "flags", label: "Flags", view: FlagsEditor },
-  { id: "audit", label: "Audit log", view: AuditView },
+  { id: "reports", labelKey: "nav.reports", view: ReportsView },
+  { id: "appeals", labelKey: "nav.appeals", view: AppealsView },
+  { id: "takedowns", labelKey: "nav.takedowns", view: TakedownsView },
+  { id: "flags", labelKey: "nav.flags", view: FlagsEditor },
+  { id: "audit", labelKey: "nav.audit", view: AuditView },
 ] as const;
 
 type SectionId = (typeof SECTIONS)[number]["id"];
@@ -29,9 +30,10 @@ function useNow(intervalMs: number): number {
 
 /** Keeps the console out of search engines while it is open. */
 function useNoIndex() {
+  const { t } = useTranslation("admin");
   useEffect(() => {
     const title = document.title;
-    document.title = "Chizzy admin";
+    document.title = t("login.title");
     const meta = document.createElement("meta");
     meta.name = "robots";
     meta.content = "noindex, nofollow";
@@ -40,10 +42,11 @@ function useNoIndex() {
       document.title = title;
       meta.remove();
     };
-  }, []);
+  }, [t]);
 }
 
 const TokenForm: React.FC<{ message: string | null; onToken: (token: string) => void }> = ({ message, onToken }) => {
+  const { t } = useTranslation("admin");
   const [value, setValue] = useState("");
   return (
     <form
@@ -53,10 +56,10 @@ const TokenForm: React.FC<{ message: string | null; onToken: (token: string) => 
         if (value.trim()) onToken(value.trim());
       }}
     >
-      <h1 className="text-xl font-semibold">Chizzy admin</h1>
+      <h1 className="text-xl font-semibold">{t("login.title")}</h1>
       {message && <Notice tone="error">{message}</Notice>}
       <label className="block text-sm">
-        <span className="mb-1 block font-medium">Admin token</span>
+        <span className="mb-1 block font-medium">{t("login.tokenLabel")}</span>
         <input
           type="password"
           autoComplete="off"
@@ -65,9 +68,9 @@ const TokenForm: React.FC<{ message: string | null; onToken: (token: string) => 
           className="w-full rounded-md border border-gray-300 p-2"
         />
       </label>
-      <p className="text-xs text-gray-500">Kept in this tab only (session storage) and cleared when you sign out.</p>
+      <p className="text-xs text-gray-500">{t("login.hint")}</p>
       <Btn type="submit" tone="primary" disabled={!value.trim()} className="w-full">
-        Sign in
+        {t("login.signIn")}
       </Btn>
     </form>
   );
@@ -75,6 +78,7 @@ const TokenForm: React.FC<{ message: string | null; onToken: (token: string) => 
 
 /** /admin: the moderation console. Loaded as its own chunk, never part of the main bundle. */
 const AdminPage: React.FC = () => {
+  const { t } = useTranslation("admin");
   useNoIndex();
   const [token, setToken] = useState<string | null>(loadAdminToken);
   const [authMessage, setAuthMessage] = useState<string | null>(null);
@@ -92,11 +96,11 @@ const AdminPage: React.FC = () => {
   const fail = useCallback(
     (err: unknown) => {
       if (err instanceof AdminApiError && err.unauthorized) {
-        signOut("The server rejected this token (or this network is not allowed). Sign in again.");
+        signOut(t("login.rejected"));
       }
       return errorText(err);
     },
-    [signOut],
+    [signOut, t],
   );
 
   const ctx = useMemo<AdminContextValue | null>(() => (api ? { api, fail, now } : null), [api, fail, now]);
@@ -122,8 +126,8 @@ const AdminPage: React.FC = () => {
     <AdminContext.Provider value={ctx}>
       <div className="min-h-screen bg-gray-50 text-gray-900">
         <header className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 bg-white px-4 py-3">
-          <h1 className="text-lg font-semibold">Chizzy admin</h1>
-          <nav aria-label="Admin sections" className="flex flex-wrap gap-1">
+          <h1 className="text-lg font-semibold">{t("login.title")}</h1>
+          <nav aria-label={t("nav.aria")} className="flex flex-wrap gap-1">
             {SECTIONS.map((s) => (
               <button
                 key={s.id}
@@ -134,11 +138,11 @@ const AdminPage: React.FC = () => {
                   section === s.id ? "bg-gray-900 text-white" : "text-gray-700 hover:bg-gray-100"
                 }`}
               >
-                {s.label}
+                {t(s.labelKey)}
               </button>
             ))}
           </nav>
-          <Btn onClick={() => signOut(null)}>Sign out</Btn>
+          <Btn onClick={() => signOut(null)}>{t("nav.signOut")}</Btn>
         </header>
         <main className="mx-auto max-w-6xl p-4">
           <View />

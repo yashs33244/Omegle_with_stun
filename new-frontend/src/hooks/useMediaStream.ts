@@ -1,36 +1,12 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { runningOnMobile } from '@/lib/mobile';
 
-export type MediaErrorKind = 'denied' | 'not-found' | 'in-use' | 'unsupported' | 'unknown';
+/** Copy lives in `room:camera.<kind>.title` / `.message`. */
+export type MediaAccessErrorKind = 'denied' | 'not-found' | 'in-use' | 'unsupported' | 'unknown';
 
 export interface MediaAccessError {
-  kind: MediaErrorKind;
-  title: string;
-  message: string;
+  kind: MediaAccessErrorKind;
 }
-
-const MEDIA_ERRORS: Record<MediaErrorKind, Omit<MediaAccessError, 'kind'>> = {
-  denied: {
-    title: 'Camera access is blocked',
-    message: 'Allow camera and microphone access for this site in your browser settings, then try again.',
-  },
-  'not-found': {
-    title: 'No camera found',
-    message: 'Connect a camera and try again.',
-  },
-  'in-use': {
-    title: 'Camera is busy',
-    message: 'Another app or tab is using your camera. Close it and try again.',
-  },
-  unsupported: {
-    title: 'Camera not available',
-    message: 'This browser cannot use a camera on this page. Use a recent browser over https.',
-  },
-  unknown: {
-    title: 'Could not start the camera',
-    message: 'Check that your camera works and that this site may use it, then try again.',
-  },
-};
 
 function errorName(err: unknown): string {
   return err instanceof DOMException || err instanceof Error ? err.name : '';
@@ -38,7 +14,7 @@ function errorName(err: unknown): string {
 
 /** Maps a getUserMedia failure to its real cause instead of always blaming permissions. */
 export function describeMediaError(err: unknown): MediaAccessError {
-  let kind: MediaErrorKind;
+  let kind: MediaAccessErrorKind;
   switch (errorName(err)) {
     case 'NotAllowedError':
     case 'SecurityError':
@@ -58,7 +34,7 @@ export function describeMediaError(err: unknown): MediaAccessError {
     default:
       kind = 'unknown';
   }
-  return { kind, ...MEDIA_ERRORS[kind] };
+  return { kind };
 }
 
 export type FacingMode = 'user' | 'environment';

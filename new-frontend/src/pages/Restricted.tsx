@@ -1,4 +1,5 @@
 import { useEffect, useId, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { Ban } from "lucide-react";
 import { api as defaultApi, type Api } from "@/lib/api";
 import { getDeviceId } from "@/lib/device";
@@ -6,36 +7,38 @@ import { LIMITS, type Restriction, type RestrictionReason } from "@/lib/protocol
 import { Countdown } from "./gate/Countdown";
 import { GateShell } from "./gate/GateScreens";
 
-const REASON_TEXT: Record<RestrictionReason, string> = {
-  nudity: "Nudity or sexual content on camera",
-  "minor-safety": "A child safety concern",
-  harassment: "Harassing or threatening someone",
-  hate: "Hateful content about someone's identity",
-  violence: "Violent or graphic content",
-  spam: "Spam, scams or advertising",
-  "fake-video": "Fake or pre-recorded video",
-  underage: "Using Chizzy while under 18",
-  other: "Breaking the Community Guidelines",
-};
+const REASON_KEY = {
+  nudity: "restricted.reasons.nudity",
+  "minor-safety": "restricted.reasons.minorSafety",
+  harassment: "restricted.reasons.harassment",
+  hate: "restricted.reasons.hate",
+  violence: "restricted.reasons.violence",
+  spam: "restricted.reasons.spam",
+  "fake-video": "restricted.reasons.fakeVideo",
+  underage: "restricted.reasons.underage",
+  other: "restricted.reasons.other",
+} as const satisfies Record<RestrictionReason, string>;
 
-const KIND_TEXT: Record<Restriction["kind"], string> = {
-  warning: "Warning",
-  pause: "Temporary pause",
-  ban: "Ban",
-};
+const KIND_KEY = {
+  warning: "restricted.kinds.warning",
+  pause: "restricted.kinds.pause",
+  ban: "restricted.kinds.ban",
+} as const satisfies Record<Restriction["kind"], string>;
 
-const APPEAL_STATUS_TEXT: Record<Exclude<Restriction["appeal"]["status"], "none">, string> = {
-  pending: "We received your appeal. A person on our team will review it.",
-  upheld: "Your appeal was reviewed and the restriction stays in place.",
-  overturned: "Your appeal was accepted and the restriction was lifted.",
-};
+const APPEAL_STATUS_KEY = {
+  pending: "restricted.appealStatus.pending",
+  upheld: "restricted.appealStatus.upheld",
+  overturned: "restricted.appealStatus.overturned",
+} as const satisfies Record<Exclude<Restriction["appeal"]["status"], "none">, string>;
 
-const APPEAL_ERROR_TEXT: Record<string, string> = {
-  invalid: "Write at least 10 characters.",
-  not_found: "We could not find this restriction. It may have ended already.",
-  already_appealed: "You have already appealed this restriction.",
-  not_appealable: "This restriction cannot be appealed.",
-  rate_limited: "Too many tries. Wait a minute and try again.",
+type AppealErrorKey = `restricted.appealErrors.${"invalid" | "notFound" | "alreadyAppealed" | "notAppealable" | "rateLimited" | "generic" | "network"}`;
+
+const APPEAL_ERROR_KEY: Record<string, AppealErrorKey> = {
+  invalid: "restricted.appealErrors.invalid",
+  not_found: "restricted.appealErrors.notFound",
+  already_appealed: "restricted.appealErrors.alreadyAppealed",
+  not_appealable: "restricted.appealErrors.notAppealable",
+  rate_limited: "restricted.appealErrors.rateLimited",
 };
 
 export interface RestrictedScreenProps {
@@ -46,11 +49,12 @@ export interface RestrictedScreenProps {
 }
 
 export const RestrictedScreen: React.FC<RestrictedScreenProps> = ({ restriction: initial, onContinue, api = defaultApi }) => {
+  const { t } = useTranslation("safety");
   const ids = useId();
   const [restriction, setRestriction] = useState(initial);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<AppealErrorKey | null>(null);
   const [expired, setExpired] = useState(initial.until !== null && initial.until <= Date.now());
 
   // Pick up a newer appeal status, if the server has one.
@@ -78,7 +82,7 @@ export const RestrictedScreen: React.FC<RestrictedScreenProps> = ({ restriction:
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (trimmed.length < 10 || sending) {
-      setError(APPEAL_ERROR_TEXT.invalid);
+      setError(APPEAL_ERROR_KEY.invalid);
       return;
     }
     setSending(true);
@@ -88,13 +92,13 @@ export const RestrictedScreen: React.FC<RestrictedScreenProps> = ({ restriction:
       if (res.ok) {
         setRestriction((r) => ({ ...r, appeal: { status: "pending", submittedAt: Date.now() } }));
       } else {
-        setError(APPEAL_ERROR_TEXT[res.error] ?? "Something went wrong. Try again.");
+        setError(APPEAL_ERROR_KEY[res.error] ?? "restricted.appealErrors.generic");
         if (res.error === "already_appealed") {
           setRestriction((r) => ({ ...r, appeal: { ...r.appeal, status: "pending" } }));
         }
       }
     } catch {
-      setError("Cannot reach Chizzy. Check your connection and try again.");
+      setError("restricted.appealErrors.network");
     } finally {
       setSending(false);
     }
@@ -105,42 +109,44 @@ export const RestrictedScreen: React.FC<RestrictedScreenProps> = ({ restriction:
       <div className="text-center space-y-2 mb-4">
         <Ban className="w-10 h-10 mx-auto text-red-600" aria-hidden="true" />
         <h1 className="text-2xl font-bold">
-          {restriction.kind === "warning" ? "You received a warning" : "Your access to matching is restricted"}
+          {restriction.kind === "warning" ? t("restricted.titleWarning") : t("restricted.title")}
         </h1>
       </div>
 
       <dl className="grid grid-cols-[auto_1fr] gap-x-4 gap-y-2 text-sm mb-4">
-        <dt className="font-bold">Reason</dt>
-        <dd data-testid="restriction-reason">{REASON_TEXT[restriction.reason]}</dd>
-        <dt className="font-bold">Type</dt>
-        <dd data-testid="restriction-kind">{KIND_TEXT[restriction.kind]}</dd>
-        <dt className="font-bold">Ends</dt>
+        <dt className="font-bold">{t("restricted.reasonLabel")}</dt>
+        <dd data-testid="restriction-reason">{t(REASON_KEY[restriction.reason])}</dd>
+        <dt className="font-bold">{t("restricted.typeLabel")}</dt>
+        <dd data-testid="restriction-kind">{t(KIND_KEY[restriction.kind])}</dd>
+        <dt className="font-bold">{t("restricted.endsLabel")}</dt>
         <dd data-testid="restriction-until">
           {restriction.until === null ? (
-            "Permanent"
+            t("restricted.permanent")
           ) : expired ? (
-            "Ended"
+            t("restricted.ended")
           ) : (
-            <>
-              in <Countdown until={restriction.until} onDone={() => setExpired(true)} />
-            </>
+            <Trans
+              t={t}
+              i18nKey="restricted.endsIn"
+              components={{ countdown: <Countdown until={restriction.until} onDone={() => setExpired(true)} /> }}
+            />
           )}
         </dd>
       </dl>
 
       {!restriction.evidenceAvailable && (
-        <p className="text-xs text-gray-600 mb-4">For safety reasons we cannot show the material behind this decision.</p>
+        <p className="text-xs text-gray-600 mb-4">{t("restricted.evidenceNote")}</p>
       )}
 
       {!lifted &&
         (appealStatus !== "none" ? (
           <p role="status" className="text-sm bg-gray-100 rounded p-3 mb-4" data-testid="appeal-status">
-            {APPEAL_STATUS_TEXT[appealStatus]}
+            {t(APPEAL_STATUS_KEY[appealStatus])}
           </p>
         ) : canAppeal ? (
           <form onSubmit={submit} className="space-y-2 mb-4" noValidate>
             <label htmlFor={`${ids}-appeal`} className="text-sm font-bold block">
-              Think this is a mistake? Appeal for free.
+              {t("restricted.appealLabel")}
             </label>
             <textarea
               id={`${ids}-appeal`}
@@ -152,24 +158,24 @@ export const RestrictedScreen: React.FC<RestrictedScreenProps> = ({ restriction:
               aria-describedby={`${ids}-appeal-hint`}
             />
             <p id={`${ids}-appeal-hint`} className="text-xs text-gray-600">
-              Tell us what happened. A person reviews every appeal. {trimmed.length}/{LIMITS.appealMax}
+              {t("restricted.appealHint", { length: trimmed.length, max: LIMITS.appealMax })}
             </p>
             {error && (
               <p role="alert" className="text-sm text-red-700">
-                {error}
+                {t(error)}
               </p>
             )}
             <button type="submit" className="retro-button w-full" disabled={sending} data-testid="appeal-submit">
-              {sending ? "Sending..." : "Send appeal"}
+              {sending ? t("restricted.sending") : t("restricted.sendAppeal")}
             </button>
           </form>
         ) : (
-          <p className="text-sm text-gray-700 mb-4">This restriction cannot be appealed.</p>
+          <p className="text-sm text-gray-700 mb-4">{t("restricted.notAppealable")}</p>
         ))}
 
       {(lifted || restriction.kind === "warning") && (
         <button type="button" onClick={onContinue} className="retro-button w-full" data-testid="restriction-continue">
-          Continue
+          {t("restricted.continue")}
         </button>
       )}
     </GateShell>

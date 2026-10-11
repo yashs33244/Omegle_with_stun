@@ -3,6 +3,7 @@ import { io, type Socket } from "socket.io-client";
 import { API_URL } from "@/lib/config";
 import { getDeviceId } from "@/lib/device";
 import { getSessionToken, invalidateSession, waitForSession } from "@/lib/session";
+import i18n from "@/lib/i18n";
 import {
   LIMITS,
   PROTOCOL_VERSION,
@@ -135,7 +136,8 @@ export type SignalingEvent =
 
 const TERMINAL: SignalingStatus[] = ["banned", "replaced"];
 
-export const FRIENDS_MESSAGE = "🎉 You are now friends! You've been chatting for 5 minutes.";
+/** System chat line shown when a call reaches the friends threshold. */
+export const friendsMessage = (): string => i18n.t("room:chat.friendsSystem");
 
 /** Converts a server deadline into the local clock using the server time at emit. */
 export function toLocalDeadline(expiresAt: number, serverNow: number, receivedAt: number): number {
@@ -176,7 +178,7 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
     case "connect-failed":
       // socket.io keeps retrying on its own; tell the user why nothing happens.
       if (state.status !== "connecting") return state;
-      return { ...state, error: "Cannot reach the server. Retrying..." };
+      return { ...state, error: i18n.t("room:signaling.cannotReach") };
 
     case "hello-ok": {
       const busy = state.status !== "connecting" && state.status !== "error" && state.status !== "idle";
@@ -290,7 +292,7 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
         isFriend: true,
         messages: [
           ...state.messages,
-          { id: `system-friends-${event.roomId}`, from: "system", text: FRIENDS_MESSAGE, ts: Date.now() },
+          { id: `system-friends-${event.roomId}`, from: "system", text: friendsMessage(), ts: Date.now() },
         ],
       };
 
@@ -376,7 +378,7 @@ export interface Signaling {
 }
 
 function notConnected<T extends object>(): Promise<Ack<T>> {
-  return Promise.resolve({ ok: false, error: "internal", message: "Not connected to the server" });
+  return Promise.resolve({ ok: false, error: "internal", message: i18n.t("room:signaling.notConnected") });
 }
 
 const MAX_PENDING_SIGNALS = 200;
@@ -449,7 +451,7 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
       socket.timeout(ACK_TIMEOUT_MS).emit("session:hello", valid.data, (err: Error | null, res: HelloAck) => {
         if (seq !== connectionSeq || stopped) return; // ack of an older connection
         if (err) {
-          dispatch({ type: "hello-failed", error: "timeout", message: "The server did not answer" });
+          dispatch({ type: "hello-failed", error: "timeout", message: i18n.t("room:signaling.noAnswer") });
         } else if (res.ok === true) {
           dispatch({ type: "hello-ok", coins: res.coins, iceServers: res.iceServers });
         } else {
@@ -629,7 +631,7 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
       const text = raw.trim().slice(0, LIMITS.chatMax);
       const { roomId, status } = stateRef.current;
       const socket = connectedSocket();
-      if (!text) return { ok: false, error: "invalid_payload", message: "Empty message" };
+      if (!text) return { ok: false, error: "invalid_payload", message: i18n.t("room:signaling.emptyMessage") };
       if (!socket || !roomId || status !== "in-call") return notConnected();
       setTyping(false);
       const tempId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -638,7 +640,7 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
       try {
         res = await socket.timeout(ACK_TIMEOUT_MS).emitWithAck("chat:send", { roomId, text });
       } catch {
-        res = { ok: false, error: "internal", message: "The server did not answer" };
+        res = { ok: false, error: "internal", message: i18n.t("room:signaling.noAnswer") };
       }
       dispatch(res.ok ? { type: "chat-ack", tempId, ok: true, id: res.id, ts: res.ts } : { type: "chat-ack", tempId, ok: false });
       return res;
@@ -666,7 +668,7 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
           ...(evidence ? { evidence } : {}),
         });
     } catch {
-      return { ok: false, error: "internal", message: "The server did not answer" };
+      return { ok: false, error: "internal", message: i18n.t("room:signaling.noAnswer") };
     }
   }, []);
 
@@ -678,7 +680,7 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
       if (res.ok) preferencesRef.current = next;
       return res;
     } catch {
-      return { ok: false, error: "internal", message: "The server did not answer" };
+      return { ok: false, error: "internal", message: i18n.t("room:signaling.noAnswer") };
     }
   }, []);
 

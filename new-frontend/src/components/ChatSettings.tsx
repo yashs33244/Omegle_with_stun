@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Settings, Shield, Globe, Users, X } from 'lucide-react';
+import { Settings, Shield, Globe, Languages, Users, X } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
+import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { Button } from './retroui/Button';
 import { Card, CardContent } from './retroui/Card';
 import { Select, SelectItem } from './retroui/Select';
@@ -23,15 +25,13 @@ interface ChatSettingsProps {
 
 type Feedback = { tone: 'ok' | 'error'; text: string } | null;
 
-const ERROR_TEXT: Partial<Record<ErrorCode, string>> = {
-  rate_limited: 'Too many changes, please wait a moment.',
-  invalid_payload: 'That value was not accepted.',
-  banned: 'Your session is restricted.',
-};
+type SettingsErrorKey = `settings.errors.${'rateLimited' | 'invalidPayload' | 'banned'}`;
 
-function describeAckError(res: Extract<SimpleAck, { ok: false }>): string {
-  return ERROR_TEXT[res.error] ?? res.message ?? 'Something went wrong. Please try again.';
-}
+const ERROR_KEYS: Partial<Record<ErrorCode, SettingsErrorKey>> = {
+  rate_limited: 'settings.errors.rateLimited',
+  invalid_payload: 'settings.errors.invalidPayload',
+  banned: 'settings.errors.banned',
+};
 
 const isGenderFilter = (v: string): v is GenderFilter =>
   (GENDER_FILTERS as readonly string[]).includes(v);
@@ -42,6 +42,7 @@ export const ChatSettings: React.FC<ChatSettingsProps> = ({
   preferences,
   onUpdatePreferences,
 }) => {
+  const { t } = useTranslation('room');
   const [prefsSaving, setPrefsSaving] = useState(false);
   const [prefsFeedback, setPrefsFeedback] = useState<Feedback>(null);
   const settingsRef = useRef<HTMLDivElement>(null);
@@ -52,11 +53,12 @@ export const ChatSettings: React.FC<ChatSettingsProps> = ({
     setPrefsFeedback(null);
     const res = await onUpdatePreferences(next);
     setPrefsSaving(false);
-    setPrefsFeedback(
-      res.ok === true
-        ? { tone: 'ok', text: 'Saved. Applies to your next match.' }
-        : { tone: 'error', text: describeAckError(res) }
-    );
+    if (res.ok === true) {
+      setPrefsFeedback({ tone: 'ok', text: t('settings.saved') });
+    } else {
+      const key = ERROR_KEYS[res.error];
+      setPrefsFeedback({ tone: 'error', text: key ? t(key) : (res.message ?? t('settings.errors.generic')) });
+    }
   };
 
   const handleGenderChange = (value: string) => {
@@ -103,14 +105,14 @@ export const ChatSettings: React.FC<ChatSettingsProps> = ({
               <div className="flex items-center gap-2">
                 <Settings className="w-5 h-5 text-yellow-400" />
                 <h2 id="chat-settings-title" className="text-lg font-semibold text-white">
-                  Chat Settings
+                  {t('settings.title')}
                 </h2>
               </div>
               <Button
                 onClick={onClose}
                 variant="outline"
                 size="sm"
-                aria-label="Close settings"
+                aria-label={t('settings.close')}
                 className="bg-gray-700 border-gray-600 text-white hover:bg-gray-600"
               >
                 <X className="w-4 h-4" />
@@ -123,21 +125,21 @@ export const ChatSettings: React.FC<ChatSettingsProps> = ({
                 <div className="flex items-center gap-2 mb-3">
                   <Users className="w-4 h-4 text-blue-400" />
                   <label id="settings-gender-label" htmlFor="settings-gender" className="text-sm font-medium text-white">
-                    Who do you want to meet?
+                    {t('settings.genderLabel')}
                   </label>
                 </div>
                 <Select
                   id="settings-gender"
                   labelId="settings-gender-label"
-                  aria-label="Who do you want to meet?"
+                  aria-label={t('settings.genderLabel')}
                   value={preferences.genderFilter}
                   onValueChange={handleGenderChange}
                   disabled={prefsSaving}
                   className="bg-gray-700 border-gray-600 text-white"
                 >
-                  {GENDER_OPTIONS.map((opt) => (
-                    <SelectItem key={opt.value} value={opt.value}>
-                      {opt.label}
+                  {GENDER_OPTIONS.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {t(`settings.gender.${value}`)}
                     </SelectItem>
                   ))}
                 </Select>
@@ -148,26 +150,26 @@ export const ChatSettings: React.FC<ChatSettingsProps> = ({
                 <div className="flex items-center gap-2 mb-3">
                   <Globe className="w-4 h-4 text-green-400" />
                   <label id="settings-language-label" htmlFor="settings-language" className="text-sm font-medium text-white">
-                    Preferred Language
+                    {t('settings.languageLabel')}
                   </label>
                 </div>
                 <Select
                   id="settings-language"
                   labelId="settings-language-label"
-                  aria-label="Preferred Language"
+                  aria-label={t('settings.languageLabel')}
                   value={preferences.languageFilter}
                   onValueChange={handleLanguageChange}
                   disabled={prefsSaving}
                   className="bg-gray-700 border-gray-600 text-white"
                 >
-                  <SelectItem value="any">🌐 Any language</SelectItem>
+                  <SelectItem value="any">{t('settings.anyLanguage')}</SelectItem>
                   {LANGUAGE_OPTIONS.map((opt) => (
                     <SelectItem key={opt.value} value={opt.value}>
-                      {`${opt.flag} ${opt.label}`}
+                      {`${opt.flag} ${t(`settings.languages.${opt.value}`)}`}
                     </SelectItem>
                   ))}
                 </Select>
-                {prefsSaving && <p className="text-xs mt-2 text-gray-400">Saving...</p>}
+                {prefsSaving && <p className="text-xs mt-2 text-gray-400">{t('settings.saving')}</p>}
                 {prefsFeedback && (
                   <p role="status" className={feedbackClass(prefsFeedback)}>
                     {prefsFeedback.text}
@@ -179,18 +181,24 @@ export const ChatSettings: React.FC<ChatSettingsProps> = ({
               <div>
                 <div className="flex items-center gap-2 mb-3">
                   <Shield className="w-4 h-4 text-red-400" />
-                  <span className="text-sm font-medium text-white">Safety</span>
+                  <span className="text-sm font-medium text-white">{t('settings.safety')}</span>
                 </div>
-                <p className="text-xs text-gray-300">
-                  To report someone, tap the flag on their video. After a call ends you can still report it for 60
-                  seconds.
-                </p>
+                <p className="text-xs text-gray-300">{t('settings.safetyHint')}</p>
+              </div>
+
+              {/* UI language */}
+              <div>
+                <div className="flex items-center gap-2 mb-3">
+                  <Languages className="w-4 h-4 text-yellow-400" />
+                  <span className="text-sm font-medium text-white">{t('settings.uiLanguage')}</span>
+                </div>
+                <LanguageSwitcher />
               </div>
             </div>
 
             <div className="mt-6 pt-4 border-t border-gray-700">
               <p className="text-xs text-gray-400 text-center">
-                Changes apply from your next match.
+                {t('settings.footer')}
               </p>
             </div>
           </CardContent>

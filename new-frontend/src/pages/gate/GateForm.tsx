@@ -1,5 +1,6 @@
 import { useId, useState } from "react";
 import { Loader, ShieldCheck } from "lucide-react";
+import { Trans, useTranslation } from "react-i18next";
 import { Button } from "@/components/retroui/Button";
 import { parseDob, type DobParts } from "./dob";
 import { Turnstile } from "./Turnstile";
@@ -10,6 +11,8 @@ export interface GateSubmit {
   turnstileToken?: string;
 }
 
+export type GateNotice = "dobAgain" | "tosChanged";
+
 export interface GateFormProps {
   /** Null when the server runs without Turnstile (development). */
   siteKey: string | null;
@@ -17,8 +20,8 @@ export interface GateFormProps {
   returning: boolean;
   submitting: boolean;
   error: string | null;
-  /** Shown above the form, for example "Our Terms changed". */
-  notice?: string | null;
+  /** Shown above the form, a `gate` key under `notices`. */
+  notice?: GateNotice | null;
   /** Bumped by the parent to get a fresh Turnstile token after a failed attempt. */
   turnstileReset?: number;
   onSubmit: (input: GateSubmit) => void;
@@ -29,7 +32,10 @@ const fieldClass =
   "w-full rounded border-2 border-black bg-white px-3 py-2 text-black text-base focus:outline-none focus:ring-2 focus:ring-yellow-500";
 
 /** Opens in a new tab so the half-filled gate is kept. */
-const DocLink: React.FC<{ to: string; children: React.ReactNode }> = ({ to, children }) => (
+const DocLink: React.FC<{ to: string; children?: React.ReactNode }> = ({
+  to,
+  children,
+}) => (
   <a href={to} target="_blank" rel="noopener" className="underline font-medium">
     {children}
   </a>
@@ -46,6 +52,7 @@ export const GateForm: React.FC<GateFormProps> = ({
   onTurnstileError,
 }) => {
   const ids = useId();
+  const { t } = useTranslation("gate");
   const [dob, setDob] = useState<DobParts>({ day: "", month: "", year: "" });
   const [dobTouched, setDobTouched] = useState(false);
   const [attest, setAttest] = useState(false);
@@ -53,10 +60,14 @@ export const GateForm: React.FC<GateFormProps> = ({
   const [token, setToken] = useState<string | null>(null);
 
   const parsed = parseDob(dob);
-  const dobComplete = dob.day !== "" && dob.month !== "" && dob.year.length === 4;
+  const dobComplete =
+    dob.day !== "" && dob.month !== "" && dob.year.length === 4;
   const showDobError = !parsed.ok && (dobTouched || dobComplete);
   const needsToken = siteKey !== null;
-  const ready = (returning || (parsed.ok && attest && tos)) && (!needsToken || token !== null) && !submitting;
+  const ready =
+    (returning || (parsed.ok && attest && tos)) &&
+    (!needsToken || token !== null) &&
+    !submitting;
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -68,38 +79,61 @@ export const GateForm: React.FC<GateFormProps> = ({
     });
   };
 
-  const setPart = (part: keyof DobParts) => (e: React.ChangeEvent<HTMLInputElement>) =>
-    setDob((prev) => ({ ...prev, [part]: e.target.value.replace(/\D/g, "") }));
+  const setPart =
+    (part: keyof DobParts) => (e: React.ChangeEvent<HTMLInputElement>) =>
+      setDob((prev) => ({
+        ...prev,
+        [part]: e.target.value.replace(/\D/g, ""),
+      }));
 
   return (
-    <form onSubmit={submit} noValidate className="space-y-5" data-testid="gate-form" aria-busy={submitting}>
+    <form
+      onSubmit={submit}
+      noValidate
+      className="space-y-5"
+      data-testid="gate-form"
+      aria-busy={submitting}
+    >
       <div className="text-center space-y-2">
-        <ShieldCheck className="w-10 h-10 mx-auto text-yellow-500" aria-hidden="true" />
-        <h1 className="text-2xl font-bold text-black">{returning ? "Welcome back" : "Before you start"}</h1>
+        <ShieldCheck
+          className="w-10 h-10 mx-auto text-yellow-500"
+          aria-hidden="true"
+        />
+        <h1 className="text-2xl font-bold text-black">
+          {returning ? t("form.titleReturning") : t("form.title")}
+        </h1>
         <p className="text-sm text-gray-600">
-          {returning
-            ? "Confirm you are a person to continue."
-            : "Chizzy is for adults only. We check your age before turning on your camera."}
+          {returning ? t("form.introReturning") : t("form.intro")}
         </p>
       </div>
 
       {notice && (
-        <p role="status" className="text-sm bg-yellow-100 border-2 border-yellow-500 rounded p-2 text-black">
-          {notice}
+        <p
+          role="status"
+          className="text-sm bg-yellow-100 border-2 border-yellow-500 rounded p-2 text-black"
+        >
+          {t(`notices.${notice}`)}
         </p>
       )}
 
       {!returning && (
         <>
-          <fieldset aria-describedby={`${ids}-dob-hint${showDobError ? ` ${ids}-dob-error` : ""}`}>
-            <legend className="text-sm font-bold text-black">Date of birth</legend>
+          <fieldset
+            aria-describedby={`${ids}-dob-hint${showDobError ? ` ${ids}-dob-error` : ""}`}
+          >
+            <legend className="text-sm font-bold text-black">
+              {t("form.dob.legend")}
+            </legend>
             <p id={`${ids}-dob-hint`} className="text-xs text-gray-600 mb-2">
-              For example 27 3 1999. We do not store your date of birth, only whether you are 18 or older.
+              {t("form.dob.hint")}
             </p>
             <div className="grid grid-cols-[1fr_1fr_1.6fr] gap-2">
               <div>
-                <label htmlFor={`${ids}-day`} className="text-xs text-gray-700 block">
-                  Day
+                <label
+                  htmlFor={`${ids}-day`}
+                  className="text-xs text-gray-700 block"
+                >
+                  {t("form.dob.day")}
                 </label>
                 <input
                   id={`${ids}-day`}
@@ -115,8 +149,11 @@ export const GateForm: React.FC<GateFormProps> = ({
                 />
               </div>
               <div>
-                <label htmlFor={`${ids}-month`} className="text-xs text-gray-700 block">
-                  Month
+                <label
+                  htmlFor={`${ids}-month`}
+                  className="text-xs text-gray-700 block"
+                >
+                  {t("form.dob.month")}
                 </label>
                 <input
                   id={`${ids}-month`}
@@ -131,8 +168,11 @@ export const GateForm: React.FC<GateFormProps> = ({
                 />
               </div>
               <div>
-                <label htmlFor={`${ids}-year`} className="text-xs text-gray-700 block">
-                  Year
+                <label
+                  htmlFor={`${ids}-year`}
+                  className="text-xs text-gray-700 block"
+                >
+                  {t("form.dob.year")}
                 </label>
                 <input
                   id={`${ids}-year`}
@@ -150,7 +190,7 @@ export const GateForm: React.FC<GateFormProps> = ({
             </div>
             {showDobError && !parsed.ok && (
               <p id={`${ids}-dob-error`} className="text-xs text-red-700 mt-1">
-                {parsed.error}
+                {t(`form.dob.errors.${parsed.error}`)}
               </p>
             )}
           </fieldset>
@@ -164,7 +204,7 @@ export const GateForm: React.FC<GateFormProps> = ({
                 checked={attest}
                 onChange={(e) => setAttest(e.target.checked)}
               />
-              <span>I am 18 or older.</span>
+              <span>{t("form.attest")}</span>
             </label>
             <label className="flex items-start gap-2 cursor-pointer">
               <input
@@ -175,9 +215,15 @@ export const GateForm: React.FC<GateFormProps> = ({
                 onChange={(e) => setTos(e.target.checked)}
               />
               <span>
-                I agree to the <DocLink to="/terms">Terms</DocLink> and the{" "}
-                <DocLink to="/guidelines">Community Guidelines</DocLink>, and I have read the{" "}
-                <DocLink to="/privacy">Privacy Policy</DocLink>.
+                <Trans
+                  t={t}
+                  i18nKey="form.tos"
+                  components={{
+                    terms: <DocLink to="/terms" />,
+                    guidelines: <DocLink to="/guidelines" />,
+                    privacy: <DocLink to="/privacy" />,
+                  }}
+                />
               </span>
             </label>
           </div>
@@ -195,7 +241,11 @@ export const GateForm: React.FC<GateFormProps> = ({
       )}
 
       {error && (
-        <p role="alert" className="text-sm text-red-700" data-testid="gate-error">
+        <p
+          role="alert"
+          className="text-sm text-red-700"
+          data-testid="gate-error"
+        >
           {error}
         </p>
       )}
@@ -206,8 +256,10 @@ export const GateForm: React.FC<GateFormProps> = ({
         disabled={!ready}
         className="w-full justify-center bg-yellow-500 text-black hover:bg-yellow-400 disabled:opacity-50 disabled:cursor-not-allowed"
       >
-        {submitting ? <Loader className="w-4 h-4 animate-spin mr-2" aria-hidden="true" /> : null}
-        Continue
+        {submitting ? (
+          <Loader className="w-4 h-4 animate-spin mr-2" aria-hidden="true" />
+        ) : null}
+        {t("form.continue")}
       </Button>
     </form>
   );

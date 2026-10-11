@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader, Lock, MessageCircle, Mic, MicOff, SkipForward, SwitchCamera, UserRound, Video, VideoOff, WifiOff } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/retroui/Button";
 import { ChatSettings } from "@/components/ChatSettings";
 import { ChatPanel, PartnerTyping } from "@/components/room/ChatPanel";
@@ -13,7 +14,7 @@ import { PostCallReport } from "@/components/safety/PostCallReport";
 import { ReportButton } from "@/components/safety/ReportButton";
 import { ReportSheet } from "@/components/safety/ReportSheet";
 import { SafetyCoachGate } from "@/components/safety/SafetyCoachCard";
-import { NUDGE_TEXT } from "@/components/safety/safetyText";
+import { NUDGE_KEYS } from "@/components/safety/safetyText";
 import { useCallSafety } from "@/components/safety/useCallSafety";
 import { Watermark } from "@/components/safety/Watermark";
 import { useAudioLevelDetection } from "@/hooks/useAudioLevelDetection";
@@ -57,14 +58,17 @@ export interface RoomProps {
 type ModerationKind = ModerationSignalPayload["kind"];
 
 /** Instant mode while the server connects you: no accept card, just a moment. */
-const ConnectingPanel: React.FC<{ partner: PublicProfile }> = ({ partner }) => (
-  <div className="w-full h-full min-h-[240px] bg-black flex items-center justify-center p-4" style={{ zIndex: 3 }} data-testid="instant-connecting">
-    <div className="text-center text-white space-y-3">
-      <Loader className="w-10 h-10 text-yellow-400 animate-spin mx-auto" aria-hidden="true" />
-      <p className="text-lg font-medium">Connecting you with {partner.name}...</p>
+const ConnectingPanel: React.FC<{ partner: PublicProfile }> = ({ partner }) => {
+  const { t } = useTranslation("room");
+  return (
+    <div className="w-full h-full min-h-[240px] bg-black flex items-center justify-center p-4" style={{ zIndex: 3 }} data-testid="instant-connecting">
+      <div className="text-center text-white space-y-3">
+        <Loader className="w-10 h-10 text-yellow-400 animate-spin mx-auto" aria-hidden="true" />
+        <p className="text-lg font-medium">{t("connecting.withPartner", { name: partner.name })}</p>
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 /**
  * A call whose connection stays failed this long is skipped automatically
@@ -74,11 +78,13 @@ const ConnectingPanel: React.FC<{ partner: PublicProfile }> = ({ partner }) => (
 const FAILED_SKIP_MS = 10_000;
 const FAILED_SKIP_STAGGER_MS = 4_000;
 
-const NOTICE_TEXT: Partial<Record<ErrorCode, string>> = {
-  rate_limited: "Slow down a little, you are sending too fast.",
-  not_in_room: "That call has already ended.",
-  invalid_payload: "The server rejected that request.",
-  internal: "Something went wrong on the server.",
+type NoticeKey = `notice.${"rateLimited" | "notInRoom" | "invalidPayload" | "internal"}`;
+
+const NOTICE_KEYS: Partial<Record<ErrorCode, NoticeKey>> = {
+  rate_limited: "notice.rateLimited",
+  not_in_room: "notice.notInRoom",
+  invalid_payload: "notice.invalidPayload",
+  internal: "notice.internal",
 };
 
 const NameBadge: React.FC<{ name: string; country: string }> = ({ name, country }) => {
@@ -96,22 +102,25 @@ const MicToggle: React.FC<{ micEnabled: boolean; onToggle: () => void; showLabel
   micEnabled,
   onToggle,
   showLabel = false,
-}) => (
-  <Button
-    onClick={onToggle}
-    variant="outline"
-    size="sm"
-    aria-label={micEnabled ? "Mute microphone" : "Unmute microphone"}
-    aria-pressed={!micEnabled}
-    data-testid="mic-toggle"
-    className={`flex items-center gap-2 ${
-      micEnabled ? "bg-black bg-opacity-60 text-white border-white" : "bg-red-600 text-white border-red-500"
-    }`}
-  >
-    {micEnabled ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
-    {showLabel && <span aria-hidden="true">{micEnabled ? "Mic on" : "Mic off"}</span>}
-  </Button>
-);
+}) => {
+  const { t } = useTranslation("room");
+  return (
+    <Button
+      onClick={onToggle}
+      variant="outline"
+      size="sm"
+      aria-label={micEnabled ? t("mic.mute") : t("mic.unmute")}
+      aria-pressed={!micEnabled}
+      data-testid="mic-toggle"
+      className={`flex items-center gap-2 ${
+        micEnabled ? "bg-black bg-opacity-60 text-white border-white" : "bg-red-600 text-white border-red-500"
+      }`}
+    >
+      {micEnabled ? <Mic className="w-4 h-4" /> : <MicOff className="w-4 h-4" />}
+      {showLabel && <span aria-hidden="true">{micEnabled ? t("mic.on") : t("mic.off")}</span>}
+    </Button>
+  );
+};
 
 const TextOnlyPanel: React.FC<{
   partner: PublicProfile | null;
@@ -119,26 +128,27 @@ const TextOnlyPanel: React.FC<{
   micEnabled: boolean;
   onToggleMic: () => void;
   onSwitchToVideo: () => void;
-}> = ({ partner, partnerTyping, micEnabled, onToggleMic, onSwitchToVideo }) => (
-  <div className="flex-1 flex flex-col justify-center items-center text-center space-y-4">
-    <MessageCircle className="w-16 h-16 text-yellow-400" />
-    <div className="text-white space-y-2">
-      <h3 className="text-xl font-bold">Text Chat Mode</h3>
-      <p className="text-gray-300">You're chatting with {partner?.name || "a stranger"}</p>
-      <p className="text-sm text-gray-400">
-        {micEnabled ? "Your camera is off, but they can still hear you." : "Your camera and microphone are off."}
-      </p>
-      {partnerTyping && <PartnerTyping />}
+}> = ({ partner, partnerTyping, micEnabled, onToggleMic, onSwitchToVideo }) => {
+  const { t } = useTranslation("room");
+  return (
+    <div className="flex-1 flex flex-col justify-center items-center text-center space-y-4">
+      <MessageCircle className="w-16 h-16 text-yellow-400" />
+      <div className="text-white space-y-2">
+        <h3 className="text-xl font-bold">{t("textOnly.title")}</h3>
+        <p className="text-gray-300">{t("textOnly.chattingWith", { name: partner?.name || t("textOnly.stranger") })}</p>
+        <p className="text-sm text-gray-400">{micEnabled ? t("textOnly.cameraOff") : t("textOnly.cameraAndMicOff")}</p>
+        {partnerTyping && <PartnerTyping />}
+      </div>
+      <div className="flex items-center gap-3">
+        <MicToggle micEnabled={micEnabled} onToggle={onToggleMic} showLabel />
+        <Button onClick={onSwitchToVideo} variant="outline" className="bg-yellow-500 text-black hover:bg-yellow-400">
+          <Video className="w-4 h-4 mr-2" />
+          {t("textOnly.switchToVideo")}
+        </Button>
+      </div>
     </div>
-    <div className="flex items-center gap-3">
-      <MicToggle micEnabled={micEnabled} onToggle={onToggleMic} showLabel />
-      <Button onClick={onSwitchToVideo} variant="outline" className="bg-yellow-500 text-black hover:bg-yellow-400">
-        <Video className="w-4 h-4 mr-2" />
-        Switch to Video
-      </Button>
-    </div>
-  </div>
-);
+  );
+};
 
 /** The first visit shows the safety card before anything connects or queues. */
 export const Room: React.FC<RoomProps> = (props) => (
@@ -162,6 +172,7 @@ const RoomSession: React.FC<RoomProps> = ({
   onFlipCamera,
   frontCamera = true,
 }) => {
+  const { t } = useTranslation(["room", "safety"]);
   const isMobile = useIsMobile();
   const [preferences, setPreferences] = useState<Preferences>(initialPreferences);
   const signaling = useSignaling(profile, initialPreferences, { mode });
@@ -318,7 +329,7 @@ const RoomSession: React.FC<RoomProps> = ({
     [state.expiresAt],
   );
   const beamStyle = matchPhase && beamSeconds > 0 ? ({ "--beam-duration": `${beamSeconds}s` } as React.CSSProperties) : undefined;
-  const notice = state.notice ? NOTICE_TEXT[state.notice] : undefined;
+  const noticeKey = state.notice ? NOTICE_KEYS[state.notice] : undefined;
 
   return (
     <div className="min-h-screen bg-gray-900 flex flex-col">
@@ -336,9 +347,9 @@ const RoomSession: React.FC<RoomProps> = ({
         onSkip={signaling.skip}
       />
 
-      {notice && (
+      {noticeKey && (
         <div role="status" className="bg-orange-600 text-white text-sm text-center py-1">
-          {notice}
+          {t(noticeKey)}
         </div>
       )}
 
@@ -347,24 +358,24 @@ const RoomSession: React.FC<RoomProps> = ({
           {peer.privateMode && (
             <span className="flex items-center gap-1 text-xs text-green-400" data-testid="private-badge">
               <Lock className="w-4 h-4" aria-hidden="true" />
-              IP hidden from your partner
+              {t("privacy.ipHidden")}
             </span>
           )}
           {peer.privateRequested && !peer.privateMode && (
             <span className="text-xs text-orange-300" role="status" data-testid="private-unavailable">
-              Hide my IP is not available right now, so this call can use a direct connection.
+              {t("privacy.unavailable")}
             </span>
           )}
           {privateAllowed && onHideIpChange && (
             <HideIpToggle
               checked={hideIp}
               onChange={onHideIpChange}
-              note={hideIp !== peer.privateRequested ? "Applies from your next call." : undefined}
+              note={hideIp !== peer.privateRequested ? t("privacy.appliesNextCall") : undefined}
             />
           )}
           {peer.lowBandwidth && (
             <span className="text-xs text-orange-300" role="status">
-              Weak connection: sending lower quality video.
+              {t("privacy.lowBandwidth")}
             </span>
           )}
           {onFlipCamera && !textOnlyMode && (
@@ -372,7 +383,7 @@ const RoomSession: React.FC<RoomProps> = ({
               onClick={onFlipCamera}
               variant="outline"
               size="sm"
-              aria-label={frontCamera ? "Switch to the back camera" : "Switch to the front camera"}
+              aria-label={frontCamera ? t("camera.switchToBack") : t("camera.switchToFront")}
               data-testid="flip-camera"
               className="ml-auto bg-black bg-opacity-60 text-white border-white"
             >
@@ -413,7 +424,7 @@ const RoomSession: React.FC<RoomProps> = ({
                   data-testid="face-paused"
                 >
                   <VideoOff className="w-4 h-4 shrink-0 text-yellow-400" aria-hidden="true" />
-                  Your face is out of frame, so your video is paused
+                  {t("camera.facePaused")}
                 </div>
               )}
 
@@ -421,7 +432,7 @@ const RoomSession: React.FC<RoomProps> = ({
                 <div className="absolute bottom-4 left-4 flex items-center gap-2" style={{ zIndex: 5 }}>
                   {profile.photo && (
                     <div className="w-10 h-10 rounded-full overflow-hidden border-2 border-white">
-                      <img src={profile.photo} alt="Your profile" className="w-full h-full object-cover" />
+                      <img src={profile.photo} alt={t("camera.profileAlt")} className="w-full h-full object-cover" />
                     </div>
                   )}
                   <NameBadge name={profile.name} country={profile.country} />
@@ -441,13 +452,13 @@ const RoomSession: React.FC<RoomProps> = ({
                     size="sm"
                     data-testid="chat-toggle"
                     aria-pressed={showChat}
-                    aria-label="Chat"
+                    aria-label={t("chat.toggle")}
                     className={`flex items-center gap-2 ${
                       showChat ? "bg-yellow-500 text-black" : "bg-black bg-opacity-60 text-white border-white"
                     }`}
                   >
                     <MessageCircle className="w-4 h-4" />
-                    {!pip.style && "Chat"}
+                    {!pip.style && t("chat.toggle")}
                   </Button>
                 </div>
               )}
@@ -472,7 +483,7 @@ const RoomSession: React.FC<RoomProps> = ({
                 muted={false}
                 hidden={textOnlyMode}
                 testId="remote-video"
-                loadingLabel={connectionFailed ? undefined : "Connecting video..."}
+                loadingLabel={connectionFailed ? undefined : t("connecting.video")}
                 blurred={remoteBlurred}
                 onVideoElement={setRemoteVideo}
               />
@@ -521,7 +532,7 @@ const RoomSession: React.FC<RoomProps> = ({
                     className="bg-black bg-opacity-60 text-white border-white hover:bg-gray-800"
                   >
                     <MessageCircle className="w-4 h-4 mr-2" />
-                    Text Only
+                    {t("textOnly.toggle")}
                   </Button>
                 </div>
               </>
@@ -531,12 +542,10 @@ const RoomSession: React.FC<RoomProps> = ({
               <div className="video-loading-overlay" role="alert">
                 <div className="text-center text-white space-y-4 px-4">
                   <WifiOff className="w-12 h-12 text-red-400 mx-auto" />
-                  <p className="text-lg font-medium">Couldn't connect the video</p>
-                  <p className="text-sm text-gray-300">
-                    Your networks could not reach each other. Skipping to someone else in a few seconds.
-                  </p>
+                  <p className="text-lg font-medium">{t("callFailed.title")}</p>
+                  <p className="text-sm text-gray-300">{t("callFailed.body")}</p>
                   <button type="button" onClick={signaling.skip} className="retro-button">
-                    Skip to someone else
+                    {t("callFailed.skip")}
                   </button>
                 </div>
               </div>
@@ -551,11 +560,11 @@ const RoomSession: React.FC<RoomProps> = ({
                   onClick={signaling.skip}
                   data-testid="next-button"
                   aria-keyshortcuts="Escape ArrowRight"
-                  title="Next (Esc or Right arrow)"
+                  title={t("next.title")}
                   className="retro-button bg-orange-500 text-white text-lg px-6 py-3 flex items-center gap-2"
                 >
                   <SkipForward className="w-6 h-6" aria-hidden="true" />
-                  Next
+                  {t("next.label")}
                 </button>
               </div>
             )}
@@ -605,7 +614,7 @@ const RoomSession: React.FC<RoomProps> = ({
             onSend={handleSend}
             onTyping={signaling.setTyping}
             redactedIds={safety.redactedIds}
-            safetyNotice={safety.chatNudge ? NUDGE_TEXT[safety.chatNudge].body : null}
+            safetyNotice={safety.chatNudge ? t(NUDGE_KEYS[safety.chatNudge].body, { ns: "safety" }) : null}
           />
         )}
 

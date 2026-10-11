@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describeMediaError, needsReacquire, useMediaStream, videoConstraints } from "./useMediaStream";
+import i18n from "@/lib/i18n";
 
 interface FakeTrack {
   kind: "audio" | "video";
@@ -48,8 +49,8 @@ describe("describeMediaError", () => {
   ])("maps %s to %s", (name, kind) => {
     const described = describeMediaError(domError(name));
     expect(described.kind).toBe(kind);
-    expect(described.title).not.toBe("");
-    expect(described.message).not.toBe("");
+    expect(i18n.exists(`room:camera.${described.kind}.title`)).toBe(true);
+    expect(i18n.exists(`room:camera.${described.kind}.message`)).toBe(true);
   });
 });
 

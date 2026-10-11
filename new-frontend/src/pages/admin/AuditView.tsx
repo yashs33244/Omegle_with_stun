@@ -1,4 +1,5 @@
 import React, { useMemo } from "react";
+import { useTranslation } from "react-i18next";
 import type { AdminApi } from "@/lib/adminApi";
 import { formatTime, useAdminData } from "./adminShared";
 import { Btn, Notice } from "./AdminUi";
@@ -6,40 +7,41 @@ import { Btn, Notice } from "./AdminUi";
 const loadAudit = (api: AdminApi) => api.listAudit();
 
 export const AuditView: React.FC = () => {
+  const { t } = useTranslation("admin");
   const { data, error, loading, reload } = useAdminData(loadAudit);
   const entries = useMemo(() => [...(data ?? [])].sort((a, b) => b.ts - a.ts), [data]);
   return (
     <section aria-labelledby="audit-title" className="space-y-3">
       <div className="flex items-center justify-between">
         <h2 id="audit-title" className="text-lg font-semibold">
-          Audit log
+          {t("audit.title")}
         </h2>
         <Btn onClick={reload} disabled={loading}>
-          Refresh
+          {t("ui.refresh")}
         </Btn>
       </div>
       {error && <Notice tone="error">{error}</Notice>}
-      {loading && !data && <p className="text-sm text-gray-500">Loading...</p>}
-      {data && entries.length === 0 && <p className="text-sm text-gray-500">No entries yet.</p>}
+      {loading && !data && <p className="text-sm text-gray-500">{t("loading", { ns: "common" })}</p>}
+      {data && entries.length === 0 && <p className="text-sm text-gray-500">{t("audit.empty")}</p>}
       {entries.length > 0 && (
         <div className="overflow-x-auto rounded-md border border-gray-200 bg-white">
           <table className="w-full text-left text-sm" data-testid="audit-table">
             <thead className="bg-gray-50 text-xs uppercase text-gray-500">
               <tr>
                 <th scope="col" className="px-3 py-2">
-                  Time
+                  {t("audit.time")}
                 </th>
                 <th scope="col" className="px-3 py-2">
-                  Action
+                  {t("audit.action")}
                 </th>
                 <th scope="col" className="px-3 py-2">
-                  Target
+                  {t("audit.target")}
                 </th>
                 <th scope="col" className="px-3 py-2">
-                  Note
+                  {t("audit.note")}
                 </th>
                 <th scope="col" className="px-3 py-2">
-                  IP
+                  {t("audit.ip")}
                 </th>
               </tr>
             </thead>

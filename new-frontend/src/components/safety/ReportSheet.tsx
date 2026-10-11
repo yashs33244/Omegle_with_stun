@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { CheckCircle2, Flag, X } from "lucide-react";
 import { useDialogFocus } from "@/hooks/useDialogFocus";
 import { buildEvidence, type ReportEvidence } from "@/lib/evidence";
 import { LIMITS, type ReportAck, type ReportReason } from "@/lib/protocol";
 import { REPORT_CHOICES } from "./reportReasons";
-import { reportErrorText } from "./safetyText";
+import { reportErrorKey, type ReportErrorKey } from "./safetyText";
 import type { ReportTarget } from "./useCallSafety";
 
 interface ReportSheetProps {
@@ -13,25 +14,26 @@ interface ReportSheetProps {
   onClose: () => void;
 }
 
-type Phase = { name: "form"; error: string | null } | { name: "sending" } | { name: "done"; reportId: string };
+type Phase = { name: "form"; error: ReportErrorKey | null } | { name: "sending" } | { name: "done"; reportId: string };
 
-const LEAD: Record<ReportTarget["context"], string> = {
-  call: "Sending a report ends this call.",
-  match: "Sending a report skips this match.",
-  "post-call": "This call has ended. You can report it for up to 60 seconds after it ends.",
-};
+const LEAD = {
+  call: "reportSheet.lead.call",
+  match: "reportSheet.lead.match",
+  "post-call": "reportSheet.lead.postCall",
+} as const satisfies Record<ReportTarget["context"], string>;
 
-const FRAME_WHEN: Record<ReportTarget["context"], string> = {
-  call: "taken when you tapped Report",
-  match: "taken when you tapped Report",
-  "post-call": "taken when the call ended",
-};
+const FRAME_WHEN = {
+  call: "reportSheet.frameWhen.call",
+  match: "reportSheet.frameWhen.match",
+  "post-call": "reportSheet.frameWhen.postCall",
+} as const satisfies Record<ReportTarget["context"], string>;
 
 /**
  * The report sheet: pick a reason, see exactly what is attached, send.
  * The server ack is shown as is; we promise nothing about timing.
  */
 export const ReportSheet: React.FC<ReportSheetProps> = ({ target, onSubmit, onClose }) => {
+  const { t } = useTranslation("safety");
   const [reason, setReason] = useState<ReportReason | null>(null);
   const [details, setDetails] = useState("");
   const [includeFrame, setIncludeFrame] = useState(true);
@@ -55,9 +57,8 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({ target, onSubmit, onCl
 
   const hasFrame = target.frame !== null;
   const chatCount = target.chat.length;
-  const who = target.partnerName ? target.partnerName : "this person";
-  const title =
-    target.context === "post-call" ? "Report the person from your last call" : `Report ${who}`;
+  const who = target.partnerName ? target.partnerName : t("reportSheet.defaultWho");
+  const title = target.context === "post-call" ? t("reportSheet.titlePostCall") : t("reportSheet.title", { who });
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,7 +66,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({ target, onSubmit, onCl
     setPhase({ name: "sending" });
     const evidence = buildEvidence(includeFrame ? target.frame : null, includeChat ? target.chat : []);
     const res = await onSubmit(target.roomId, reason, details.trim() || undefined, evidence);
-    setPhase(res.ok ? { name: "done", reportId: res.reportId } : { name: "form", error: reportErrorText(res) });
+    setPhase(res.ok ? { name: "done", reportId: res.reportId } : { name: "form", error: reportErrorKey(res) });
   };
 
   return (
@@ -86,12 +87,12 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({ target, onSubmit, onCl
         <div className="mb-3 flex items-center justify-between gap-2">
           <h2 id="report-sheet-title" className="flex items-center gap-2 text-lg font-semibold">
             <Flag className="h-5 w-5 text-red-400" aria-hidden="true" />
-            {phase.name === "done" ? "Report sent" : title}
+            {phase.name === "done" ? t("reportSheet.titleDone") : title}
           </h2>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close report"
+            aria-label={t("reportSheet.close")}
             className="rounded-md border border-gray-600 bg-gray-700 p-1.5 hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-yellow-400"
           >
             <X className="h-4 w-4" />
@@ -103,22 +104,22 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({ target, onSubmit, onCl
             <div role="status" data-testid="report-received" className="flex items-start gap-3">
               <CheckCircle2 className="mt-0.5 h-6 w-6 shrink-0 text-green-400" aria-hidden="true" />
               <div>
-                <p className="font-medium">Report received. We review reports.</p>
+                <p className="font-medium">{t("reportSheet.received")}</p>
                 <p className="mt-1 text-xs text-gray-400">
-                  Reference: <span className="font-mono" data-testid="report-reference">{phase.reportId.slice(0, 8)}</span>
+                  {t("reportSheet.reference")} <span className="font-mono" data-testid="report-reference">{phase.reportId.slice(0, 8)}</span>
                 </p>
               </div>
             </div>
             <button type="button" ref={doneRef} onClick={onClose} className="retro-button w-full">
-              Close
+              {t("reportSheet.closeButton")}
             </button>
           </div>
         ) : (
           <form onSubmit={(e) => void submit(e)} className="space-y-4">
-            <p className="text-sm text-gray-300">{LEAD[target.context]}</p>
+            <p className="text-sm text-gray-300">{t(LEAD[target.context])}</p>
 
             <fieldset>
-              <legend className="mb-2 text-sm font-medium">What happened?</legend>
+              <legend className="mb-2 text-sm font-medium">{t("reportSheet.whatHappened")}</legend>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 {REPORT_CHOICES.map((choice) => (
                   <label
@@ -136,9 +137,9 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({ target, onSubmit, onCl
                         onChange={() => setReason(choice.reason)}
                         className="accent-red-500"
                       />
-                      <span className="font-medium">{choice.label}</span>
+                      <span className="font-medium">{t(choice.labelKey)}</span>
                     </span>
-                    <span className="ml-5 text-xs text-gray-400">{choice.hint}</span>
+                    <span className="ml-5 text-xs text-gray-400">{t(choice.hintKey)}</span>
                   </label>
                 ))}
               </div>
@@ -146,7 +147,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({ target, onSubmit, onCl
 
             <div>
               <label htmlFor="report-sheet-details" className="mb-1 block text-sm font-medium">
-                Anything else? (optional)
+                {t("reportSheet.detailsLabel")}
               </label>
               <textarea
                 id="report-sheet-details"
@@ -155,14 +156,14 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({ target, onSubmit, onCl
                 maxLength={LIMITS.reportDetailsMax}
                 rows={2}
                 className="w-full resize-none rounded-lg border border-gray-600 bg-gray-700 p-2 text-sm text-white placeholder-gray-400 focus:border-yellow-500 focus:outline-none"
-                placeholder="What did they do?"
+                placeholder={t("reportSheet.detailsPlaceholder")}
               />
             </div>
 
             <fieldset className="rounded-lg border border-gray-700 p-3" data-testid="report-attachments">
-              <legend className="px-1 text-sm font-medium">Attached to this report</legend>
+              <legend className="px-1 text-sm font-medium">{t("reportSheet.attachedLegend")}</legend>
               {!hasFrame && chatCount === 0 ? (
-                <p className="text-sm text-gray-300">No image or chat is attached.</p>
+                <p className="text-sm text-gray-300">{t("reportSheet.nothingAttached")}</p>
               ) : (
                 <div className="space-y-2 text-sm">
                   {hasFrame && (
@@ -175,8 +176,8 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({ target, onSubmit, onCl
                         className="mt-1"
                       />
                       <span>
-                        A still image of their video
-                        <span className="block text-xs text-gray-400">{FRAME_WHEN[target.context]}</span>
+                        {t("reportSheet.frameLabel")}
+                        <span className="block text-xs text-gray-400">{t(FRAME_WHEN[target.context])}</span>
                       </span>
                     </label>
                   )}
@@ -190,19 +191,19 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({ target, onSubmit, onCl
                         className="mt-1"
                       />
                       <span>
-                        {chatCount === 1 ? "The last chat message" : `The last ${chatCount} chat messages`}
-                        <span className="block text-xs text-gray-400">yours and theirs</span>
+                        {t("reportSheet.chatLabel", { count: chatCount })}
+                        <span className="block text-xs text-gray-400">{t("reportSheet.chatWho")}</span>
                       </span>
                     </label>
                   )}
                 </div>
               )}
-              <p className="mt-2 text-xs text-gray-400">Only what is checked here is sent with your report.</p>
+              <p className="mt-2 text-xs text-gray-400">{t("reportSheet.onlyChecked")}</p>
             </fieldset>
 
             {phase.name === "form" && phase.error && (
               <p role="alert" className="text-sm text-red-400">
-                {phase.error}
+                {"values" in phase.error ? t(phase.error.key, phase.error.values) : t(phase.error.key)}
               </p>
             )}
 
@@ -212,7 +213,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({ target, onSubmit, onCl
                 onClick={onClose}
                 className="flex-1 rounded-lg border border-gray-600 bg-gray-700 px-4 py-2 font-medium hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-yellow-400"
               >
-                Cancel
+                {t("reportSheet.cancel")}
               </button>
               <button
                 type="submit"
@@ -220,7 +221,7 @@ export const ReportSheet: React.FC<ReportSheetProps> = ({ target, onSubmit, onCl
                 data-testid="report-submit"
                 className="flex-1 rounded-lg bg-red-600 px-4 py-2 font-semibold hover:bg-red-500 focus:outline-none focus:ring-2 focus:ring-yellow-400 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {phase.name === "sending" ? "Sending..." : "Send report"}
+                {phase.name === "sending" ? t("reportSheet.sending") : t("reportSheet.send")}
               </button>
             </div>
           </form>

@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { MATCH_MODES, flagsSchema, type Flags, type MatchMode } from "@/lib/protocol";
 import type { AdminApi } from "@/lib/adminApi";
 import { useAdmin, useAdminData } from "./adminShared";
@@ -6,19 +7,19 @@ import { Btn, ConfirmDialog, Notice } from "./AdminUi";
 
 type FlagKey = keyof Flags;
 
-const FIELDS: ReadonlyArray<{ key: FlagKey; label: string; help: string }> = [
-  { key: "matching_enabled", label: "Matching enabled", help: "Kill switch. Off: no new matches start." },
-  { key: "new_sessions_enabled", label: "New sessions enabled", help: "Off: nobody new can pass the entry gate." },
-  { key: "max_waiting", label: "Max waiting", help: "Queue size cap." },
-  { key: "turn_enabled", label: "TURN relay enabled", help: "Off: calls that need a relay cannot connect." },
-  { key: "private_mode_enabled", label: "Hide my IP allowed", help: "Relay-only calls on request." },
-  { key: "video_max_kbps", label: "Video max (kbps)", help: "Direct calls." },
-  { key: "relay_video_max_kbps", label: "Relayed video max (kbps)", help: "Calls through TURN." },
-  { key: "banner_message", label: "Banner message", help: "Shown to everyone; empty hides it. Max 280 characters." },
-  { key: "blocked_countries", label: "Blocked countries", help: "Comma-separated ISO codes, e.g. GB,AU,DE." },
-  { key: "staffed_hours", label: "Staffed hours", help: 'e.g. "20:00-24:00 Asia/Kolkata". Empty means always open.' },
-  { key: "default_mode", label: "Default match mode", help: "instant or preview." },
-  { key: "online_count_threshold", label: "Online count threshold", help: "Show the online count only at or above this." },
+const FIELDS: readonly FlagKey[] = [
+  "matching_enabled",
+  "new_sessions_enabled",
+  "max_waiting",
+  "turn_enabled",
+  "private_mode_enabled",
+  "video_max_kbps",
+  "relay_video_max_kbps",
+  "banner_message",
+  "blocked_countries",
+  "staffed_hours",
+  "default_mode",
+  "online_count_threshold",
 ];
 
 /** Changes to these flags need an explicit confirmation. */
@@ -26,16 +27,13 @@ const CONFIRM_KEYS: readonly FlagKey[] = ["matching_enabled", "turn_enabled"];
 
 const loadFlags = (api: AdminApi) => api.getFlags();
 
-function describeRisky(key: FlagKey, on: boolean): string {
-  if (key === "matching_enabled") {
-    return on ? "Matching opens again for everyone (staffed hours still apply)." : "No new matches will start for anyone until you turn matching back on.";
-  }
-  return on
-    ? "TURN relays are used again; relay traffic costs money."
-    : "People on networks that need a relay will not be able to connect, and Hide my IP stops working.";
+function riskyKey(key: FlagKey, on: boolean) {
+  if (key === "matching_enabled") return on ? "flags.risky.matchingOn" : "flags.risky.matchingOff";
+  return on ? "flags.risky.turnOn" : "flags.risky.turnOff";
 }
 
 export const FlagsEditor: React.FC = () => {
+  const { t } = useTranslation("admin");
   const { api, fail } = useAdmin();
   const { data, error, loading, reload } = useAdminData(loadFlags);
   const [draft, setDraft] = useState<Flags | null>(null);
@@ -49,7 +47,7 @@ export const FlagsEditor: React.FC = () => {
   }, [data]);
 
   if (error && !draft) return <Notice tone="error">{error}</Notice>;
-  if (loading && !draft) return <p className="text-sm text-gray-500">Loading...</p>;
+  if (loading && !draft) return <p className="text-sm text-gray-500">{t("loading", { ns: "common" })}</p>;
   if (!draft || !data) return null;
 
   const set = <K extends FlagKey>(key: K, value: Flags[K]) => {
@@ -66,7 +64,7 @@ export const FlagsEditor: React.FC = () => {
     try {
       const saved = await api.setFlags(draft);
       setDraft(saved);
-      setResult({ tone: "ok", text: "Flags saved. Servers pick them up within a few seconds." });
+      setResult({ tone: "ok", text: t("flags.saved") });
       reload();
     } catch (err) {
       setResult({ tone: "error", text: fail(err) });
@@ -161,17 +159,17 @@ export const FlagsEditor: React.FC = () => {
   return (
     <section aria-labelledby="flags-title" className="space-y-3">
       <h2 id="flags-title" className="text-lg font-semibold">
-        Flags
+        {t("flags.title")}
       </h2>
       <form onSubmit={submit} className="space-y-3" noValidate>
-        {FIELDS.map(({ key, label, help }) => (
+        {FIELDS.map((key) => (
           <div key={key} className="grid gap-1 rounded-md border border-gray-200 bg-white p-3 sm:grid-cols-[14rem_minmax(0,1fr)]">
             <div>
               <label htmlFor={`flag-${key}`} className="text-sm font-medium">
-                {label}
+                {t(`flags.fields.${key}.label`)}
               </label>
               <p className="text-xs text-gray-500" id={`flag-${key}-help`}>
-                {help}
+                {t(`flags.fields.${key}.help`)}
               </p>
             </div>
             <div>
@@ -186,23 +184,32 @@ export const FlagsEditor: React.FC = () => {
         ))}
         <div className="flex flex-wrap items-center gap-2">
           <Btn type="submit" tone="primary" disabled={busy || !dirty}>
-            {busy ? "Saving..." : "Save flags"}
+            {busy ? t("flags.saving") : t("flags.save")}
           </Btn>
           <Btn disabled={busy || !dirty} onClick={() => setDraft(data)}>
-            Discard changes
+            {t("flags.discard")}
           </Btn>
         </div>
         {result && <Notice tone={result.tone}>{result.text}</Notice>}
       </form>
       <ConfirmDialog
         open={confirming}
-        title="Confirm this change"
+        title={t("flags.confirmTitle")}
         description={risky.map((k) => (
           <p key={k}>
-            <strong>{FIELDS.find((f) => f.key === k)?.label}</strong> {draft[k] ? "on" : "off"}: {describeRisky(k, !!draft[k])}
+            <Trans
+              t={t}
+              i18nKey="flags.riskyLine"
+              values={{
+                label: t(`flags.fields.${k}.label`),
+                state: draft[k] ? t("flags.on") : t("flags.off"),
+                description: t(riskyKey(k, !!draft[k])),
+              }}
+              components={{ strong: <strong /> }}
+            />
           </p>
         ))}
-        confirmLabel="Save flags"
+        confirmLabel={t("flags.save")}
         onCancel={() => setConfirming(false)}
         onConfirm={() => void save()}
       />

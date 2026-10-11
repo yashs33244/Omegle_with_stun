@@ -1,26 +1,35 @@
 import { useEffect, useId, useState } from "react";
+import { Trans, useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { api as defaultApi, type Api } from "@/lib/api";
 import { LIMITS, takedownRequestSchema, type PublicConfig, type TakedownRequest } from "@/lib/protocol";
 import { Turnstile } from "../gate/Turnstile";
 import { LegalPage } from "./LegalPage";
 
-const KINDS: ReadonlyArray<{ value: TakedownRequest["kind"]; label: string }> = [
-  { value: "ncii", label: "An intimate image of me (or someone I represent) shared without consent" },
-  { value: "csam", label: "Sexual content involving a minor" },
-  { value: "impersonation", label: "Someone is pretending to be me" },
-  { value: "other", label: "Something else" },
-];
+const KINDS: ReadonlyArray<TakedownRequest["kind"]> = ["ncii", "csam", "impersonation", "other"];
 
-const ERROR_TEXT: Record<string, string> = {
-  invalid: "Some fields are not valid. Check the form and try again.",
-  turnstile_failed: "The security check failed. Please try again.",
-  rate_limited: "Too many requests. Wait a minute and try again.",
+type ErrorKey = `takedown.errors.${
+  | "invalid"
+  | "turnstileFailed"
+  | "rateLimited"
+  | "affected"
+  | "email"
+  | "description"
+  | "goodFaith"
+  | "turnstilePending"
+  | "network"
+  | "turnstileLoad"}`;
+
+const API_ERROR: Record<string, ErrorKey> = {
+  invalid: "takedown.errors.invalid",
+  turnstile_failed: "takedown.errors.turnstileFailed",
+  rate_limited: "takedown.errors.rateLimited",
 };
 
 const field = "w-full rounded border-2 border-black bg-white px-3 py-2 text-black";
 
 export const TakedownForm: React.FC<{ api?: Api }> = ({ api = defaultApi }) => {
+  const { t } = useTranslation("legal");
   const ids = useId();
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [configFailed, setConfigFailed] = useState(false);
@@ -33,7 +42,7 @@ export const TakedownForm: React.FC<{ api?: Api }> = ({ api = defaultApi }) => {
   const [token, setToken] = useState<string | null>(null);
   const [resetKey, setResetKey] = useState(0);
   const [sending, setSending] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ErrorKey | null>(null);
   const [ticketId, setTicketId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -65,19 +74,19 @@ export const TakedownForm: React.FC<{ api?: Api }> = ({ api = defaultApi }) => {
       const path = issue?.path[0];
       setError(
         affected === ""
-          ? "Tell us whether you are the person affected."
+          ? "takedown.errors.affected"
           : path === "contactEmail"
-            ? "Enter a valid email address."
+            ? "takedown.errors.email"
             : path === "description"
-              ? "Describe the content in at least 20 characters."
+              ? "takedown.errors.description"
               : path === "goodFaithStatement"
-                ? "Confirm the good faith statement."
-                : ERROR_TEXT.invalid,
+                ? "takedown.errors.goodFaith"
+                : "takedown.errors.invalid",
       );
       return;
     }
     if (siteKey && !token) {
-      setError("Wait for the security check to finish.");
+      setError("takedown.errors.turnstilePending");
       return;
     }
     setSending(true);
@@ -86,11 +95,11 @@ export const TakedownForm: React.FC<{ api?: Api }> = ({ api = defaultApi }) => {
       const res = await api.submitTakedown(parsed.data);
       if (res.ok) setTicketId(res.ticketId);
       else {
-        setError(ERROR_TEXT[res.error] ?? ERROR_TEXT.invalid);
+        setError(API_ERROR[res.error] ?? "takedown.errors.invalid");
         setResetKey((n) => n + 1);
       }
     } catch {
-      setError("Cannot reach Chizzy. Check your connection and try again.");
+      setError("takedown.errors.network");
       setResetKey((n) => n + 1);
     } finally {
       setSending(false);
@@ -100,10 +109,9 @@ export const TakedownForm: React.FC<{ api?: Api }> = ({ api = defaultApi }) => {
   if (ticketId) {
     return (
       <div role="status" data-testid="takedown-success" className="bg-green-50 border-2 border-green-600 rounded p-4 my-4">
-        <p className="font-bold">We received your request.</p>
+        <p className="font-bold">{t("takedown.success.title")}</p>
         <p>
-          Your reference is <strong data-testid="takedown-ticket">{ticketId}</strong>. We will contact you at the email
-          address you gave us.
+          <Trans t={t} i18nKey="takedown.success.body" values={{ ticketId }} components={{ ref: <strong data-testid="takedown-ticket" /> }} />
         </p>
       </div>
     );
@@ -112,7 +120,7 @@ export const TakedownForm: React.FC<{ api?: Api }> = ({ api = defaultApi }) => {
   if (configFailed) {
     return (
       <p role="alert" className="text-red-700">
-        The form cannot load right now. Check your connection and reload the page.
+        {t("takedown.configFailed")}
       </p>
     );
   }
@@ -120,37 +128,37 @@ export const TakedownForm: React.FC<{ api?: Api }> = ({ api = defaultApi }) => {
   return (
     <form onSubmit={submit} noValidate className="space-y-4 my-4" data-testid="takedown-form">
       <fieldset className="space-y-1">
-        <legend className="font-bold">What is the content?</legend>
+        <legend className="font-bold">{t("takedown.form.kind")}</legend>
         {KINDS.map((k) => (
-          <label key={k.value} className="flex items-start gap-2">
+          <label key={k} className="flex items-start gap-2">
             <input
               type="radio"
               name={`${ids}-kind`}
-              value={k.value}
-              checked={kind === k.value}
-              onChange={() => setKind(k.value)}
+              value={k}
+              checked={kind === k}
+              onChange={() => setKind(k)}
               className="mt-1"
             />
-            <span>{k.label}</span>
+            <span>{t(`takedown.kinds.${k}`)}</span>
           </label>
         ))}
       </fieldset>
 
       <fieldset className="space-y-1">
-        <legend className="font-bold">Are you the person affected?</legend>
+        <legend className="font-bold">{t("takedown.form.affected")}</legend>
         <label className="flex items-center gap-2">
           <input type="radio" name={`${ids}-affected`} checked={affected === "yes"} onChange={() => setAffected("yes")} />
-          <span>Yes, it is me</span>
+          <span>{t("takedown.form.affectedYes")}</span>
         </label>
         <label className="flex items-center gap-2">
           <input type="radio" name={`${ids}-affected`} checked={affected === "no"} onChange={() => setAffected("no")} />
-          <span>No, I am reporting for someone else or as their representative</span>
+          <span>{t("takedown.form.affectedNo")}</span>
         </label>
       </fieldset>
 
       <div>
         <label htmlFor={`${ids}-email`} className="font-bold block">
-          Your email address
+          {t("takedown.form.email")}
         </label>
         <input
           id={`${ids}-email`}
@@ -166,7 +174,7 @@ export const TakedownForm: React.FC<{ api?: Api }> = ({ api = defaultApi }) => {
 
       <div>
         <label htmlFor={`${ids}-description`} className="font-bold block">
-          Describe the content
+          {t("takedown.form.description")}
         </label>
         <textarea
           id={`${ids}-description`}
@@ -178,13 +186,13 @@ export const TakedownForm: React.FC<{ api?: Api }> = ({ api = defaultApi }) => {
           aria-describedby={`${ids}-description-hint`}
         />
         <p id={`${ids}-description-hint`} className="text-xs text-gray-600">
-          Do not attach or paste the image itself. Describe it so we can find it (at least 20 characters).
+          {t("takedown.form.descriptionHint")}
         </p>
       </div>
 
       <div>
         <label htmlFor={`${ids}-location`} className="font-bold block">
-          Where and when did it appear? (optional)
+          {t("takedown.form.location")}
         </label>
         <input
           id={`${ids}-location`}
@@ -192,7 +200,7 @@ export const TakedownForm: React.FC<{ api?: Api }> = ({ api = defaultApi }) => {
           maxLength={500}
           value={location}
           onChange={(e) => setLocation(e.target.value)}
-          placeholder="Approximate date and time, a display name, anything that helps"
+          placeholder={t("takedown.form.locationPlaceholder")}
         />
       </div>
 
@@ -204,10 +212,7 @@ export const TakedownForm: React.FC<{ api?: Api }> = ({ api = defaultApi }) => {
           checked={goodFaith}
           onChange={(e) => setGoodFaith(e.target.checked)}
         />
-        <span>
-          I believe in good faith that this content was shared without the consent of the person shown, or otherwise
-          breaks the law or Chizzy's rules, and the information in this request is accurate.
-        </span>
+        <span>{t("takedown.form.goodFaith")}</span>
       </label>
 
       {siteKey && (
@@ -216,44 +221,38 @@ export const TakedownForm: React.FC<{ api?: Api }> = ({ api = defaultApi }) => {
           action="takedown"
           resetKey={resetKey}
           onToken={setToken}
-          onError={() => setError("The security check could not load. Check your connection and try again.")}
+          onError={() => setError("takedown.errors.turnstileLoad")}
         />
       )}
 
       {error && (
         <p role="alert" className="text-red-700 text-sm" data-testid="takedown-error">
-          {error}
+          {t(error)}
         </p>
       )}
 
       <button type="submit" className="retro-button" disabled={sending || !config || (siteKey !== null && !token)} data-testid="takedown-submit">
-        {sending ? "Sending..." : "Send request"}
+        {sending ? t("takedown.form.sending") : t("takedown.form.submit")}
       </button>
     </form>
   );
 };
 
-const Takedown = () => (
-  <LegalPage title="Report content for removal">
-    <p>
-      Use this form to ask us to remove an intimate image shared without consent, sexual content involving a minor,
-      impersonation, or other unlawful content connected to Chizzy.
-    </p>
-    <ul>
-      <li>
-        Chizzy does not record calls. Content we may hold is an image captured when a call was reported. Profile photos
-        are passed between partners during a match and not kept after it.
-      </li>
-      <li>
-        For intimate images shared without consent, the law (the US TAKE IT DOWN Act, and India's IT Rules) sets short
-        deadlines for removal after a valid request. This form starts that process.
-      </li>
-      <li>
-        If a child is in danger, contact the police or the helplines on our <Link to="/safety">Safety page</Link> first.
-      </li>
-    </ul>
-    <TakedownForm />
-  </LegalPage>
-);
+const Takedown = () => {
+  const { t } = useTranslation("legal");
+  return (
+    <LegalPage title={t("takedown.title")}>
+      <p>{t("takedown.intro")}</p>
+      <ul>
+        <li>{t("takedown.noRecording")}</li>
+        <li>{t("takedown.deadlines")}</li>
+        <li>
+          <Trans t={t} i18nKey="takedown.childInDanger" components={{ safety: <Link to="/safety" /> }} />
+        </li>
+      </ul>
+      <TakedownForm />
+    </LegalPage>
+  );
+};
 
 export default Takedown;

@@ -1,0 +1,84 @@
+{
+  "loading": "Loading",
+  "actions": {
+    "tryAgain": "Try again",
+    "backToHome": "Back to home"
+  },
+  "form": {
+    "title": "Before you start",
+    "titleReturning": "Welcome back",
+    "intro": "Chizzy is for adults only. We check your age before turning on your camera.",
+    "introReturning": "Confirm you are a person to continue.",
+    "dob": {
+      "legend": "Date of birth",
+      "hint": "For example 27 3 1999. We do not store your date of birth, only whether you are 18 or older.",
+      "day": "Day",
+      "month": "Month",
+      "year": "Year",
+      "errors": {
+        "incomplete": "Enter your full date of birth.",
+        "notNumbers": "Use numbers, for example 27 3 1999.",
+        "notReal": "That date does not exist.",
+        "notPlausible": "Enter your real date of birth."
+      }
+    },
+    "attest": "I am 18 or older.",
+    "tos": "I agree to the <terms>Terms</terms> and the <guidelines>Community Guidelines</guidelines>, and I have read the <privacy>Privacy Policy</privacy>.",
+    "continue": "Continue"
+  },
+  "notices": {
+    "dobAgain": "Please confirm your date of birth again.",
+    "tosChanged": "Our Terms have changed. Please review them and accept them again to continue."
+  },
+  "errors": {
+    "rateLimited": "Too many tries. Wait a minute and try again.",
+    "invalid": "We could not accept that. Check your date of birth and try again.",
+    "unreachable": "Cannot reach Chizzy. Check your connection and try again.",
+    "turnstile": "The security check could not load. Check your connection and try again."
+  },
+  "reverify": {
+    "aria": "Confirm to continue"
+  },
+  "helplines": {
+    "title": "If you need to talk to someone or you are not safe:",
+    "india": "India: Childline <strong>1098</strong>, Cyber Crime Helpline <strong>1930</strong>",
+    "unitedStates": "United States: call or text <strong>988</strong> (Suicide and Crisis Lifeline). To report online sexual exploitation of a child, use the NCMEC CyberTipline at report.cybertip.org or 1-800-843-5678.",
+    "anywhere": "Anywhere: call your local emergency number if you are in danger.",
+    "more": "More on our <safety>Safety page</safety>."
+  },
+  "underage": {
+    "title": "Chizzy is for adults only",
+    "body": "You need to be 18 or older to use Chizzy, so it is locked on this device. This is not something you did wrong."
+  },
+  "region": {
+    "title": "Chizzy is not available in your country yet",
+    "body": "We are launching one region at a time. Using a VPN to get around this breaks our Terms.",
+    "bodyCountry": "We are launching one region at a time and cannot open in {{country}} yet. Using a VPN to get around this breaks our Terms."
+  },
+  "closed": {
+    "titleOpen": "Chizzy is open {{staffedHours}}",
+    "titleClosed": "Chizzy is closed right now",
+    "body": "We only match people while our safety team is on duty, so someone is around to handle reports.",
+    "opensIn": "Opens in <countdown></countdown>",
+    "autoContinue": "This page continues by itself when we open.",
+    "roomAria": "Chizzy is closed"
+  },
+  "paused": {
+    "title": "New sessions are paused",
+    "body": "Chizzy is not taking new visitors right now. Please try again later."
+  },
+  "turnstileFailed": {
+    "title": "We could not confirm you are a person",
+    "body": "The security check did not pass. This can happen with a VPN, an ad blocker or a slow connection. Try again, or switch networks."
+  },
+  "loadError": {
+    "title": "Cannot reach Chizzy",
+    "body": "Check your connection and try again."
+  },
+  "duration": {
+    "days": "{{days}} d {{hours}} h",
+    "hours": "{{hours}} h {{minutes}} min",
+    "minutes": "{{minutes}} min {{seconds}} s",
+    "seconds": "{{seconds}} s"
+  }
+}
