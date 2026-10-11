@@ -4,6 +4,7 @@
  * that. Each run() transfers a small frame to the worker and waits for the
  * verdict, with a timeout so a stuck model cannot hold the blur gate forever.
  */
+import { pageIdle } from "@/lib/idle";
 import type { FaceResult, NsfwResult, WorkerRequest, WorkerResponse } from "./workerProtocol";
 
 export type ModelStatus = "idle" | "loading" | "ready" | "failed";
@@ -155,9 +156,19 @@ export function nsfwModel(): ModelClient<NsfwResult> {
   return nsfwClient;
 }
 
-/** Starts downloading and compiling both models (call during onboarding). */
+/** Upper bound on how long preloadModels() waits for an idle moment after the page has loaded. */
+const PRELOAD_IDLE_TIMEOUT_MS = 2000;
+
+/**
+ * Starts downloading and compiling both models (call from the start screen).
+ * Deferred until the page is idle so the ~15 MB of models and their wasm
+ * compile never compete with the first paint; a call that starts earlier
+ * loads them at once through the hooks' own load() calls.
+ */
 export function preloadModels(): void {
   if (typeof Worker === "undefined") return;
-  void faceModel().load();
-  void nsfwModel().load();
+  void pageIdle(PRELOAD_IDLE_TIMEOUT_MS).then(() => {
+    void faceModel().load();
+    void nsfwModel().load();
+  });
 }

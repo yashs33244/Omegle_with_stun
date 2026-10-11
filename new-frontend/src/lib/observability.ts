@@ -2,10 +2,13 @@
  * Error tracking (Sentry) and product analytics (PostHog), both optional.
  *
  * Nothing loads unless /api/config returns a key: the SDKs are separate chunks
- * fetched on demand. PostHog runs cookieless (memory persistence), without
- * autocapture or session recording, and IP properties are dropped before
- * sending. Sentry events are scrubbed of names, chat text, photos and evidence.
+ * fetched on demand, and only once the page is idle so they never compete with
+ * the first paint; events and errors raised before then are queued. PostHog
+ * runs cookieless (memory persistence), without autocapture or session
+ * recording, and IP properties are dropped before sending. Sentry events are
+ * scrubbed of names, chat text, photos and evidence.
  */
+import { pageIdle } from "@/lib/idle";
 import type { PublicConfig } from "@/lib/protocol";
 
 export type FunnelEvent =
@@ -28,8 +31,12 @@ let captureErrorImpl: CaptureError | null = null;
 let started = false;
 /** Events fired before PostHog finished loading. Dropped if it never loads. */
 let queue: Array<[FunnelEvent, EventProps | undefined]> = [];
+/** Errors raised before Sentry finished loading. Dropped if it never loads. */
+let errorQueue: unknown[] = [];
 const QUEUE_MAX = 50;
 const onceFired = new Set<string>();
+/** Upper bound on how long the SDK loads wait for an idle moment after the page has loaded. */
+const IDLE_TIMEOUT_MS = 3000;
 
 /** Records a funnel event. Safe to call from anywhere; a no-op without a PostHog key. */
 export function track(event: FunnelEvent, props?: EventProps): void {
@@ -49,7 +56,11 @@ export function trackOnce(event: FunnelEvent, props?: EventProps): void {
 
 /** Reports an unexpected error to Sentry when it is configured. */
 export function captureError(error: unknown): void {
-  captureErrorImpl?.(error);
+  if (captureErrorImpl) {
+    captureErrorImpl(error);
+    return;
+  }
+  if (errorQueue.length < QUEUE_MAX) errorQueue.push(error);
 }
 
 /* ------------------------------------------------------------------ */
@@ -141,6 +152,9 @@ async function initSentry(dsn: string): Promise<void> {
     beforeBreadcrumb: (crumb) => (DROPPED_BREADCRUMBS.has(crumb.category ?? "") ? null : crumb),
   });
   captureErrorImpl = (error) => Sentry.captureException(error);
+  const pending = errorQueue;
+  errorQueue = [];
+  pending.forEach((error) => captureErrorImpl?.(error));
 }
 
 async function initPosthog(key: string, host: string | null): Promise<void> {
@@ -184,14 +198,16 @@ async function initPosthog(key: string, host: string | null): Promise<void> {
 export async function initObservability(config: Pick<PublicConfig, "sentryDsn" | "posthogKey" | "posthogHost">): Promise<void> {
   if (started) return;
   started = true;
-  const jobs: Promise<void>[] = [];
-  if (config.sentryDsn) jobs.push(initSentry(config.sentryDsn));
-  if (config.posthogKey) {
-    jobs.push(initPosthog(config.posthogKey, config.posthogHost));
-  } else {
+  if (!config.posthogKey) {
     queue = [];
     capture = () => {};
   }
+  if (!config.sentryDsn) errorQueue = [];
+  if (!config.sentryDsn && !config.posthogKey) return;
+  await pageIdle(IDLE_TIMEOUT_MS);
+  const jobs: Promise<void>[] = [];
+  if (config.sentryDsn) jobs.push(initSentry(config.sentryDsn));
+  if (config.posthogKey) jobs.push(initPosthog(config.posthogKey, config.posthogHost));
   const results = await Promise.allSettled(jobs);
   for (const r of results) {
     if (r.status === "rejected") console.warn("Observability failed to start", r.reason);

@@ -17,6 +17,7 @@ npm is the package manager for this folder (`package-lock.json`).
 | `npm run lint` | ESLint |
 | `npm test` | Vitest unit and component tests (jsdom) |
 | `npm run build` | production build into `dist/` |
+| `npm run analyze` | production build plus `dist/stats.html`, a treemap of what each chunk contains |
 
 ## Configuration
 
