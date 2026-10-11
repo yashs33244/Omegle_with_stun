@@ -3,6 +3,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { CAPTIONS, SPARK, type CaptionSegmentPayload } from "../../src/protocol";
+import { SPARK_PROMPTS } from "../../src/spark/catalog";
 import { activePair, arrives, delay, hello, next, profile, sendHello, startServer, type TestServer } from "../helpers";
 
 let ts: TestServer;
@@ -25,7 +26,8 @@ describe("spark", () => {
     const [a, b] = await Promise.all([shownA, shownB]);
     expect(a).toEqual({ roomId, promptId: ack.promptId, from: "you", at: a.at });
     expect(b).toEqual({ roomId, promptId: ack.promptId, from: "partner", at: a.at });
-    expect(ack.promptId).toMatch(/^travel-\d{2}$/);
+    // A shared topic wins; prompts can carry several topics (general-12 is also travel).
+    expect(SPARK_PROMPTS.find((prompt) => prompt.id === ack.promptId)?.topics).toContain("travel");
   });
 
   test("a second request inside the room cooldown is rate limited for either member", async () => {

@@ -79,7 +79,7 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
               className="flex min-w-0 max-w-full items-center gap-2 rounded-full bg-black/50 py-1.5 pl-2 pr-3 text-white backdrop-blur-sm"
               data-testid="partner-chip"
             >
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gray-700">
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gray-700 max-[379px]:hidden">
                 <UserRound className="h-4 w-4" aria-hidden="true" />
               </span>
               <span className="min-w-0 truncate text-sm font-semibold">{partner.name}</span>
@@ -124,9 +124,10 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
           )}
           <div
             key={coinBump}
+            role="status"
             aria-label={coins === null ? t("header.coinsLoading") : t("header.coins", { coins })}
             className={`coin-counter flex items-center gap-1 rounded-full border border-yellow-500 bg-black/50 px-2 py-1 backdrop-blur-sm ${
-              coinBump > 0 ? "animate-coin-pop" : ""
+              coinBump > 0 ? "animate-coin-pop motion-reduce:animate-none" : ""
             }`}
           >
             <Coins className="h-4 w-4 text-yellow-400" aria-hidden="true" />

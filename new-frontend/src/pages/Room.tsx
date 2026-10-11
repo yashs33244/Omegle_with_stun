@@ -83,8 +83,8 @@ const FAILED_SKIP_STAGGER_MS = 4_000;
 
 /** The local picture-in-picture starts under the top bar (which pads for the notch itself). */
 const PIP_START_TOP_PX = 72;
-/** Landscape phones: the action rail (two 56 px columns) sits on the right edge. */
-const PIP_START_RIGHT_RAIL_PX = 156;
+/** Landscape phones: the action rail (icons in two 56 px columns, then Stop/Next/Chat) sits on the right edge. */
+const PIP_START_RIGHT_RAIL_PX = 228;
 
 type NoticeKey = `notice.${"rateLimited" | "notInRoom" | "invalidPayload" | "internal"}`;
 
@@ -122,7 +122,7 @@ const TextOnlyPanel: React.FC<{
   const { t } = useTranslation("room");
   return (
     // Portrait phones: the chat sheet starts TEXT_ONLY_SHEET_TOP below the top; this panel keeps to the band above it.
-    <div className="absolute inset-0 z-[5] flex flex-col items-center space-y-2 bg-gray-900 px-6 pt-[calc(env(safe-area-inset-top)+4.5rem)] text-center max-lg:landscape:justify-center max-lg:landscape:pl-[52vw] max-lg:landscape:pr-36 lg:justify-center lg:space-y-3">
+    <div className="absolute inset-0 z-[5] flex flex-col items-center space-y-2 bg-gray-900 px-6 pt-[calc(env(safe-area-inset-top)+4.5rem)] text-center max-lg:landscape:justify-center max-lg:landscape:pl-[52vw] max-lg:landscape:pr-[14.5rem] lg:justify-center lg:space-y-3">
       <MessageCircle className="hidden h-12 w-12 text-yellow-400 max-lg:landscape:block lg:block lg:h-16 lg:w-16" aria-hidden="true" />
       <div className="space-y-1 text-white">
         <h3 className="text-xl font-bold">{t("textOnly.title")}</h3>

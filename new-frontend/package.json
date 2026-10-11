@@ -5,8 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && node scripts/prerender-meta.mjs",
+    "build": "vite build && node scripts/prerender-meta.mjs && node scripts/write-headers.mjs",
     "build:dev": "vite build --mode development",
+    "analyze": "ANALYZE=1 vite build",
     "typecheck": "tsc -p tsconfig.app.json --noEmit && tsc -p tsconfig.e2e.json --noEmit",
     "lint": "eslint .",
     "test": "vitest run",
@@ -38,6 +39,7 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@eslint/js": "^9.9.0",
     "@playwright/test": "^1.63.0",
     "@testing-library/dom": "^10.4.2",
@@ -55,6 +57,7 @@
     "globals": "^15.9.0",
     "jsdom": "^25.0.1",
     "postcss": "^8.4.47",
+    "rollup-plugin-visualizer": "^7.1.1",
     "tailwindcss": "^3.4.11",
     "typescript": "^5.5.3",
     "typescript-eslint": "^8.0.1",

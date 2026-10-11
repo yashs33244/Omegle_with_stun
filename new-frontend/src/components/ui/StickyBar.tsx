@@ -8,6 +8,9 @@
  * - `position`: "bottom" (default) or "top".
  * - `tone`: "dark" (default: gray-900 with a black top border), "glass"
  *   (translucent black with blur, for use over video) or "light" (white).
+ * - `aria-label`: names the bar and makes it a `region` landmark, so screen
+ *   reader users can jump to the primary action. Omit it only when the bar
+ *   sits inside another landmark (for example `main`).
  * - `className`: extra classes; `data-testid`.
  *
  * The bottom variant pads for the home indicator (`--safe-bottom`), the top
@@ -21,6 +24,7 @@ export interface StickyBarProps {
   children: React.ReactNode;
   position?: "bottom" | "top";
   tone?: "dark" | "glass" | "light";
+  "aria-label"?: string;
   className?: string;
   "data-testid"?: string;
 }
@@ -35,10 +39,13 @@ export const StickyBar: React.FC<StickyBarProps> = ({
   children,
   position = "bottom",
   tone = "dark",
+  "aria-label": ariaLabel,
   className,
   "data-testid": testId,
 }) => (
   <div
+    role={ariaLabel ? "region" : undefined}
+    aria-label={ariaLabel}
     data-testid={testId}
     className={cn(
       "sticky z-40 px-4",

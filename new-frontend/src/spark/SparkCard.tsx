@@ -39,13 +39,14 @@ export const SparkCard: React.FC<SparkCardProps> = ({ spark }) => {
   const text = spark.text === null ? t("card.loading") : spark.text || t("card.unavailable");
 
   return (
+    // Phones: left of the local picture-in-picture column (and the landscape rail); desktop: centred.
     <div
       role="status"
       aria-live="polite"
       data-testid="spark-card"
       data-prompt-id={card.promptId}
       data-from={card.from}
-      className="fixed left-1/2 z-[60] w-[calc(100%-1.5rem)] max-w-md -translate-x-1/2 overflow-hidden rounded-xl border-2 border-black bg-gray-900/95 text-white shadow-[4px_4px_0_0_#000]"
+      className="fixed left-3 right-[7.5rem] z-[60] overflow-hidden rounded-xl border-2 border-black bg-gray-900/95 text-white shadow-[4px_4px_0_0_#000] max-lg:landscape:right-auto max-lg:landscape:w-[min(28rem,50vw)] lg:left-1/2 lg:right-auto lg:w-[calc(100%-1.5rem)] lg:max-w-md lg:-translate-x-1/2"
       style={{ top: "max(4rem, env(safe-area-inset-top))" }}
     >
       <div className="flex items-start gap-3 p-4">
@@ -66,7 +67,7 @@ export const SparkCard: React.FC<SparkCardProps> = ({ spark }) => {
               onClick={spark.request}
               disabled={cooling || !spark.ready}
               data-testid="spark-another"
-              className="min-h-[44px] rounded-lg"
+              className="min-h-[44px] rounded-lg disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:translate-y-0 disabled:hover:shadow"
             >
               {cooling ? t("button.cooldown", { seconds: Math.ceil(remaining / 1000) }) : t("card.another")}
             </Button>

@@ -36,8 +36,13 @@ const Shell: React.FC<{ children: React.ReactNode; footer?: React.ReactNode; tes
   </div>
 );
 
+/** The one action of a waiting-family screen: the same pill as Stop searching, in yellow. */
 const PrimaryButton: React.FC<{ onClick: () => void; children: React.ReactNode }> = ({ onClick, children }) => (
-  <button type="button" onClick={onClick} className="retro-button min-h-[3.5rem] text-lg">
+  <button
+    type="button"
+    onClick={onClick}
+    className="flex min-h-[3.5rem] items-center justify-center rounded-full border-2 border-black bg-yellow-400 px-6 text-lg font-bold text-black shadow-[0_4px_0_#000] transition-transform hover:bg-yellow-300 active:translate-y-0.5 active:shadow-none focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
+  >
     {children}
   </button>
 );
@@ -144,8 +149,8 @@ export const WaitingPanel: React.FC<WaitingPanelProps> = ({
       }
     >
       <div className="relative mx-auto h-24 w-24">
-        <span className="absolute inset-0 animate-ping rounded-full bg-yellow-400/30" aria-hidden="true" />
-        <span className="absolute -inset-2 animate-pulse rounded-full border-2 border-yellow-400/60" aria-hidden="true" />
+        <span className="absolute inset-0 animate-ping rounded-full bg-yellow-400/30 motion-reduce:animate-none" aria-hidden="true" />
+        <span className="absolute -inset-2 animate-pulse rounded-full border-2 border-yellow-400/60 motion-reduce:animate-none" aria-hidden="true" />
         {photo ? (
           <img src={photo} alt={t("waiting.profileAlt")} className="relative h-24 w-24 rounded-full border-4 border-yellow-400 object-cover" />
         ) : (
@@ -162,7 +167,7 @@ export const WaitingPanel: React.FC<WaitingPanelProps> = ({
         )}
         <p className="text-2xl font-bold">{t("waiting.looking")}</p>
         <p className="text-sm text-gray-300" data-testid="relax-hint" data-step={relaxStep}>
-          {t(hintKey, { topics: formatTopics(topics) })}
+          {t(hintKey, { topics: formatTopics(t, topics) })}
         </p>
       </div>
       {online !== null && (

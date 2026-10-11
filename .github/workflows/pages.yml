@@ -1,0 +1,64 @@
+name: Cloudflare Pages
+
+# Builds new-frontend and uploads dist/ to the Cloudflare Pages project
+# "chizzy" (direct upload). Opt-in: nothing runs until the PAGES_ENABLED
+# repository variable is "true" (secrets cannot be read in `if:`, so a
+# variable is the switch). Every variable and secret used here is documented
+# in DEPLOYMENT.md "Cloudflare Pages". The same push also runs deploy.yml,
+# which includes the full CI; this workflow re-runs only the frontend checks
+# so a broken build is never uploaded.
+on:
+  push:
+    branches: [new-v]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # Same Node as ci.yml and new-frontend/Dockerfile.
+  NODE_VERSION: "22.23.3"
+
+jobs:
+  deploy:
+    name: Build and deploy to Pages
+    if: vars.PAGES_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: new-frontend
+    env:
+      VITE_API_URL: ${{ vars.PAGES_API_URL || 'https://chizzy-api.onrender.com' }}
+      VITE_SITE_URL: ${{ vars.PAGES_SITE_URL || 'https://chizzy.pages.dev' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: new-frontend/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      # Writes dist/ including _headers (CSP connect-src from VITE_API_URL) and
+      # the prerendered route shells; see scripts/write-headers.mjs.
+      - run: npm run build
+      - name: Headers rendered for the configured API origin
+        run: grep -F "connect-src 'self' ${VITE_API_URL%/} " dist/_headers > /dev/null
+      - name: Deploy
+        uses: cloudflare/wrangler-action@953926a2e2182532811c01a25e53647d93bf07c0 # v4.1.3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: new-frontend
+          wranglerVersion: "4.149.0"
+          # The branch decides production vs preview: the project's production
+          # branch is new-v (DEPLOYMENT.md), a dispatch from another branch
+          # gets a preview URL.
+          command: pages deploy dist --project-name chizzy --branch ${{ github.ref_name }}

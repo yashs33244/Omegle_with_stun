@@ -1,11 +1,12 @@
 #!/usr/bin/env sh
 # Fails if the runtime and image versions pinned in .github/workflows/ci.yml
-# differ from the ones the images and compose file use. Dependabot bumps the
+# differ from the ones the images, compose file and pages.yml use. Dependabot bumps the
 # Dockerfiles and docker-compose.yml but not these copies, and CI would then
 # keep testing the old versions.
 set -eu
 root="$(cd "$(dirname "$0")/.." && pwd)"
 ci="$root/.github/workflows/ci.yml"
+pages="$root/.github/workflows/pages.yml"
 compose="$root/docker-compose.yml"
 failed=0
 
@@ -32,6 +33,8 @@ same() {
 ci_node=$(pins 'NODE_VERSION: "[^"]*"' "$ci" | sed 's/.*: "\(.*\)"/\1/')
 docker_node=$(pins 'FROM node:[0-9][0-9.]*' "$root/backend/Dockerfile" "$root/new-frontend/Dockerfile" | sed 's/.*://')
 same "Node" "$ci_node" "$docker_node" "the Dockerfiles"
+pages_node=$(pins 'NODE_VERSION: "[^"]*"' "$pages" | sed 's/.*: "\(.*\)"/\1/')
+same "Node (pages.yml)" "$ci_node" "$pages_node" "pages.yml"
 
 ci_bun=$(pins 'BUN_VERSION: "[^"]*"' "$ci" | sed 's/.*: "\(.*\)"/\1/')
 docker_bun=$(pins 'FROM oven/bun:[0-9][0-9.]*' "$root/backend/Dockerfile" | sed 's/.*://')
@@ -47,4 +50,4 @@ if [ "$failed" != 0 ]; then
   echo "Update the pins in ci.yml to match." >&2
   exit 1
 fi
-echo "ci.yml pins match the Dockerfiles and docker-compose.yml"
+echo "ci.yml pins match the Dockerfiles, docker-compose.yml and pages.yml"

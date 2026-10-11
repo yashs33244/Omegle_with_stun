@@ -33,7 +33,7 @@ describe("LanguageSwitcher", () => {
     expect(document.documentElement.lang).toBe("hi");
     expect(localStorage.getItem(LANG_STORAGE_KEY)).toBe("hi");
     expect(screen.getByTestId("language-hi")).toHaveAttribute("aria-pressed", "true");
-    expect(helplines).toHaveTextContent("भारत: साइबर अपराध हेल्पलाइन 1930");
+    expect(helplines).toHaveTextContent("भारत: साइबर क्राइम हेल्पलाइन 1930");
     expect(screen.getByRole("link", { name: "1930" })).toHaveAttribute("href", "tel:1930");
 
     await userEvent.click(screen.getByTestId("language-en"));

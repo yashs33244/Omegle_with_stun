@@ -94,13 +94,18 @@ export const MatchPrompt: React.FC<MatchPromptProps> = ({
   const hasPhoto = !!partner.photo?.startsWith("data:image/");
 
   return (
-    <div className="absolute inset-0 z-20 flex flex-col bg-black lg:items-center lg:justify-center" data-testid="match-prompt">
+    // Portrait phones: the card rises from the bottom over the photo. Landscape phones and desktop: a centred card.
+    <div
+      className="absolute inset-0 z-20 flex flex-col bg-black max-lg:landscape:items-center max-lg:landscape:justify-center lg:items-center lg:justify-center"
+      data-testid="match-prompt"
+    >
       <div className="absolute inset-0 overflow-hidden">
         {hasPhoto && partner.photo ? (
           // Blurred on this device until the on-device classifier passes it.
           <PartnerPhoto photo={partner.photo} alt={t("match.photoAlt", { name: partner.name })} className="h-full w-full object-cover" />
         ) : (
-          <div className="flex h-full w-full items-center justify-center bg-gray-800">
+          // The placeholder sits in the band above the card on portrait phones.
+          <div className="flex h-full w-full items-start justify-center bg-gray-800 pt-[22vh] max-lg:landscape:items-center max-lg:landscape:pt-0 lg:items-center lg:pt-0">
             <UserRound className="h-32 w-32 text-gray-500" aria-hidden="true" />
           </div>
         )}
@@ -108,7 +113,7 @@ export const MatchPrompt: React.FC<MatchPromptProps> = ({
       </div>
 
       <div
-        className="relative mt-auto w-full rounded-t-2xl border-t-2 border-black bg-gray-900/95 px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4 text-white shadow-[0_-4px_0_#000] backdrop-blur lg:mt-0 lg:max-w-md lg:rounded-2xl lg:border-2 lg:pb-5 lg:shadow-[0_6px_0_#000]"
+        className="relative mt-auto w-full rounded-t-2xl border-t-2 border-black bg-gray-900/95 px-5 pb-[max(1.25rem,env(safe-area-inset-bottom))] pt-4 text-white shadow-[0_-4px_0_#000] backdrop-blur max-lg:landscape:mt-0 max-lg:landscape:max-w-md max-lg:landscape:rounded-2xl max-lg:landscape:border-2 max-lg:landscape:pb-4 max-lg:landscape:pt-3 max-lg:landscape:shadow-[0_6px_0_#000] lg:mt-0 lg:max-w-md lg:rounded-2xl lg:border-2 lg:pb-5 lg:shadow-[0_6px_0_#000]"
         data-testid="match-card"
       >
         <div className="flex items-start gap-3">
@@ -150,7 +155,7 @@ export const MatchPrompt: React.FC<MatchPromptProps> = ({
               ))}
             </div>
           )}
-          <p className="text-sm text-gray-400">{t("match.interestedIn", { topics: formatTopics(partner.topics) })}</p>
+          <p className="text-sm text-gray-400">{t("match.interestedIn", { topics: formatTopics(t, partner.topics) })}</p>
           {isFriend && (
             <p className="flex items-center gap-1 text-sm text-pink-400">
               <Heart className="h-4 w-4" aria-hidden="true" /> {t("match.friends")}

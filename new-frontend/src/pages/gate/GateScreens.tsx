@@ -159,7 +159,7 @@ export const ClosedContent: React.FC<ClosedScreenProps> = ({
           />
         </p>
       )}
-      <p className="text-xs text-gray-500">{t("closed.autoContinue")}</p>
+      <p className="text-xs text-gray-600">{t("closed.autoContinue")}</p>
       {children}
     </div>
   );
