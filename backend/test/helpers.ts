@@ -3,12 +3,20 @@
  * socket.io clients with small await helpers.
  */
 import { randomUUID } from "node:crypto";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import Redis from "ioredis";
 import { io as ioClient, type Socket } from "socket.io-client";
 import { loadConfig, type Config } from "../src/config";
+import { RedisEnforcementStore } from "../src/enforcement/store";
 import { createLogger } from "../src/logger";
 import {
   PROTOCOL_VERSION,
+  TOS_VERSION,
   type ClientToServerEvents,
+  type SessionRequest,
+  type SessionResponse,
   type HelloAck,
   type HelloPayload,
   type Preferences,
@@ -23,10 +31,15 @@ import type { MatchStore } from "../src/store/MatchStore";
 
 export type Client = Socket<ServerToClientEvents, ClientToServerEvents>;
 
-/** Matchmaking timings shrunk so integration tests run in milliseconds. */
+/**
+ * Matchmaking timings shrunk so integration tests run in milliseconds.
+ * The session gate is OFF here so matchmaking tests can connect directly;
+ * gate tests pass `requireSession: true` and use createSession().
+ */
 export function testConfig(overrides: Partial<Config> = {}): Config {
   return {
     ...loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent", MAX_CONNECTIONS_PER_IP: "1000" }),
+    requireSession: false,
     // Tests open many sockets from one address in quick succession.
     connectRatePerIp: { capacity: 1_000_000, refillPerSec: 1_000_000 },
     matchAcceptTimeoutMs: 400,
@@ -35,6 +48,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     recheckIntervalMs: 40,
     coinIntervalMs: 150,
     friendAfterMs: 350,
+    evidenceDir: join(tmpdir(), `chizzy-test-evidence-${process.pid}`),
     ...overrides,
   };
 }
@@ -48,7 +62,7 @@ export function prefs(overrides: Partial<Preferences> = {}): Preferences {
 }
 
 export function hello(overrides: Partial<HelloPayload> = {}): HelloPayload {
-  return { protocolVersion: PROTOCOL_VERSION, deviceId: randomUUID(), profile: profile(), preferences: prefs(), ...overrides };
+  return { protocolVersion: PROTOCOL_VERSION, deviceId: randomUUID(), profile: profile(), preferences: prefs(), mode: "preview", ...overrides };
 }
 
 export interface TestServer {
@@ -57,7 +71,7 @@ export interface TestServer {
   config: Config;
   url: string;
   clients: Client[];
-  connect(opts?: { headers?: Record<string, string> }): Promise<Client>;
+  connect(opts?: { headers?: Record<string, string>; auth?: Record<string, unknown> }): Promise<Client>;
   close(): Promise<void>;
 }
 
@@ -70,23 +84,33 @@ export interface TestServer {
 export async function startServer(
   overrides: Partial<Config> = {},
   store?: MatchStore,
-  deps: Pick<ServerDeps, "configureIo"> = {},
+  deps: Pick<ServerDeps, "configureIo" | "fetch" | "restrictions" | "redis" | "flags" | "enforcement"> = {},
 ): Promise<TestServer> {
-  const config = testConfig(overrides);
-  const owned: { close(): Promise<void> }[] = [];
+  // Each server gets its own evidence directory, removed on close.
+  const evidenceDir = mkdtempSync(join(tmpdir(), "chizzy-evidence-"));
+  const config = testConfig({ evidenceDir, ...overrides });
+  const owned: { close(): Promise<void> }[] = [{ close: async () => rmSync(evidenceDir, { recursive: true, force: true }) }];
   if (!store && process.env.TEST_STORE === "redis" && process.env.REDIS_URL) {
     const redisUrl = process.env.REDIS_URL;
     const redisStore = await RedisStore.connect(redisUrl, { prefix: `test:${randomUUID()}:` });
     const adapter = await connectRedisAdapter(redisUrl, createLogger("silent"), `test:${randomUUID()}:socket.io`);
-    owned.push(redisStore, adapter);
+    // The shared feature-store client, as index.ts creates it in Redis mode.
+    const redis = new Redis(redisUrl, { maxRetriesPerRequest: 2 });
+    owned.push(redisStore, adapter, { close: async () => void (await redis.quit()) });
     store = redisStore;
-    deps = { configureIo: adapter.install, ...deps };
+    deps = {
+      configureIo: adapter.install,
+      redis,
+      ...deps,
+      enforcement: { store: new RedisEnforcementStore(redis, `test:${randomUUID()}:enf:`), ...deps.enforcement },
+    };
   }
   store ??= new MemoryStore();
   const server = createServer(config, { store, logger: createLogger("silent"), ...deps });
   const port = await server.listen(0, "127.0.0.1");
   const url = `http://127.0.0.1:${port}`;
   const clients: Client[] = [];
+  let closing: Promise<void> | undefined;
   return {
     server,
     store,
@@ -99,6 +123,7 @@ export async function startServer(
         forceNew: true,
         reconnection: false,
         extraHeaders: opts.headers,
+        auth: opts.auth,
       });
       clients.push(client);
       await new Promise<void>((resolve, reject) => {
@@ -107,12 +132,53 @@ export async function startServer(
       });
       return client;
     },
-    async close() {
-      for (const c of clients) c.disconnect();
-      await server.close();
-      for (const o of owned) await o.close();
+    // Idempotent: a test may close its server and the afterEach close it again,
+    // and a second quit() on the shared Redis client would reject.
+    close() {
+      closing ??= (async () => {
+        for (const c of clients) c.disconnect();
+        await server.close();
+        for (const o of owned) await o.close();
+      })();
+      return closing;
     },
   };
+}
+
+/** A valid POST /api/session body for a new adult device. */
+export function sessionBody(overrides: Partial<SessionRequest> = {}): SessionRequest {
+  return {
+    deviceId: randomUUID(),
+    fingerprint: "a".repeat(64),
+    turnstileToken: "test-token",
+    age: { dob: "1990-01-01", attest18: true, tosVersion: TOS_VERSION },
+    ...overrides,
+  };
+}
+
+export async function postSession(
+  ts: Pick<TestServer, "url">,
+  body: unknown,
+  headers: Record<string, string> = {},
+): Promise<{ status: number; body: SessionResponse }> {
+  const res = await fetch(`${ts.url}/api/session`, {
+    method: "POST",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: (await res.json()) as SessionResponse };
+}
+
+/** Creates a session for a new device and connects a client with its token. */
+export async function connectWithSession(
+  ts: TestServer,
+  overrides: Partial<SessionRequest> = {},
+): Promise<{ client: Client; deviceId: string; sessionToken: string }> {
+  const body = sessionBody(overrides);
+  const res = await postSession(ts, body);
+  if (!res.body.ok) throw new Error(`session refused: ${res.body.error}`);
+  const client = await ts.connect({ auth: { sessionToken: res.body.sessionToken } });
+  return { client, deviceId: body.deviceId, sessionToken: res.body.sessionToken };
 }
 
 /** Resolves with the next payload of `event`, or rejects after `ms`. */

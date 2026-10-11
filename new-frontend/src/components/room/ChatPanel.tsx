@@ -1,9 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Send, X } from "lucide-react";
+import { Send, ShieldAlert, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/retroui/Button";
 import { Input } from "@/components/retroui/Input";
 import { LIMITS } from "@/lib/protocol";
 import type { ChatEntry } from "@/hooks/useSignaling";
+import { RedactedText } from "@/components/safety/RedactedText";
 
 interface ChatPanelProps {
   messages: ChatEntry[];
@@ -14,6 +16,10 @@ interface ChatPanelProps {
   onSend: (text: string) => void;
   /** Called on every edit with whether the input currently has text. */
   onTyping: (typing: boolean) => void;
+  /** Message ids the server's chat guard redacted. */
+  redactedIds?: ReadonlySet<string>;
+  /** Inline safety notice after a safety:nudge in this call. */
+  safetyNotice?: string | null;
 }
 
 const TypingDots: React.FC<{ size: "sm" | "md" }> = ({ size }) => {
@@ -27,12 +33,15 @@ const TypingDots: React.FC<{ size: "sm" | "md" }> = ({ size }) => {
   );
 };
 
-export const PartnerTyping: React.FC = () => (
-  <div className="flex items-center justify-center gap-2 text-yellow-400" role="status" data-testid="partner-typing">
-    <TypingDots size="md" />
-    <span className="text-sm">Partner is typing...</span>
-  </div>
-);
+export const PartnerTyping: React.FC = () => {
+  const { t } = useTranslation("room");
+  return (
+    <div className="flex items-center justify-center gap-2 text-yellow-400" role="status" data-testid="partner-typing">
+      <TypingDots size="md" />
+      <span className="text-sm">{t("chat.partnerTyping")}</span>
+    </div>
+  );
+};
 
 export const ChatPanel: React.FC<ChatPanelProps> = ({
   messages,
@@ -42,14 +51,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   onClose,
   onSend,
   onTyping,
+  redactedIds,
+  safetyNotice,
 }) => {
+  const { t } = useTranslation("room");
   const [draft, setDraft] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
 
   // Auto scroll to the newest message.
   useEffect(() => {
     if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight;
-  }, [messages.length]);
+  }, [messages.length, safetyNotice]);
 
   const send = () => {
     const text = draft.trim();
@@ -70,12 +82,12 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
     >
       {/* Chat Header */}
       <div className="p-4 border-b border-gray-700 flex items-center justify-between">
-        <h3 className="font-medium text-white">{textOnly ? "Text Chat" : "Chat"}</h3>
+        <h3 className="font-medium text-white">{textOnly ? t("chat.textTitle") : t("chat.title")}</h3>
         <div className="flex items-center gap-2">
           {partnerTyping && !textOnly && (
             <span className="text-xs text-yellow-400 flex items-center gap-1" role="status" data-testid="partner-typing">
               <TypingDots size="sm" />
-              typing...
+              {t("chat.typing")}
             </span>
           )}
           {isMobile && !textOnly && (
@@ -83,7 +95,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               onClick={onClose}
               variant="outline"
               size="sm"
-              aria-label="Close chat"
+              aria-label={t("chat.close")}
               className="bg-gray-700 border-gray-600 text-white hover:bg-gray-600"
             >
               <X className="w-4 h-4" />
@@ -95,7 +107,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       {/* Messages */}
       <div ref={listRef} className="flex-1 p-4 overflow-y-auto space-y-3" aria-live="polite">
         {messages.length === 0 ? (
-          <p className="text-gray-400 text-center text-sm">Start a conversation! Say hello 👋</p>
+          <p className="text-gray-400 text-center text-sm">{t("chat.empty")}</p>
         ) : (
           messages.map((message) =>
             message.from === "system" ? (
@@ -115,12 +127,31 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                     message.from === "me" ? "bg-yellow-500 text-black" : "bg-gray-700 text-white"
                   } ${message.delivery === "pending" ? "opacity-70" : ""}`}
                 >
-                  {message.text}
+                  {redactedIds?.has(message.id) && message.from === "partner" ? (
+                    <RedactedText text={message.text} />
+                  ) : (
+                    message.text
+                  )}
                 </div>
-                {message.delivery === "failed" && <span className="text-xs text-red-400 mt-1">Not delivered</span>}
+                {redactedIds?.has(message.id) && (
+                  <span className="text-xs text-gray-400 mt-1" data-testid="redaction-note">
+                    {message.from === "me" ? t("chat.redactedMine") : t("chat.redactedTheirs")}
+                  </span>
+                )}
+                {message.delivery === "failed" && <span className="text-xs text-red-400 mt-1">{t("chat.notDelivered")}</span>}
               </div>
             ),
           )
+        )}
+        {safetyNotice && (
+          <p
+            role="note"
+            data-testid="chat-safety-notice"
+            className="flex items-start gap-2 rounded-lg border border-yellow-500/60 bg-yellow-500/10 p-2 text-xs text-yellow-200"
+          >
+            <ShieldAlert className="w-4 h-4 shrink-0" aria-hidden="true" />
+            <span>{safetyNotice}</span>
+          </p>
         )}
       </div>
 
@@ -129,8 +160,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
         <div className="flex gap-2">
           <Input
             type="text"
-            placeholder="Type a message..."
-            aria-label="Message"
+            placeholder={t("chat.placeholder")}
+            aria-label={t("chat.inputLabel")}
             data-testid="chat-input"
             value={draft}
             maxLength={LIMITS.chatMax}
@@ -150,7 +181,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             onClick={send}
             disabled={!draft.trim()}
             size="sm"
-            aria-label="Send message"
+            aria-label={t("chat.send")}
             data-testid="chat-send"
             className="bg-yellow-500 text-black hover:bg-yellow-400"
           >

@@ -10,12 +10,18 @@
 # deploy/ there), the current files are saved to .previous/ and the new ones
 # installed. When DEPLOY_WRITE_ENV=1, .env is rewritten from the environment
 # (the workflow passes the GitHub secrets); otherwise only IMAGE_TAG in the
-# existing .env changes. Secret values are never printed.
+# existing .env changes. Secret values are never printed. Either way the
+# secrets a production backend needs are checked first, so a missing one stops
+# the deploy before any file on the host changes.
 #
 # State kept next to .env:
 #   .deployed-tag  last tag that passed verification (the rollback target)
 #   .previous/     compose file and deploy/ that belong to that tag (before the
 #                  first verified deploy: the files that deploy replaced)
+#
+# When .env has CLOUDFLARE_ONLY=true, every start refreshes the Cloudflare
+# ranges and makes the gateway refuse requests that did not come through
+# Cloudflare (deploy/cloudflare-ips.sh).
 #
 # Only dangling images are pruned. Volumes are never pruned (Redis data).
 
@@ -27,9 +33,18 @@ set -Eeuo pipefail
 # editing .env by hand would be lost on the next deploy.
 ENV_KEYS=(
   CORS_ORIGINS REDIS_PASSWORD BACKEND_REPLICAS BIND_ADDRESS BACKEND_PORT FRONTEND_PORT
-  MAX_CONNECTIONS_PER_IP MATCH_ACCEPT_TIMEOUT_MS SHUTDOWN_GRACE_MS
+  MAX_CONNECTIONS_PER_IP CONNECT_BURST_PER_IP CONNECT_RATE_PER_IP_PER_SEC MATCH_ACCEPT_TIMEOUT_MS SHUTDOWN_GRACE_MS
   STUN_URLS TURN_URLS TURN_SECRET TURN_USERNAME TURN_CREDENTIAL TURN_TTL_SECONDS
-  TURN_REALM TURN_EXTERNAL_IP TURN_MIN_PORT TURN_MAX_PORT METRICS_TOKEN LOG_LEVEL
+  METRICS_TOKEN LOG_LEVEL
+  SESSION_SECRET SESSION_SECRET_PREVIOUS TURNSTILE_SECRET TURNSTILE_SITE_KEY TURNSTILE_DISABLED
+  SESSION_RATE_PER_IP_PER_MIN SESSION_RATE_PER_NETWORK_PER_MIN
+  MATCH_CAP_PER_DEVICE_PER_HOUR MATCH_CAP_PER_IP_PER_HOUR
+  TRUST_CLOUDFLARE TURN_PROVIDER CF_TURN_KEY_ID CF_TURN_API_TOKEN CF_ACCOUNT_ID CF_ANALYTICS_TOKEN
+  TURN_CACHE_SECONDS TURN_MAX_PER_DEVICE_HOUR TURN_MAX_PER_IP_HOUR TURN_SPEND_DAILY_GB
+  SENTRY_DSN SENTRY_DSN_FRONTEND POSTHOG_KEY POSTHOG_HOST
+  ADMIN_TOKEN ADMIN_ALLOWED_IPS PSEUDONYM_SALT
+  EVIDENCE_S3_BUCKET EVIDENCE_S3_REGION EVIDENCE_S3_KMS_KEY_ID
+  CLOUDFLARE_ONLY BACKUP_S3_URI
 )
 installed=0
 HEALTH_ATTEMPTS="${HEALTH_ATTEMPTS:-30}"
@@ -46,6 +61,7 @@ validate_env() {
   local key
   if [ "${DEPLOY_WRITE_ENV:-0}" != "1" ]; then
     [ -f .env ] || die ".env is missing; run the deploy workflow once to create it"
+    check_production_secrets
     return 0
   fi
   [ -n "${BACKEND_IMAGE:-}" ] || die "BACKEND_IMAGE is required"
@@ -55,6 +71,45 @@ validate_env() {
       *"'"* | *$'\n'*) die "$key must not contain a single quote or newline" ;;
     esac
   done
+  check_production_secrets
+}
+
+# Value a setting will have in .env: from the environment when this run
+# writes .env, otherwise from the existing .env.
+setting() {
+  if [ "${DEPLOY_WRITE_ENV:-0}" = "1" ]; then printf '%s' "${!1-}"; else env_value "$1"; fi
+}
+
+# The backend refuses to start in production without these (config.ts), which
+# would only show up as a failed health check and a rollback. Checking here
+# stops the deploy before anything on the host changes, and names the secret.
+check_production_secrets() {
+  local missing="" key min val
+  # Minimum lengths match backend/src/config.ts.
+  for key in CORS_ORIGINS:1 SESSION_SECRET:32 ADMIN_TOKEN:24; do
+    min=${key#*:}
+    key=${key%%:*}
+    val=$(setting "$key")
+    [ "${#val}" -ge "$min" ] || missing="$missing $key"
+  done
+  case "$(setting TURNSTILE_DISABLED)" in
+    true | 1 | yes) log "WARNING: TURNSTILE_DISABLED is set; the session gate does not check for bots" ;;
+    *)
+      [ -n "$(setting TURNSTILE_SECRET)" ] || missing="$missing TURNSTILE_SECRET"
+      [ -n "$(setting TURNSTILE_SITE_KEY)" ] || missing="$missing TURNSTILE_SITE_KEY"
+      ;;
+  esac
+  if [ -n "$(setting EVIDENCE_S3_BUCKET)" ] && [ -z "$(setting EVIDENCE_S3_REGION)" ]; then
+    missing="$missing EVIDENCE_S3_REGION"
+  fi
+  val=$(setting PSEUDONYM_SALT)
+  if [ -z "$val" ]; then
+    log "WARNING: PSEUDONYM_SALT is empty; admin pseudonyms come from ADMIN_TOKEN and change when it is rotated"
+  elif [ "${#val}" -lt 16 ]; then
+    missing="$missing PSEUDONYM_SALT"
+  fi
+  [ -z "$missing" ] ||
+    die "missing or too short:$missing (set the GitHub secrets; DEPLOYMENT.md, \"First deploy of the launch build\")"
 }
 
 # Writes .env from the environment. Call validate_env first.
@@ -65,7 +120,6 @@ write_env() {
   {
     echo "# Written by deploy/deploy.sh from GitHub secrets. Edit the secrets, not this file."
     printf 'BACKEND_IMAGE=%s\nFRONTEND_IMAGE=%s\n' "$BACKEND_IMAGE" "$FRONTEND_IMAGE"
-    if [ "${RUN_COTURN:-}" = "true" ]; then echo "COMPOSE_PROFILES=turn"; fi
     for key in "${ENV_KEYS[@]}"; do
       val="${!key-}"
       # Single quotes keep compose from interpolating $ in values.
@@ -76,13 +130,28 @@ write_env() {
   log "wrote .env ($(grep -c '=' .env) entries, values not shown)"
 }
 
-# Records the image tag to run, plus a checksum of the gateway config: the
-# gateway bind-mounts that file, so a changed checksum (a compose label) makes
+# Value of KEY in .env (without the quotes write_env adds), or empty.
+env_value() {
+  sed -n "s/^$1=//p" .env | tail -n 1 | sed -e "s/^'//" -e "s/'\$//"
+}
+
+# Refreshes the Cloudflare ranges and writes the gateway rule for
+# CLOUDFLARE_ONLY from .env (true: refuse requests that did not come through
+# Cloudflare; anything else: no rule). The existing list is kept if the
+# download fails, so this never blocks a deploy or a rollback.
+refresh_cloudflare() {
+  CLOUDFLARE_ONLY="$(env_value CLOUDFLARE_ONLY)" sh deploy/cloudflare-ips.sh deploy/nginx ||
+    log "WARNING: cloudflare-ips.sh failed; the gateway keeps its current Cloudflare files"
+}
+
+# Records the image tag to run, plus a checksum of deploy/nginx/: the gateway
+# bind-mounts those files, so a changed checksum (a compose label) makes
 # compose recreate the container and nginx load the new config.
 set_release() {
   local tag=$1 tmp conf
   [ -f .env ] || die ".env is missing; run the deploy workflow once to create it"
-  conf=$(cksum <deploy/nginx/gateway.conf | cut -d ' ' -f 1)
+  refresh_cloudflare
+  conf=$(cat deploy/nginx/* | cksum | cut -d ' ' -f 1)
   tmp=$(mktemp "$PWD/.env.XXXXXX")
   chmod 600 "$tmp"
   grep -v -e '^IMAGE_TAG=' -e '^GATEWAY_CONF_VERSION=' .env >"$tmp" || true
@@ -109,6 +178,8 @@ install_incoming() {
   cp -p .incoming/docker-compose.yml docker-compose.yml
   rm -rf deploy
   cp -Rp .incoming/deploy deploy
+  # Host scripts (scripts/backup-redis.sh for cron). Not part of the rollback.
+  if [ -d .incoming/scripts ]; then rm -rf scripts && cp -Rp .incoming/scripts scripts; fi
   rm -rf .incoming
   installed=1
   log "installed new docker-compose.yml and deploy/"

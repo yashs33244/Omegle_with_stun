@@ -1,0 +1,220 @@
+{
+  "header": {
+    "home": "Chizzy home",
+    "coins": "Coins: {{coins}}",
+    "coinsLoading": "Coins: loading",
+    "friends": "Friends",
+    "reconnecting": "Reconnecting...",
+    "connected": "Connected: {{time}}",
+    "settings": "Settings",
+    "skip": "Skip",
+    "homeButton": "Home"
+  },
+  "notice": {
+    "rateLimited": "Slow down a little, you are sending too fast.",
+    "notInRoom": "That call has already ended.",
+    "invalidPayload": "The server rejected that request.",
+    "internal": "Something went wrong on the server."
+  },
+  "mic": {
+    "mute": "Mute microphone",
+    "unmute": "Unmute microphone",
+    "on": "Mic on",
+    "off": "Mic off"
+  },
+  "connecting": {
+    "withPartner": "Connecting you with {{name}}...",
+    "video": "Connecting video..."
+  },
+  "textOnly": {
+    "title": "Text Chat Mode",
+    "chattingWith": "You're chatting with {{name}}",
+    "stranger": "a stranger",
+    "cameraOff": "Your camera is off, but they can still hear you.",
+    "cameraAndMicOff": "Your camera and microphone are off.",
+    "switchToVideo": "Switch to Video",
+    "toggle": "Text Only"
+  },
+  "privacy": {
+    "ipHidden": "IP hidden from your partner",
+    "unavailable": "Hide my IP is not available right now, so this call can use a direct connection.",
+    "appliesNextCall": "Applies from your next call.",
+    "lowBandwidth": "Weak connection: sending lower quality video."
+  },
+  "camera": {
+    "switchToBack": "Switch to the back camera",
+    "switchToFront": "Switch to the front camera",
+    "facePaused": "Your face is out of frame, so your video is paused",
+    "profileAlt": "Your profile",
+    "denied": {
+      "title": "Camera access is blocked",
+      "message": "Allow camera and microphone access for this site in your browser settings, then try again."
+    },
+    "not-found": {
+      "title": "No camera found",
+      "message": "Connect a camera and try again."
+    },
+    "in-use": {
+      "title": "Camera is busy",
+      "message": "Another app or tab is using your camera. Close it and try again."
+    },
+    "unsupported": {
+      "title": "Camera not available",
+      "message": "This browser cannot use a camera on this page. Use a recent browser over https."
+    },
+    "unknown": {
+      "title": "Could not start the camera",
+      "message": "Check that your camera works and that this site may use it, then try again."
+    }
+  },
+  "faceGate": {
+    "placeholder": "Video paused"
+  },
+  "chat": {
+    "toggle": "Chat",
+    "title": "Chat",
+    "textTitle": "Text Chat",
+    "partnerTyping": "Partner is typing...",
+    "typing": "typing...",
+    "close": "Close chat",
+    "empty": "Start a conversation! Say hello 👋",
+    "redactedMine": "Links, handles or phone numbers were hidden from them for safety.",
+    "redactedTheirs": "Links, handles and phone numbers are hidden for safety early in a call.",
+    "notDelivered": "Not delivered",
+    "placeholder": "Type a message...",
+    "inputLabel": "Message",
+    "send": "Send message",
+    "friendsSystem": "🎉 You are now friends! You've been chatting for 5 minutes."
+  },
+  "callFailed": {
+    "title": "Couldn't connect the video",
+    "body": "Your networks could not reach each other. Skipping to someone else in a few seconds.",
+    "skip": "Skip to someone else"
+  },
+  "next": {
+    "label": "Next",
+    "title": "Next (Esc or Right arrow)"
+  },
+  "hideIp": {
+    "label": "Hide my IP",
+    "description": "Your partner sees our relay, not your IP. Chizzy and Cloudflare still see it."
+  },
+  "match": {
+    "photoAlt": "{{name}}'s photo",
+    "countdown": "{{seconds}}s",
+    "title": "Someone wants to chat!",
+    "partnerFrom": "{{name}} from {{country}}",
+    "interestedIn": "Interested in: {{topics}}",
+    "friends": "You are friends",
+    "partnerAccepted": "✅ {{name}} has accepted! Waiting for your response...",
+    "bothAccepted": "Both users accepted! Setting up video call...",
+    "waitingFor": "Waiting for {{name}} to accept...",
+    "expired": "Time's up. Finding someone new...",
+    "pass": "Pass",
+    "accept": "Accept"
+  },
+  "partnerPhoto": {
+    "hidden": "Photo hidden",
+    "reveal": "Tap to show photo"
+  },
+  "video": {
+    "enableAudio": "Tap to enable audio"
+  },
+  "waiting": {
+    "endReason": {
+      "declined": "You passed. Looking for someone else...",
+      "partner-declined": "The other user declined the match. Looking for someone else...",
+      "timeout": "The other user didn't accept in time. Looking for someone else...",
+      "accept-timeout": "You didn't accept in time",
+      "skipped": "You skipped. Looking for someone new...",
+      "partner-skipped": "Your chat partner skipped. Looking for someone new...",
+      "partner-left": "Your chat partner has disconnected",
+      "reported": "User reported. Thank you for helping keep our community safe.",
+      "partner-unavailable": "Your chat partner is no longer available.",
+      "connection-failed": "Couldn't connect the video. Finding someone new...",
+      "restricted": "Your access has been restricted."
+    },
+    "bannedTitle": "You have been temporarily restricted",
+    "bannedBody": "Several people reported this session. Please try again later.",
+    "backHome": "Back to Home",
+    "replacedTitle": "Chizzy is open in another tab",
+    "replacedBody": "This tab was disconnected. Keep chatting in the other one.",
+    "errorTitle": "Could not join the chat",
+    "retry": "Try Again",
+    "reconnecting": "Reconnecting...",
+    "connecting": "Connecting...",
+    "connectionLost": "Lost the connection to the server. Your call has ended.",
+    "profileAlt": "Your profile",
+    "looking": "Looking for someone...",
+    "matchingTopics": "Matching with users interested in: {{topics}}",
+    "idleBody": "The match was dropped. Search again when you're ready.",
+    "searchAgain": "Search again"
+  },
+  "signaling": {
+    "cannotReach": "Cannot reach the server. Retrying...",
+    "noAnswer": "The server did not answer",
+    "notConnected": "Not connected to the server",
+    "emptyMessage": "Empty message"
+  },
+  "preflight": {
+    "label": "Pre-flight check",
+    "title": "Before you start",
+    "micLevel": "Microphone level",
+    "dark": "Your camera looks dark. Face a light so your partner can see you.",
+    "lightingOk": "Lighting looks fine.",
+    "network": {
+      "checking": "Checking your network...",
+      "failed": "Could not check your network.",
+      "blocked": "Video calls look blocked on this network.",
+      "direct": "Network OK for direct video.",
+      "relay": "Network OK through our relay.",
+      "maybeRelay": "Your network may need our relay; we try it when you match."
+    }
+  },
+  "matchMode": {
+    "label": "Match mode",
+    "instant": "Instant",
+    "instantHint": "The call starts right away, video blurred until it is checked.",
+    "preview": "Preview",
+    "previewHint": "See their name and photo first, then accept or pass."
+  },
+  "settings": {
+    "title": "Chat Settings",
+    "close": "Close settings",
+    "genderLabel": "Who do you want to meet?",
+    "gender": {
+      "all": "Everyone",
+      "male": "Male",
+      "female": "Female",
+      "other": "Other"
+    },
+    "languageLabel": "Preferred Language",
+    "anyLanguage": "🌐 Any language",
+    "languages": {
+      "en": "English",
+      "es": "Spanish",
+      "fr": "French",
+      "de": "German",
+      "it": "Italian",
+      "pt": "Portuguese",
+      "ru": "Russian",
+      "zh": "Chinese",
+      "ja": "Japanese",
+      "ko": "Korean",
+      "ar": "Arabic",
+      "hi": "Hindi"
+    },
+    "uiLanguage": "App language",
+    "saving": "Saving...",
+    "saved": "Saved. Applies to your next match.",
+    "errors": {
+      "rateLimited": "Too many changes, please wait a moment.",
+      "invalidPayload": "That value was not accepted.",
+      "banned": "Your session is restricted.",
+      "generic": "Something went wrong. Please try again."
+    },
+    "safety": "Safety",
+    "safetyHint": "To report someone, tap the flag on their video. After a call ends you can still report it for 60 seconds.",
+    "footer": "Changes apply from your next match."
+  }
+}

@@ -38,6 +38,22 @@ jobs:
       - name: Every compose setting can be set through the deploy
         run: sh scripts/check-deploy-env.sh
 
+  ops-lint:
+    name: Workflows and shell scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: actionlint
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12 -color
+      - name: shellcheck
+        run: >-
+          docker run --rm -v "$PWD:/mnt:ro" -w /mnt koalaman/shellcheck:v0.11.0
+          deploy/deploy.sh deploy/cloudflare-ips.sh scripts/backup-redis.sh scripts/restore-redis.sh
+          scripts/check-lockfiles.sh scripts/sync-protocol.sh scripts/check-pins.sh
+          scripts/check-deploy-env.sh scripts/test-deploy.sh scripts/test-gateway-real-ip.sh
+          new-frontend/nginx-api-origin.envsh
+
   backend:
     name: Backend
     runs-on: ubuntu-latest
@@ -66,6 +82,8 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
+      - name: Typecheck the load test and canary (scripts/loadtest)
+        run: node_modules/.bin/tsc -p ../scripts/loadtest
       - run: bun run lint
       - name: Test (includes the Redis suites)
         run: bun test
@@ -104,6 +122,20 @@ jobs:
     needs: [backend, frontend]
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # Inherited by the backends Playwright starts (its backendEnv wins where
+    # both set a variable). Test-only values, not secrets. Turnstile is real:
+    # backendEnv in playwright.config.ts sets Cloudflare's always-pass test
+    # site key and secret, the browsers get a stub widget that returns the
+    # dummy token, and the backend verifies it with Cloudflare's siteverify.
+    # Every e2e client comes from 127.0.0.1, so the per-IP session and match
+    # caps are raised far above what the suite uses.
+    env:
+      SESSION_SECRET: ci-e2e-session-secret-not-used-in-production
+      ADMIN_TOKEN: ci-e2e-admin-token-not-used-in-production
+      SESSION_RATE_PER_IP_PER_MIN: "10000"
+      SESSION_RATE_PER_NETWORK_PER_MIN: "10000"
+      MATCH_CAP_PER_DEVICE_PER_HOUR: "10000"
+      MATCH_CAP_PER_IP_PER_HOUR: "10000"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -156,6 +188,8 @@ jobs:
         with:
           context: ./new-frontend
           push: false
+          load: true
+          tags: chizzy-frontend:ci
           cache-from: type=gha,scope=frontend
           cache-to: type=gha,scope=frontend,mode=max
       - name: Validate docker-compose.yml
@@ -163,8 +197,11 @@ jobs:
       - name: Validate the gateway nginx config
         run: >-
           docker run --rm
-          -v "$PWD/deploy/nginx/gateway.conf:/etc/nginx/conf.d/default.conf:ro"
+          -v "$PWD/deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro"
+          -v "$PWD/deploy/nginx:/etc/nginx/chizzy:ro"
           nginxinc/nginx-unprivileged:1.28.2-alpine3.23 nginx -t
+      - name: Validate the frontend nginx config (rendered by the image entrypoint)
+        run: docker run --rm chizzy-frontend:ci nginx -t
       - name: Check the gateway's real client IP handling
         run: sh scripts/test-gateway-real-ip.sh
 
@@ -182,6 +219,21 @@ jobs:
       BACKEND_REPLICAS: "2"
       CORS_ORIGINS: http://localhost:5173
       VITE_API_URL: http://localhost:3004
+      # The stack runs with NODE_ENV=production, so the backend refuses to
+      # start without these. Test-only values, not secrets. Turnstile uses
+      # Cloudflare's always-pass test keys: the real widget loads in the
+      # browser (under the production CSP) and the backend verifies its dummy
+      # token with Cloudflare.
+      SESSION_SECRET: ci-stack-session-secret-not-used-in-production
+      ADMIN_TOKEN: ci-stack-admin-token-not-used-in-production
+      PSEUDONYM_SALT: ci-stack-pseudonym-salt
+      TURNSTILE_SITE_KEY: 1x00000000000000000000AA
+      TURNSTILE_SECRET: 1x0000000000000000000000000000000AA
+      # Every browser reaches the gateway from the same Docker bridge address.
+      SESSION_RATE_PER_IP_PER_MIN: "10000"
+      SESSION_RATE_PER_NETWORK_PER_MIN: "10000"
+      MATCH_CAP_PER_DEVICE_PER_HOUR: "10000"
+      MATCH_CAP_PER_IP_PER_HOUR: "10000"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1

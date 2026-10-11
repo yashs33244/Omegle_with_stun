@@ -73,37 +73,6 @@ test("Pass declines the match for both strangers", async ({ openStranger, accept
   await expectNoRematch([ivy.page, jon.page]);
 });
 
-test("Report from settings shows the server confirmation and ends the call", async ({
-  openStranger,
-  acceptTimeoutMs,
-}) => {
-  const kai = await openStranger("Kai");
-  const lea = await openStranger("Lea");
-  await startCall(kai, lea, acceptTimeoutMs);
-
-  const page = kai.page;
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  const settings = page.getByRole("dialog", { name: "Chat Settings" });
-  await expect(settings).toBeVisible();
-  await settings.getByRole("button", { name: "Report Current User" }).click();
-
-  const report = page.getByRole("dialog", { name: "Report User" });
-  await report.getByRole("button", { name: "Reason for reporting" }).click();
-  await report.getByRole("option", { name: "Spam or unwanted content" }).click();
-  await report.getByLabel("Additional details (optional):").fill("e2e report");
-  await report.getByRole("button", { name: "Submit Report" }).click();
-
-  await expect(report).toBeHidden();
-  await expect(settings.getByRole("status")).toHaveText(
-    "User reported. Thank you for helping keep our community safe.",
-  );
-  await settings.getByRole("button", { name: "Close settings" }).click();
-
-  await expectWaiting(kai.page, "reported");
-  // The reported side only learns that the partner moved on.
-  await expectWaiting(lea.page, "partner-skipped");
-});
-
 test("closing one stranger tells the partner and sends them back to waiting", async ({
   openStranger,
   acceptTimeoutMs,

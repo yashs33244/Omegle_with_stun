@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 import type { RoomProps } from "./Room";
 
 const roomProps: { current: RoomProps | null } = { current: null };
@@ -48,7 +49,7 @@ beforeEach(() => {
 
 async function openDetails() {
   const user = userEvent.setup();
-  render(<Landing />);
+  render(<Landing />, { wrapper: MemoryRouter });
   const start = await screen.findByTestId("start-chat");
   await waitFor(() => expect(start).toBeEnabled());
   await user.click(start);
@@ -193,7 +194,7 @@ describe("Landing profile validation", () => {
 describe("Landing photo capture", () => {
   async function openCapture() {
     const user = userEvent.setup();
-    render(<Landing />);
+    render(<Landing />, { wrapper: MemoryRouter });
     const start = await screen.findByTestId("start-chat");
     await waitFor(() => expect(start).toBeEnabled());
     await user.click(start);
@@ -207,7 +208,7 @@ describe("Landing photo capture", () => {
     const drawImage = vi.fn();
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
       drawImage,
-    } as unknown as CanvasRenderingContext2D);
+    } as never); // getContext has WebGPU overloads once TFJS types are loaded
     const toDataURL = vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(jpeg);
 
     const { user, dialog, video } = await openCapture();
@@ -244,7 +245,7 @@ describe("Landing photo capture", () => {
     const jpeg = "data:image/jpeg;base64,QUJD";
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
       drawImage: vi.fn(),
-    } as unknown as CanvasRenderingContext2D);
+    } as never); // getContext has WebGPU overloads once TFJS types are loaded
     vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(jpeg);
 
     const { user, dialog, video } = await openCapture();
@@ -291,14 +292,14 @@ describe("Landing photo capture", () => {
 
 describe("Landing home settings", () => {
   it("names the language and country pickers by label and current value", async () => {
-    render(<Landing />);
+    render(<Landing />, { wrapper: MemoryRouter });
     expect(await screen.findByRole("button", { name: "Language English" })).toHaveTextContent("English");
     expect(screen.getByRole("button", { name: /^Country .*India$/ })).toHaveTextContent("India");
   });
 
   it("closes an open dropdown when Start is clicked", async () => {
     const user = userEvent.setup();
-    render(<Landing />);
+    render(<Landing />, { wrapper: MemoryRouter });
     const start = await screen.findByTestId("start-chat");
     await waitFor(() => expect(start).toBeEnabled());
 
@@ -317,7 +318,7 @@ describe("Landing camera handling", () => {
   it("shows the real cause when the camera is blocked and retries on demand", async () => {
     getUserMedia.mockRejectedValueOnce(new DOMException("denied", "NotAllowedError"));
     const user = userEvent.setup();
-    render(<Landing />);
+    render(<Landing />, { wrapper: MemoryRouter });
 
     const problem = await screen.findByTestId("camera-error");
     expect(problem).toHaveTextContent("Camera access is blocked");
@@ -331,7 +332,7 @@ describe("Landing camera handling", () => {
 
   it("explains a busy camera", async () => {
     getUserMedia.mockRejectedValueOnce(new DOMException("busy", "NotReadableError"));
-    render(<Landing />);
+    render(<Landing />, { wrapper: MemoryRouter });
     expect(await screen.findByTestId("camera-error")).toHaveTextContent("Camera is busy");
   });
 

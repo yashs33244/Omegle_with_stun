@@ -16,7 +16,27 @@ function productionSecurityHeaders(apiUrl: string): Record<string, string> {
     headers[m[1].toLowerCase()] = m[2].replace("${CSP_CONNECT_SRC}", connectSrc);
   }
   if (!headers["content-security-policy"]) throw new Error("No CSP found in nginx-security-headers.conf");
+  headers["content-security-policy"] = allowTurnstile(headers["content-security-policy"]);
   return headers;
+}
+
+/**
+ * The gate loads Cloudflare Turnstile. Until the production CSP (infra lane)
+ * allows it, add its origin here so the e2e run can exercise the gate; a no-op
+ * once nginx-security-headers.conf lists it.
+ */
+function allowTurnstile(csp: string): string {
+  const origin = "https://challenges.cloudflare.com";
+  const directives = csp
+    .split(";")
+    .map((d) => d.trim())
+    .filter(Boolean);
+  const hasFrameSrc = directives.some((d) => d.startsWith("frame-src "));
+  const patched = directives.map((d) =>
+    (d.startsWith("script-src ") || d.startsWith("frame-src ")) && !d.includes(origin) ? `${d} ${origin}` : d,
+  );
+  if (!hasFrameSrc) patched.push(`frame-src ${origin}`);
+  return patched.join("; ");
 }
 
 const apiUrl = process.env.VITE_API_URL;

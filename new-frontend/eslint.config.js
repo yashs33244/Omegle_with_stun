@@ -49,5 +49,16 @@ export default tseslint.config(
       "no-empty-pattern": "off",
       "react-hooks/rules-of-hooks": "off",
     },
+  },
+  {
+    // UI copy lives in src/locales; the admin console is English only.
+    files: ["src/**/*.tsx"],
+    ignores: ["src/**/*.test.tsx", "src/pages/admin/**"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        { selector: "JSXText[value=/[A-Za-z]{2,}/]", message: "Hard-coded UI text: use t() from react-i18next." },
+      ],
+    },
   }
 );

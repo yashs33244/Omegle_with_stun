@@ -2,6 +2,8 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import { io, type Socket } from "socket.io-client";
 import { API_URL } from "@/lib/config";
 import { getDeviceId } from "@/lib/device";
+import { getSessionToken, invalidateSession, waitForSession } from "@/lib/session";
+import i18n from "@/lib/i18n";
 import {
   LIMITS,
   PROTOCOL_VERSION,
@@ -13,9 +15,12 @@ import {
   type HelloAck,
   type IceServer,
   type MatchEndReason,
+  type MatchMode,
   type Preferences,
   type Profile,
   type PublicProfile,
+  type ReportAck,
+  type ReportPayload,
   type ReportReason,
   type RtcSignal,
   type ServerToClientEvents,
@@ -31,6 +36,7 @@ export type AppSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 export type SignalingStatus =
   | "connecting" // socket not connected yet, or hello not acknowledged yet
   | "waiting" // in the queue
+  | "idle" // out of the queue (you let the accept window expire); search() joins again
   | "match-found" // accept / pass prompt
   | "starting-call" // you accepted, waiting for the partner
   | "in-call"
@@ -63,6 +69,10 @@ export interface SignalingState {
   /** Increments on every positive coins:update so the UI can animate. */
   coinBump: number;
   iceServers: IceServer[];
+  /** ICE servers (with per-call TURN credentials), bitrate caps and Hide my IP permission from call:start. */
+  callMedia: CallMedia | null;
+  /** Your effective mode for the current match (match:found). */
+  matchMode: MatchMode | null;
   messages: ChatEntry[];
   partnerTyping: boolean;
   lastEndReason: MatchEndReason | null;
@@ -83,6 +93,8 @@ export const initialSignalingState: SignalingState = {
   coins: null,
   coinBump: 0,
   iceServers: [],
+  callMedia: null,
+  matchMode: null,
   messages: [],
   partnerTyping: false,
   lastEndReason: null,
@@ -104,10 +116,11 @@ export type SignalingEvent =
       expiresAt: number;
       serverNow: number;
       receivedAt: number;
+      mode?: MatchMode;
     }
   | { type: "local-accept" }
   | { type: "partner-accepted"; roomId: string }
-  | { type: "call-start"; roomId: string; initiator: boolean }
+  | { type: "call-start"; roomId: string; initiator: boolean; media?: CallMedia }
   | { type: "match-ended"; roomId: string; reason: MatchEndReason }
   | { type: "chat-received"; roomId: string; id: string; text: string; ts: number }
   | { type: "chat-local"; roomId: string; tempId: string; text: string; ts: number }
@@ -123,7 +136,8 @@ export type SignalingEvent =
 
 const TERMINAL: SignalingStatus[] = ["banned", "replaced"];
 
-export const FRIENDS_MESSAGE = "🎉 You are now friends! You've been chatting for 5 minutes.";
+/** System chat line shown when a call reaches the friends threshold. */
+export const friendsMessage = (): string => i18n.t("room:chat.friendsSystem");
 
 /** Converts a server deadline into the local clock using the server time at emit. */
 export function toLocalDeadline(expiresAt: number, serverNow: number, receivedAt: number): number {
@@ -145,6 +159,8 @@ function clearRoom(state: SignalingState): SignalingState {
     initiator: null,
     partnerAccepted: false,
     expiresAt: null,
+    callMedia: null,
+    matchMode: null,
     messages: [],
     partnerTyping: false,
   };
@@ -162,10 +178,10 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
     case "connect-failed":
       // socket.io keeps retrying on its own; tell the user why nothing happens.
       if (state.status !== "connecting") return state;
-      return { ...state, error: "Cannot reach the server. Retrying..." };
+      return { ...state, error: i18n.t("room:signaling.cannotReach") };
 
     case "hello-ok": {
-      const busy = state.status !== "connecting" && state.status !== "error";
+      const busy = state.status !== "connecting" && state.status !== "error" && state.status !== "idle";
       return {
         ...state,
         status: busy ? state.status : "waiting",
@@ -196,6 +212,7 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
         partner: event.partner,
         isFriend: event.isFriend,
         expiresAt: toLocalDeadline(event.expiresAt, event.serverNow, event.receivedAt),
+        matchMode: event.mode ?? null,
         lastEndReason: null,
       };
 
@@ -216,10 +233,13 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
         initiator: event.initiator,
         partnerAccepted: true,
         expiresAt: null,
+        callMedia: event.media ?? null,
       };
 
     case "match-ended":
       if (event.roomId !== state.roomId) return state;
+      // You never pressed Accept: the server leaves you out of the queue until you search again.
+      if (event.reason === "accept-timeout") return { ...clearRoom(state), status: "idle", lastEndReason: event.reason };
       return { ...clearRoom(state), status: "waiting", lastEndReason: event.reason };
 
     case "chat-received":
@@ -272,7 +292,7 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
         isFriend: true,
         messages: [
           ...state.messages,
-          { id: `system-friends-${event.roomId}`, from: "system", text: FRIENDS_MESSAGE, ts: Date.now() },
+          { id: `system-friends-${event.roomId}`, from: "system", text: friendsMessage(), ts: Date.now() },
         ],
       };
 
@@ -300,6 +320,26 @@ const NOTICE_TTL_MS = 4000;
 
 export type SignalListener = (signal: RtcSignal) => void;
 
+/** Per-call media settings from call:start. */
+export interface CallMedia {
+  iceServers: IceServer[];
+  maxBitrateKbps: number;
+  relayMaxBitrateKbps: number;
+  privateModeAllowed: boolean;
+}
+
+/** Client events other hooks may send without touching this file. */
+export type ExtraClientEvent = "call:failed" | "call:telemetry" | "moderation:signal";
+type ExtraPayload<E extends ExtraClientEvent> = Parameters<ClientToServerEvents[E]>[0];
+
+export type ServerEvent = keyof ServerToClientEvents;
+type ServerHandler<E extends ServerEvent> = ServerToClientEvents[E];
+
+export interface SignalingOptions {
+  /** Requested match mode, read at every (re)connect. Defaults to "preview". */
+  mode?: MatchMode;
+}
+
 export interface Signaling {
   state: SignalingState;
   accept: () => void;
@@ -308,7 +348,16 @@ export interface Signaling {
   sendChat: (text: string) => Promise<ChatAck>;
   /** Call on every keystroke with whether the input has text. */
   setTyping: (typing: boolean) => void;
-  report: (reason: ReportReason, details?: string) => Promise<SimpleAck>;
+  /**
+   * Reports a partner. Pass `roomId` to pin the report to the room the user saw (a post-call
+   * report, or a call that ended while the report sheet was open); defaults to the current room.
+   */
+  report: (
+    reason: ReportReason,
+    details?: string,
+    evidence?: ReportPayload["evidence"],
+    roomId?: string,
+  ) => Promise<ReportAck>;
   updatePreferences: (preferences: Preferences) => Promise<SimpleAck>;
   sendSignal: (signal: RtcSignal) => void;
   /** Tell the server this call's peer connection is up (once per room); coins count from then. */
@@ -317,18 +366,33 @@ export interface Signaling {
   subscribeSignals: (roomId: string, listener: SignalListener) => () => void;
   /** Drop the socket and connect again (after an error). */
   retry: () => void;
+  /** Join the queue again after the server left us idle (a fresh hello on the live socket). */
+  search: () => void;
+  /**
+   * Listen to any server event (also across reconnects) without editing this hook.
+   * Returns an unsubscribe function. Handlers run after this hook's own reducer handling.
+   */
+  subscribe: <E extends ServerEvent>(event: E, handler: ServerHandler<E>) => () => void;
+  /** Send telemetry, call-failed and moderation signals for the current connection. */
+  send: <E extends ExtraClientEvent>(event: E, payload: ExtraPayload<E>) => void;
 }
 
 function notConnected<T extends object>(): Promise<Ack<T>> {
-  return Promise.resolve({ ok: false, error: "internal", message: "Not connected to the server" });
+  return Promise.resolve({ ok: false, error: "internal", message: i18n.t("room:signaling.notConnected") });
 }
 
 const MAX_PENDING_SIGNALS = 200;
 
-export function useSignaling(profile: Profile, preferences: Preferences): Signaling {
+export function useSignaling(profile: Profile, preferences: Preferences, options: SignalingOptions = {}): Signaling {
   const [state, dispatch] = useReducer(signalingReducer, initialSignalingState);
+  const modeRef = useRef<MatchMode>(options.mode ?? "preview");
+  modeRef.current = options.mode ?? "preview";
+  // Listeners registered through subscribe(), dispatched from socket.onAny so they survive reconnects.
+  const extraListeners = useRef(new Map<string, Set<(...args: unknown[]) => void>>());
 
   const socketRef = useRef<AppSocket | null>(null);
+  /** Sends session:hello on the live socket; set by the socket effect. */
+  const helloRef = useRef<(() => void) | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
 
@@ -354,8 +418,13 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 10000,
+      // Read at every (re)connect, so a refreshed session token is picked up.
+      auth: (cb) => cb({ sessionToken: getSessionToken() ?? "" }),
     });
     socketRef.current = socket;
+    socket.onAny((event: string, ...args: unknown[]) => {
+      extraListeners.current.get(event)?.forEach((handler) => handler(...args));
+    });
     let connectionSeq = 0;
     // Set on unmount, ban or replacement: never reconnect after that.
     let stopped = false;
@@ -364,13 +433,14 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
       socket.disconnect();
     };
 
-    socket.on("connect", () => {
+    const sayHello = () => {
       const seq = ++connectionSeq;
       const payload = {
         protocolVersion: PROTOCOL_VERSION,
         deviceId: getDeviceId(),
         profile: profileRef.current,
         preferences: preferencesRef.current,
+        mode: modeRef.current,
       } as const;
       const valid = helloSchema.safeParse(payload);
       if (!valid.success) {
@@ -381,7 +451,7 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
       socket.timeout(ACK_TIMEOUT_MS).emit("session:hello", valid.data, (err: Error | null, res: HelloAck) => {
         if (seq !== connectionSeq || stopped) return; // ack of an older connection
         if (err) {
-          dispatch({ type: "hello-failed", error: "timeout", message: "The server did not answer" });
+          dispatch({ type: "hello-failed", error: "timeout", message: i18n.t("room:signaling.noAnswer") });
         } else if (res.ok === true) {
           dispatch({ type: "hello-ok", coins: res.coins, iceServers: res.iceServers });
         } else {
@@ -389,7 +459,9 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
           if (res.error === "banned") stop();
         }
       });
-    });
+    };
+    helloRef.current = sayHello;
+    socket.on("connect", sayHello);
 
     socket.on("disconnect", (reason) => {
       pendingSignals.current = [];
@@ -399,14 +471,30 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
       if (reason === "io server disconnect") socket.connect();
     });
 
-    socket.on("connect_error", () => {
-      if (!stopped) dispatch({ type: "connect-failed" });
+    socket.on("connect_error", (err: Error & { data?: { code?: string } }) => {
+      if (stopped) return;
+      dispatch({ type: "connect-failed" });
+      // The handshake refused the session: socket.io does not retry that by itself.
+      // The gate asks for a new session; connect again once it is saved.
+      const code = err.data?.code;
+      if (code === "session_required" || code === "region_blocked") {
+        invalidateSession(code);
+        void waitForSession().then(() => {
+          if (!stopped) socket.connect();
+        });
+      }
     });
 
     socket.on("queue:waiting", () => dispatch({ type: "queue-waiting" }));
     socket.on("match:found", (p) => {
       pendingSignals.current = [];
       dispatch({ type: "match-found", ...p, receivedAt: Date.now() });
+      // Instant mode: the server accepts for us. Accepting here too is a no-op on
+      // such a server and covers one without server-side auto-accept.
+      if (p.mode === "instant") {
+        socket.emit("match:accept", { roomId: p.roomId });
+        dispatch({ type: "local-accept" });
+      }
     });
     socket.on("match:partner-accepted", (p) => dispatch({ type: "partner-accepted", roomId: p.roomId }));
     socket.on("match:ended", (p) => {
@@ -414,7 +502,17 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
       dispatch({ type: "match-ended", roomId: p.roomId, reason: p.reason });
     });
     socket.on("call:start", (p) =>
-      dispatch({ type: "call-start", roomId: p.roomId, initiator: p.initiator }),
+      dispatch({
+        type: "call-start",
+        roomId: p.roomId,
+        initiator: p.initiator,
+        media: {
+          iceServers: p.iceServers,
+          maxBitrateKbps: p.maxBitrateKbps,
+          relayMaxBitrateKbps: p.relayMaxBitrateKbps,
+          privateModeAllowed: p.privateModeAllowed,
+        },
+      }),
     );
     socket.on("rtc:signal", (signal) => {
       const listener = signalListeners.current.get(signal.roomId);
@@ -444,6 +542,7 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
       socket.removeAllListeners();
       socket.disconnect();
       socketRef.current = null;
+      helloRef.current = null;
       if (typingIdleTimer.current) clearTimeout(typingIdleTimer.current);
     };
   }, []);
@@ -491,11 +590,13 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
 
   // call:skip names its room, so the server ignores it if we already left that room;
   // the local guard also stops a second click (or the auto-skip timer) from sending again.
+  // A pending match can be skipped too (Next while an instant call connects, Esc on the card).
   const skippedRoom = useRef<string | null>(null);
   const skip = useCallback(() => {
     const socket = connectedSocket();
     const { roomId, status } = stateRef.current;
-    if (!socket || !roomId || status !== "in-call" || skippedRoom.current === roomId) return;
+    const inRoom = status === "in-call" || status === "match-found" || status === "starting-call";
+    if (!socket || !roomId || !inRoom || skippedRoom.current === roomId) return;
     skippedRoom.current = roomId;
     socket.emit("call:skip", { roomId });
   }, []);
@@ -530,7 +631,7 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
       const text = raw.trim().slice(0, LIMITS.chatMax);
       const { roomId, status } = stateRef.current;
       const socket = connectedSocket();
-      if (!text) return { ok: false, error: "invalid_payload", message: "Empty message" };
+      if (!text) return { ok: false, error: "invalid_payload", message: i18n.t("room:signaling.emptyMessage") };
       if (!socket || !roomId || status !== "in-call") return notConnected();
       setTyping(false);
       const tempId = `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -539,7 +640,7 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
       try {
         res = await socket.timeout(ACK_TIMEOUT_MS).emitWithAck("chat:send", { roomId, text });
       } catch {
-        res = { ok: false, error: "internal", message: "The server did not answer" };
+        res = { ok: false, error: "internal", message: i18n.t("room:signaling.noAnswer") };
       }
       dispatch(res.ok ? { type: "chat-ack", tempId, ok: true, id: res.id, ts: res.ts } : { type: "chat-ack", tempId, ok: false });
       return res;
@@ -547,17 +648,27 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
     [setTyping],
   );
 
-  const report = useCallback(async (reason: ReportReason, details?: string): Promise<SimpleAck> => {
-    const { roomId } = stateRef.current;
+  const report = useCallback(async (
+    reason: ReportReason,
+    details?: string,
+    evidence?: ReportPayload["evidence"],
+    targetRoomId?: string,
+  ): Promise<ReportAck> => {
+    const roomId = targetRoomId ?? stateRef.current.roomId;
     const socket = connectedSocket();
     if (!socket || !roomId) return notConnected();
     const trimmed = details?.trim().slice(0, LIMITS.reportDetailsMax);
     try {
       return await socket
         .timeout(ACK_TIMEOUT_MS)
-        .emitWithAck("report:submit", { roomId, reason, ...(trimmed ? { details: trimmed } : {}) });
+        .emitWithAck("report:submit", {
+          roomId,
+          reason,
+          ...(trimmed ? { details: trimmed } : {}),
+          ...(evidence ? { evidence } : {}),
+        });
     } catch {
-      return { ok: false, error: "internal", message: "The server did not answer" };
+      return { ok: false, error: "internal", message: i18n.t("room:signaling.noAnswer") };
     }
   }, []);
 
@@ -569,7 +680,7 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
       if (res.ok) preferencesRef.current = next;
       return res;
     } catch {
-      return { ok: false, error: "internal", message: "The server did not answer" };
+      return { ok: false, error: "internal", message: i18n.t("room:signaling.noAnswer") };
     }
   }, []);
 
@@ -596,12 +707,34 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
     };
   }, []);
 
+  const subscribe = useCallback(<E extends ServerEvent>(event: E, handler: ServerHandler<E>) => {
+    const set = extraListeners.current.get(event) ?? new Set();
+    const fn = handler as unknown as (...args: unknown[]) => void;
+    set.add(fn);
+    extraListeners.current.set(event, set);
+    return () => {
+      set.delete(fn);
+    };
+  }, []);
+
+  const send = useCallback(<E extends ExtraClientEvent>(event: E, payload: ExtraPayload<E>) => {
+    const socket = connectedSocket();
+    if (!socket) return;
+    (socket.emit as (e: string, p: unknown) => void)(event, payload);
+  }, []);
+
   const retry = useCallback(() => {
     const socket = socketRef.current;
     if (!socket || TERMINAL.includes(stateRef.current.status)) return;
     socket.disconnect();
     socket.connect();
   }, []);
+
+  const search = useCallback(() => {
+    if (stateRef.current.status !== "idle") return;
+    if (connectedSocket()) helloRef.current?.();
+    else retry();
+  }, [retry]);
 
   return {
     state,
@@ -616,5 +749,8 @@ export function useSignaling(profile: Profile, preferences: Preferences): Signal
     reportConnected,
     subscribeSignals,
     retry,
+    search,
+    subscribe,
+    send,
   };
 }

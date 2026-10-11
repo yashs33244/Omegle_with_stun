@@ -1,9 +1,10 @@
-import type { Page } from "@playwright/test";
-import { expect, test } from "./fixtures";
+import { expect, test, type Stranger } from "./fixtures";
+import { passGate } from "./helpers";
 
-/** Opens the profile dialog on the details step, with the empty name field focused. */
-async function openDetails(page: Page): Promise<void> {
-  await page.goto("/");
+/** Passes the gate and opens the profile dialog on the details step, with the empty name field focused. */
+async function openDetails(s: Stranger): Promise<void> {
+  const { page } = s;
+  await passGate(s);
   const start = page.getByTestId("start-chat");
   await expect(start, "Start is enabled once the camera is ready").toBeEnabled();
   await start.click();
@@ -12,8 +13,9 @@ async function openDetails(page: Page): Promise<void> {
 }
 
 test("a topic responds to the first click while the name is still empty", async ({ openStranger }) => {
-  const { page } = await openStranger("Tara");
-  await openDetails(page);
+  const stranger = await openStranger("Tara");
+  const { page } = stranger;
+  await openDetails(stranger);
 
   const music = page.getByTestId("topic-music");
   await expect(music).toHaveAttribute("aria-pressed", "false");
@@ -23,8 +25,9 @@ test("a topic responds to the first click while the name is still empty", async 
 });
 
 test("gender opens on the first click while the name is still empty", async ({ openStranger }) => {
-  const { page } = await openStranger("Gus");
-  await openDetails(page);
+  const stranger = await openStranger("Gus");
+  const { page } = stranger;
+  await openDetails(stranger);
 
   const gender = page.getByTestId("gender-select");
   await gender.click();
@@ -34,8 +37,9 @@ test("gender opens on the first click while the name is still empty", async ({ o
 });
 
 test("a press outside the profile dialog closes an open dropdown before the dialog", async ({ openStranger }) => {
-  const { page } = await openStranger("Ivy");
-  await openDetails(page);
+  const stranger = await openStranger("Ivy");
+  const { page } = stranger;
+  await openDetails(stranger);
   const dialog = page.getByRole("dialog");
   const gender = page.getByTestId("gender-select");
 
@@ -52,8 +56,9 @@ test("a press outside the profile dialog closes an open dropdown before the dial
 });
 
 test("an open home dropdown closes when Start is clicked", async ({ openStranger }) => {
-  const { page } = await openStranger("Jon");
-  await page.goto("/");
+  const stranger = await openStranger("Jon");
+  const { page } = stranger;
+  await passGate(stranger);
   const start = page.getByTestId("start-chat");
   await expect(start).toBeEnabled();
 

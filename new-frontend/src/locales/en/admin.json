@@ -1,0 +1,201 @@
+{
+  "login": {
+    "title": "Chizzy admin",
+    "tokenLabel": "Admin token",
+    "hint": "Kept in this tab only (session storage) and cleared when you sign out.",
+    "signIn": "Sign in",
+    "rejected": "The server rejected this token (or this network is not allowed). Sign in again."
+  },
+  "nav": {
+    "aria": "Admin sections",
+    "reports": "Reports",
+    "appeals": "Appeals",
+    "takedowns": "Takedowns",
+    "flags": "Flags",
+    "audit": "Audit log",
+    "signOut": "Sign out"
+  },
+  "ui": {
+    "refresh": "Refresh",
+    "cancel": "Cancel"
+  },
+  "sla": {
+    "overdue": "overdue {{span}}",
+    "left": "{{span}} left"
+  },
+  "span": {
+    "min": "{{n}} min",
+    "h": "{{h}} h",
+    "hm": "{{h}} h {{m}} min",
+    "d": "{{d}} d",
+    "dh": "{{d}} d {{h}} h"
+  },
+  "durations": {
+    "tenMin": "10 min",
+    "day": "24 h",
+    "week": "7 d",
+    "permanent": "Permanent"
+  },
+  "due": {
+    "ack": "Ack",
+    "resolve": "Resolve"
+  },
+  "reasons": {
+    "underage": "Minor",
+    "nudity": "Nudity",
+    "harassment": "Harassment",
+    "hate": "Hate",
+    "violence": "Violence",
+    "spam": "Spam or scam",
+    "fake": "Fake or pre-recorded video",
+    "inappropriate": "Inappropriate",
+    "other": "Other"
+  },
+  "errors": {
+    "unreachable": "Cannot reach the server.",
+    "unexpectedList": "Unexpected response: no {{key}} list.",
+    "badFlags": "The server sent flags this console does not understand.",
+    "noPacket": "The server did not send the report packet.",
+    "http": "HTTP {{status}}",
+    "generic": "Something went wrong.",
+    "withStatus": "{{message}} (HTTP {{status}})"
+  },
+  "reports": {
+    "title": "Report queue",
+    "count": "({{count}})",
+    "showClosed": "Show closed",
+    "empty": "Nothing in the queue.",
+    "restricted": "Restricted",
+    "ago": "{{span}} ago",
+    "prior": "{{count}} prior",
+    "detailAria": "Report detail",
+    "selectPrompt": "Select a report to see the details."
+  },
+  "detail": {
+    "restrictedEvidence": "Restricted: this item was routed to the CSAM store. The image is never shown in the console. Use Escalate CSAM to build the report packet from metadata.",
+    "noImage": "No image was attached.",
+    "noImageReturned": "The server returned no image.",
+    "imageLoading": "Loading the image...",
+    "altBlurred": "Evidence frame, blurred",
+    "alt": "Evidence frame",
+    "unblur": "Unblur",
+    "blurAgain": "Blur again",
+    "acknowledgeChip": "Acknowledge",
+    "resolveChip": "Resolve",
+    "received": "Received",
+    "watermark": "Watermark code",
+    "reportedDevice": "Reported device",
+    "priorAgainst": "Prior reports against",
+    "reporter": "Reporter",
+    "reporterWeight": "(weight {{weight}})",
+    "classifierScore": "Classifier score",
+    "notAvailable": "not available",
+    "details": "Details",
+    "none": "none",
+    "evidenceTitle": "Evidence",
+    "evidenceHint": "submitted by the reporter, unverified",
+    "chatTitle": "Chat ({{count}})",
+    "noChat": "No chat lines were attached.",
+    "chatReported": "Reported:",
+    "chatReporter": "Reporter:",
+    "actionsTitle": "Actions",
+    "noteLabel": "Note (kept in the audit log)",
+    "acknowledge": "Acknowledge",
+    "acknowledged": "Acknowledged.",
+    "dismiss": "Dismiss",
+    "dismissed": "Dismissed.",
+    "warn": "Warn",
+    "warningSent": "Warning sent.",
+    "restrictLegend": "Restrict",
+    "reasonLabel": "Reason",
+    "durationLabel": "Duration",
+    "restrict": "Restrict",
+    "restrictedFor": "Restricted for {{duration}}.",
+    "restrictedPermanently": "Restricted permanently.",
+    "escalateCsam": "Escalate CSAM",
+    "escalated": "Escalated. The packet was downloaded.",
+    "permanentTitle": "Restrict permanently?",
+    "permanentBody": "This device will not be able to match again unless an appeal overturns it.",
+    "permanentConfirm": "Restrict permanently",
+    "csamTitle": "Escalate as CSAM?",
+    "csamBody1": "The evidence is frozen for 1 year and the report packet for the NCMEC CyberTipline and NCRP is downloaded.",
+    "csamBody2": "The packet is built from metadata; you do not need to open the image. Follow the CSAM runbook.",
+    "csamConfirm": "Escalate and download packet"
+  },
+  "appeals": {
+    "title": "Appeals",
+    "empty": "No appeals.",
+    "summary": "{{kind}} for {{reason}}",
+    "permanent": "permanent",
+    "until": "until {{time}}",
+    "decideChip": "Decide",
+    "received": "Received {{time}}",
+    "noteLabel": "Note to keep with the decision",
+    "uphold": "Uphold",
+    "overturn": "Overturn",
+    "upheld": "Restriction upheld.",
+    "overturned": "Restriction overturned."
+  },
+  "takedowns": {
+    "title": "Takedown notices",
+    "empty": "No takedown notices.",
+    "kinds": {
+      "ncii": "Intimate image (NCII)",
+      "csam": "Child sexual abuse material",
+      "impersonation": "Impersonation",
+      "other": "Other"
+    },
+    "removeBy": "Remove by",
+    "contact": "Contact",
+    "where": "Where",
+    "notGiven": "not given",
+    "affectedPerson": "Affected person",
+    "yes": "yes",
+    "onBehalf": "no, on their behalf",
+    "received": "Received",
+    "resolution": "Resolution: {{resolution}}",
+    "resolutionLabel": "Resolution (what was removed or why not)",
+    "resolve": "Resolve",
+    "resolved": "Resolved."
+  },
+  "audit": {
+    "title": "Audit log",
+    "empty": "No entries yet.",
+    "time": "Time",
+    "action": "Action",
+    "target": "Target",
+    "note": "Note",
+    "ip": "IP"
+  },
+  "flags": {
+    "title": "Flags",
+    "fields": {
+      "matching_enabled": { "label": "Matching enabled", "help": "Kill switch. Off: no new matches start." },
+      "new_sessions_enabled": { "label": "New sessions enabled", "help": "Off: nobody new can pass the entry gate." },
+      "max_waiting": { "label": "Max waiting", "help": "Queue size cap." },
+      "turn_enabled": { "label": "TURN relay enabled", "help": "Off: calls that need a relay cannot connect." },
+      "private_mode_enabled": { "label": "Hide my IP allowed", "help": "Relay-only calls on request." },
+      "video_max_kbps": { "label": "Video max (kbps)", "help": "Direct calls." },
+      "relay_video_max_kbps": { "label": "Relayed video max (kbps)", "help": "Calls through TURN." },
+      "banner_message": { "label": "Banner message", "help": "Shown to everyone; empty hides it. Max 280 characters." },
+      "blocked_countries": { "label": "Blocked countries", "help": "Comma-separated ISO codes, e.g. GB,AU,DE." },
+      "staffed_hours": { "label": "Staffed hours", "help": "e.g. \"20:00-24:00 Asia/Kolkata\". Empty means always open." },
+      "default_mode": { "label": "Default match mode", "help": "instant or preview." },
+      "online_count_threshold": { "label": "Online count threshold", "help": "Show the online count only at or above this." }
+    },
+    "risky": {
+      "matchingOn": "Matching opens again for everyone (staffed hours still apply).",
+      "matchingOff": "No new matches will start for anyone until you turn matching back on.",
+      "turnOn": "TURN relays are used again; relay traffic costs money.",
+      "turnOff": "People on networks that need a relay will not be able to connect, and Hide my IP stops working."
+    },
+    "riskyLine": "<strong>{{label}}</strong> {{state}}: {{description}}",
+    "on": "on",
+    "off": "off",
+    "saved": "Flags saved. Servers pick them up within a few seconds.",
+    "saving": "Saving...",
+    "save": "Save flags",
+    "discard": "Discard changes",
+    "confirmTitle": "Confirm this change"
+  }
+}

@@ -1,0 +1,156 @@
+/**
+ * POST /api/session: the gate in front of matching (LB-2, LB-3, LB-10).
+ *
+ * Order: rate limit, kill switch, region, lockout, Turnstile, age and Terms,
+ * restriction, then tokens. The date of birth is used to compute the age and
+ * then dropped: it is never stored, logged or put in a token.
+ */
+import type { FlagsReader } from "../flags/flags";
+import type { Logger } from "../logger";
+import {
+  TOS_VERSION,
+  sessionRequestSchema,
+  type Restriction,
+  type SessionError,
+  type SessionResponse,
+} from "../protocol";
+import { ADULT_AGE, ageInYears } from "./age";
+import { isCountryBlocked } from "./geo";
+import type { Lockout, SessionRateLimiter } from "./limits";
+import { AGE_TOKEN_TTL_MS, SESSION_TOKEN_TTL_MS, type TokenSigner } from "./tokens";
+import { verifyTurnstile, type FetchLike } from "./turnstile";
+
+/**
+ * Implemented by the enforcement lane. `fingerprint` is the client's SHA-256
+ * fingerprint as sent (salt it before storing).
+ */
+export interface RestrictionChecker {
+  activeForDevice(deviceId: string, fingerprint: string): Promise<Restriction | null>;
+}
+
+export interface SessionRequestContext {
+  ip: string;
+  /** Country from the trusted edge header, or null. */
+  country: string | null;
+}
+
+export interface SessionServiceDeps {
+  tokens: TokenSigner;
+  flags: FlagsReader;
+  lockout: Lockout;
+  rateLimiter: SessionRateLimiter;
+  logger: Logger;
+  /** Undefined turns Turnstile verification off (dev, tests, TURNSTILE_DISABLED). */
+  turnstileSecret?: string;
+  fetch: FetchLike;
+  restrictions?: RestrictionChecker;
+  onResult?: (result: "issued" | SessionError) => void;
+  now?: () => number;
+}
+
+const STATUS: Record<SessionError, number> = {
+  invalid: 400,
+  tos_outdated: 400,
+  age_token_invalid: 401,
+  underage: 403,
+  locked: 403,
+  region_blocked: 403,
+  turnstile_failed: 403,
+  banned: 403,
+  rate_limited: 429,
+  closed: 503,
+};
+
+export interface SessionResult {
+  status: number;
+  body: SessionResponse;
+}
+
+export class SessionService {
+  private readonly now: () => number;
+
+  constructor(private readonly deps: SessionServiceDeps) {
+    this.now = deps.now ?? Date.now;
+  }
+
+  async create(raw: unknown, ctx: SessionRequestContext): Promise<SessionResult> {
+    const { deps } = this;
+    const fail = (error: SessionError, restriction?: Restriction): SessionResult => {
+      deps.onResult?.(error);
+      return { status: STATUS[error], body: restriction ? { ok: false, error, restriction } : { ok: false, error } };
+    };
+
+    if (!(await deps.rateLimiter.allow(ctx.ip))) return fail("rate_limited");
+    const parsed = sessionRequestSchema.safeParse(raw);
+    if (!parsed.success) return fail("invalid");
+    const req = parsed.data;
+
+    const flags = deps.flags.current();
+    if (!flags.new_sessions_enabled) return fail("closed");
+    if (isCountryBlocked(ctx.country, flags)) return fail("region_blocked");
+    if (await deps.lockout.isLocked(req.deviceId, req.fingerprint, ctx.ip)) return fail("locked");
+
+    if (deps.turnstileSecret) {
+      const result = await verifyTurnstile({
+        secret: deps.turnstileSecret,
+        token: req.turnstileToken,
+        remoteIp: ctx.ip,
+        fetch: deps.fetch,
+      });
+      if (!result.success) {
+        deps.logger.info({ errors: result.errors }, "turnstile check failed");
+        return fail("turnstile_failed");
+      }
+    }
+
+    const now = this.now();
+    let ageToken: string;
+    let ageExpiresAt: number;
+    if ("dob" in req.age) {
+      const age = ageInYears(req.age.dob, now);
+      if (age === null) return fail("invalid");
+      if (age < ADULT_AGE) {
+        await deps.lockout.lock(req.deviceId, req.fingerprint, ctx.ip);
+        deps.logger.info("under-18 date of birth: device locked out");
+        return fail("underage");
+      }
+      if (req.age.tosVersion !== TOS_VERSION) return fail("tos_outdated");
+      ageExpiresAt = now + AGE_TOKEN_TTL_MS;
+      ageToken = deps.tokens.sign({
+        kind: "age",
+        deviceId: req.deviceId,
+        over18: true,
+        tosVersion: TOS_VERSION,
+        iat: now,
+        exp: ageExpiresAt,
+      });
+    } else {
+      if (req.age.tosVersion !== TOS_VERSION) return fail("tos_outdated");
+      const proof = deps.tokens.verifyAge(req.age.ageToken, now);
+      if (!proof || proof.deviceId !== req.deviceId) return fail("age_token_invalid");
+      ageExpiresAt = proof.exp;
+      // Re-sign only to record acceptance of newer Terms; the expiry never slides.
+      ageToken =
+        proof.tosVersion === TOS_VERSION
+          ? req.age.ageToken
+          : deps.tokens.sign({ ...proof, tosVersion: TOS_VERSION, iat: now });
+    }
+
+    const restriction = await deps.restrictions?.activeForDevice(req.deviceId, req.fingerprint);
+    if (restriction) return fail("banned", restriction);
+
+    const sessionExpiresAt = now + SESSION_TOKEN_TTL_MS;
+    const sessionToken = deps.tokens.sign({
+      kind: "session",
+      deviceId: req.deviceId,
+      country: ctx.country,
+      iat: now,
+      exp: sessionExpiresAt,
+    });
+    deps.onResult?.("issued");
+    return {
+      status: 200,
+      body: { ok: true, sessionToken, sessionExpiresAt, ageToken, ageExpiresAt, country: ctx.country },
+    };
+  }
+}

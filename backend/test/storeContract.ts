@@ -22,6 +22,7 @@ function session(overrides: Partial<Session> = {}): Session {
     instanceId: "instance-1",
     profile: { name: "A", country: "IN", language: "en", gender: "male", topics: ["general", "music"] },
     preferences: { genderFilter: "all", languageFilter: "any" },
+    mode: "preview",
     state: "idle",
     connectedAt: 1,
     ...overrides,

@@ -4,6 +4,7 @@ import { act, fireEvent, render, screen } from "@testing-library/react";
 import type { Preferences, Profile } from "@/lib/protocol";
 import { initialSignalingState, type SignalingState } from "@/hooks/useSignaling";
 import type { PeerConnectionState } from "@/hooks/usePeerConnection";
+import { SAFETY_COACH_KEY } from "@/components/safety/safetyText";
 
 let signalingState: SignalingState;
 let peerState: PeerConnectionState;
@@ -27,6 +28,9 @@ vi.mock("@/hooks/useSignaling", async (importOriginal) => {
       reportConnected,
       subscribeSignals: vi.fn(() => () => {}),
       retry: vi.fn(),
+      search: vi.fn(),
+      subscribe: vi.fn(() => () => {}),
+      send: vi.fn(),
     }),
   };
 });
@@ -35,6 +39,17 @@ vi.mock("@/hooks/useAudioLevelDetection", () => ({ useAudioLevelDetection: () =>
 vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => false }));
 
 const { Room } = await import("./Room");
+
+/** The media lane's peer fields, for a call that is neither private nor degraded. */
+const PEER_EXTRAS = { failure: null, privateMode: false, privateRequested: false, relayed: false, lowBandwidth: false };
+
+// These tests are about the call itself: the first-use safety card was already dismissed.
+beforeEach(() => {
+  localStorage.setItem(SAFETY_COACH_KEY, "1");
+});
+afterEach(() => {
+  localStorage.clear();
+});
 
 const profile: Profile = { name: "Ana", country: "IN", language: "en", gender: "unspecified", topics: ["music"] };
 const preferences: Preferences = { genderFilter: "all", languageFilter: "any" };
@@ -94,6 +109,7 @@ describe("Room text-only mode", () => {
       connectionState: "connected",
       connectedAt: Date.now(),
       quality: "GOOD",
+      ...PEER_EXTRAS,
     };
   });
   afterEach(() => {
@@ -155,6 +171,7 @@ describe("Room when the call connection fails", () => {
       connectionState: "failed",
       connectedAt: null,
       quality: "DISCONNECTED",
+      ...PEER_EXTRAS,
     };
   });
   afterEach(() => {
@@ -210,6 +227,7 @@ describe("Room call timer and connection report", () => {
       connectionState: "connecting",
       connectedAt: null,
       quality: "GOOD",
+      ...PEER_EXTRAS,
     };
   });
   afterEach(() => {

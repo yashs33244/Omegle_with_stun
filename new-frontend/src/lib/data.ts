@@ -1,15 +1,4 @@
-export interface Language {
-  code: string;
-  name: string;
-}
-
-export interface Country {
-  code: string;
-  name: string;
-  flag: string;
-}
-
-export const languages: Language[] = [
+export const languages = [
   { code: 'en', name: 'English' },
   { code: 'es', name: 'Spanish' },
   { code: 'fr', name: 'French' },
@@ -22,9 +11,9 @@ export const languages: Language[] = [
   { code: 'zh', name: 'Chinese' },
   { code: 'ar', name: 'Arabic' },
   { code: 'hi', name: 'Hindi' },
-];
+] as const;
 
-export const countries: Country[] = [
+export const countries = [
   { code: 'US', name: 'United States', flag: '🇺🇸' },
   { code: 'GB', name: 'United Kingdom', flag: '🇬🇧' },
   { code: 'CA', name: 'Canada', flag: '🇨🇦' },
@@ -43,7 +32,23 @@ export const countries: Country[] = [
   { code: 'RU', name: 'Russia', flag: '🇷🇺' },
   { code: 'SA', name: 'Saudi Arabia', flag: '🇸🇦' },
   { code: 'AE', name: 'UAE', flag: '🇦🇪' },
-];
+] as const;
+
+export type LanguageCode = (typeof languages)[number]['code'];
+export type CountryCode = (typeof countries)[number]['code'];
+
+/** `name` is the English fallback; the UI translates `landing:languages.<code>`. */
+export interface Language {
+  code: LanguageCode;
+  name: string;
+}
+
+/** `name` is the English fallback; the UI translates `landing:countries.<code>`. */
+export interface Country {
+  code: CountryCode;
+  name: string;
+  flag: string;
+}
 
 export const getCountryByCode = (code: string): Country | undefined => {
   return countries.find(country => country.code === code);

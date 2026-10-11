@@ -38,6 +38,7 @@ async function foreignWaiter(store: MemoryStore, instanceId: string): Promise<Se
     instanceId,
     profile: p,
     preferences: prefs(),
+    mode: "preview",
     state: "waiting",
     waitingSince: now - 1000,
     connectedAt: now - 1000,

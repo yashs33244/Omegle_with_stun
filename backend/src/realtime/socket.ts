@@ -10,11 +10,15 @@ import type { Config } from "../config";
 import type { Logger } from "../logger";
 import type { Metrics } from "../metrics";
 import type { Emitter, MatchService } from "../match/MatchService";
+import { captureError } from "../observability/sentry";
 import {
   PROTOCOL_VERSION,
+  callFailedSchema,
+  callTelemetrySchema,
   chatSendSchema,
   chatTypingSchema,
   helloSchema,
+  moderationSignalSchema,
   reportSchema,
   callSkipSchema,
   roomRefSchema,
@@ -25,6 +29,7 @@ import {
   type ServerToClientEvents,
 } from "../protocol";
 import { SocketRateLimiter, TokenBucket, type EventClass } from "../rateLimit";
+import { handshakeSession } from "../session/handshake";
 import { limitedParser } from "./limitedParser";
 
 export type AppServer = Server<ClientToServerEvents, ServerToClientEvents>;
@@ -86,6 +91,8 @@ interface AttachDeps {
   metrics: Metrics;
   /** Injectable for tests. */
   newRateLimiter?: () => SocketRateLimiter;
+  /** Session-token gate (src/session/handshake.ts). Runs before the per-IP cap. */
+  handshake?: Parameters<AppServer["use"]>[0];
 }
 
 export interface Handlers {
@@ -111,6 +118,7 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
     work.then(done, done);
   };
 
+  if (deps.handshake) io.use(deps.handshake);
   io.use((socket, next) => {
     const ip = clientIp(socket, config.trustProxy);
     const count = perIp.get(ip) ?? 0;
@@ -177,6 +185,7 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
         const onError = (err: unknown) => {
           metrics.handlerErrorsTotal.inc({ event });
           log.error({ err, event }, "handler failed");
+          captureError(err, { event });
           if (!replied) {
             replied = true;
             fail(event, "internal", ack);
@@ -215,7 +224,13 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
       });
     }
 
-    on("session:hello", "hello", helloSchema, (p, reply) => service.hello(socket.id, p, reply));
+    on("session:hello", "hello", helloSchema, async (p, reply) => {
+      const session = handshakeSession(socket);
+      if (session && session.deviceId !== p.deviceId) {
+        return reply({ ok: false, error: "invalid_payload", message: "deviceId does not match the session token" });
+      }
+      return service.hello(socket.id, p, reply, clientIp(socket, config.trustProxy));
+    });
     on("session:preferences", "preferences", updatePreferencesSchema, (p, reply) =>
       service.updatePreferences(socket.id, p, reply),
     );
@@ -227,6 +242,9 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
     on("chat:send", "chat", chatSendSchema, (p, reply) => service.chat(socket.id, p, reply));
     on("chat:typing", "typing", chatTypingSchema, (p) => service.typing(socket.id, p));
     on("report:submit", "report", reportSchema, (p, reply) => service.report(socket.id, p, reply));
+    on("call:failed", "telemetry", callFailedSchema, (p) => service.callFailed(socket.id, p));
+    on("call:telemetry", "telemetry", callTelemetrySchema, (p) => service.telemetry(socket.id, p));
+    on("moderation:signal", "telemetry", moderationSignalSchema, (p) => service.moderationSignal(socket.id, p));
 
     socket.on("disconnect", (reason) => {
       metrics.connectedSockets.dec();

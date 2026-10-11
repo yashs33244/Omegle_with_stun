@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { profileSchema, TOPICS } from "./protocol";
-import { GENDER_CHOICES, TOPIC_LABELS, hasErrors, toProfile, validateProfileForm, type ProfileForm } from "./profileForm";
+import { GENDER_CHOICES, TOPIC_EMOJI, hasErrors, toProfile, validateProfileForm, type ProfileForm } from "./profileForm";
 
 const base: ProfileForm = {
   name: "Asha",
@@ -16,12 +16,12 @@ describe("validateProfileForm", () => {
   });
 
   it("requires a non-blank name", () => {
-    expect(validateProfileForm({ ...base, name: "" }).name).toBeDefined();
-    expect(validateProfileForm({ ...base, name: "   " }).name).toBeDefined();
+    expect(validateProfileForm({ ...base, name: "" }).name).toBe("form.errors.nameRequired");
+    expect(validateProfileForm({ ...base, name: "   " }).name).toBe("form.errors.nameRequired");
   });
 
   it("requires at least one topic", () => {
-    expect(validateProfileForm({ ...base, topics: [] }).topics).toBeDefined();
+    expect(validateProfileForm({ ...base, topics: [] }).topics).toBe("form.errors.topicsRequired");
   });
 });
 
@@ -50,11 +50,11 @@ describe("toProfile", () => {
 });
 
 describe("labels", () => {
-  it("has a label for every protocol topic", () => {
-    expect(Object.keys(TOPIC_LABELS).sort()).toEqual([...TOPICS].sort());
+  it("has an emoji for every protocol topic", () => {
+    expect(Object.keys(TOPIC_EMOJI).sort()).toEqual([...TOPICS].sort());
   });
 
-  it("maps Prefer not to say to unspecified", () => {
-    expect(GENDER_CHOICES.find((g) => g.label === "Prefer not to say")?.value).toBe("unspecified");
+  it("offers unspecified as the last gender choice with its own label key", () => {
+    expect(GENDER_CHOICES.at(-1)).toEqual({ value: "unspecified", label: "form.gender.unspecified" });
   });
 });

@@ -14,6 +14,7 @@ import {
   matchedPair,
   next,
   profile,
+  record,
   sendHello,
   startServer,
   type Client,
@@ -140,12 +141,14 @@ describe("reports and bans", () => {
     const endA = next(ca, "match:ended");
     const endB = next(cb, "match:ended");
     const ack = await ca.timeout(1000).emitWithAck("report:submit", { roomId, reason: "spam", details: "ads" });
-    expect(ack).toEqual({ ok: true });
+    expect(ack).toMatchObject({ ok: true });
     expect(await endA).toEqual({ roomId, reason: "reported" });
     expect(await endB).toEqual({ roomId, reason: "partner-skipped" });
     const block = await ts.store.getBlock(a.deviceId, b.deviceId);
     expect(block!.until - Date.now()).toBeGreaterThan(23 * 60 * 60_000);
-    expect(await ts.store.countReporters(b.deviceId, 0)).toBe(1);
+    const queue = await ts.server.enforcement.queue();
+    expect(queue).toHaveLength(1);
+    expect(queue[0]).toMatchObject({ reason: "spam", details: "ads", reported: ts.server.enforcement.pseudonym(b.deviceId) });
     expect(await arrives(ca, "match:found", 300)).toBe(false);
   });
 
@@ -158,11 +161,12 @@ describe("reports and bans", () => {
     expect(ack).toEqual({ ok: false, error: "not_in_room" });
   });
 
-  test("three distinct reporters ban a device; its next hello fails", async () => {
+  test("three fresh reporters cannot pause or ban a device (weighted reports replaced the 3-reporter ban)", async () => {
     ts = await startServer();
     const target = hello({ profile: profile({ topics: ["general", "music", "art"] }) });
     const ct = await ts.connect();
     await sendHello(ct, target);
+    const restricted = record(ct, "session:restricted");
 
     const reporterTopics = [["general"], ["music"], ["art"]] as const;
     for (let i = 0; i < reporterTopics.length; i++) {
@@ -172,21 +176,17 @@ describe("reports and bans", () => {
       await sendHello(r, hello({ profile: profile({ topics: [...reporterTopics[i]!] }) }));
       const { roomId } = await foundR;
       await foundT;
-      const banned = i === 2 ? next(ct, "server:error") : null;
-      const requeued = i < 2 ? next(ct, "queue:waiting") : null;
-      expect(await r.timeout(1000).emitWithAck("report:submit", { roomId, reason: "harassment" })).toEqual({ ok: true });
-      if (banned) expect(await banned).toEqual({ code: "banned" });
-      if (requeued) await requeued;
+      const requeued = next(ct, "queue:waiting");
+      expect(await r.timeout(1000).emitWithAck("report:submit", { roomId, reason: "harassment" })).toMatchObject({ ok: true });
+      await requeued;
       r.disconnect();
     }
 
-    expect(await ts.store.getBan(target.deviceId)).not.toBeNull();
-    const session = await ts.store.getSession(ct.id!);
-    expect(session!.state).toBe("idle");
-    expect((await ts.store.listWaiting()).includes(ct.id!)).toBe(false);
-
-    const again = await ts.connect();
-    expect(await sendHello(again, target)).toEqual({ ok: false, error: "banned" });
+    expect(await ts.store.getBan(target.deviceId)).toBeNull();
+    expect(await ts.server.enforcement.activeForDevice(target.deviceId)).toBeNull();
+    expect(restricted).toEqual([]);
+    expect((await ts.store.getSession(ct.id!))!.state).toBe("waiting");
+    expect(await ts.server.enforcement.queue()).toHaveLength(3);
   });
 });
 

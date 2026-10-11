@@ -3,8 +3,9 @@
  * Invalid configuration fails fast with a readable message (see loadConfig).
  * Every variable is documented in backend/.env.example.
  */
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
+import { MATCH_ENV, matchConfigFromEnv, refineMatchEnv, type MatchConfig } from "./match/matchConfig";
 
 const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace", "silent"] as const;
 
@@ -28,19 +29,51 @@ const envSchema = z
     REDIS_URL: z.string().url().optional(),
     TRUST_PROXY: bool.default("false"),
     MAX_CONNECTIONS_PER_IP: int(1).default(10),
+    CONNECT_BURST_PER_IP: int(1).default(20),
+    CONNECT_RATE_PER_IP_PER_SEC: int(1).default(1),
     MATCH_ACCEPT_TIMEOUT_MS: int(1000).default(30000),
     STUN_URLS: z.string().default("stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302"),
     TURN_URLS: z.string().optional(),
     TURN_SECRET: z.string().min(1).optional(),
     TURN_USERNAME: z.string().min(1).optional(),
     TURN_CREDENTIAL: z.string().min(1).optional(),
-    TURN_TTL_SECONDS: int(60).default(43200),
+    TURN_TTL_SECONDS: int(60).default(7200),
     LOG_LEVEL: z.enum(LOG_LEVELS).default("info"),
     METRICS_TOKEN: z.string().min(1).optional(),
     SHUTDOWN_GRACE_MS: int(0).default(10000),
+    SESSION_SECRET: z.string().min(32, "must be at least 32 characters").optional(),
+    SESSION_SECRET_PREVIOUS: z.string().min(32, "must be at least 32 characters").optional(),
+    TURNSTILE_SECRET: z.string().min(1).optional(),
+    TURNSTILE_SITE_KEY: z.string().min(1).optional(),
+    TURNSTILE_DISABLED: bool.default("false"),
+    TRUST_CLOUDFLARE: bool.default("false"),
+    SESSION_RATE_PER_IP_PER_MIN: int(1).default(10),
+    SESSION_RATE_PER_NETWORK_PER_MIN: int(1).default(60),
+    MATCH_CAP_PER_DEVICE_PER_HOUR: int(1).default(200),
+    MATCH_CAP_PER_IP_PER_HOUR: int(1).default(200),
+    SENTRY_DSN: z.string().url().optional(),
+    SENTRY_DSN_FRONTEND: z.string().url().optional(),
+    POSTHOG_KEY: z.string().min(1).optional(),
+    POSTHOG_HOST: z.string().url().optional(),
+    ...MATCH_ENV,
+    ADMIN_TOKEN: z.string().min(24, "must be at least 24 characters").optional(),
+    ADMIN_ALLOWED_IPS: z.string().optional(),
+    EVIDENCE_DIR: z.string().default("./data/evidence"),
+    EVIDENCE_S3_BUCKET: z.string().min(3).optional(),
+    EVIDENCE_S3_REGION: z.string().min(1).optional(),
+    EVIDENCE_S3_KMS_KEY_ID: z.string().min(1).optional(),
+    PSEUDONYM_SALT: z.string().min(16).optional(),
   })
   .superRefine((env, ctx) => {
+    refineMatchEnv(env, ctx);
     const origins = csv(env.CORS_ORIGINS);
+    if (env.NODE_ENV === "production" && !env.ADMIN_TOKEN) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ADMIN_TOKEN"],
+        message: "is required in production (the admin API stays closed without it)",
+      });
+    }
     if (env.NODE_ENV === "production") {
       if (origins.length === 0) {
         ctx.addIssue({
@@ -89,6 +122,27 @@ const envSchema = z
         message: "is required when TURN_SECRET or TURN_USERNAME is set",
       });
     }
+    if (env.NODE_ENV === "production" && !env.SESSION_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["SESSION_SECRET"],
+        message: "is required in production (at least 32 random characters, e.g. openssl rand -hex 32)",
+      });
+    }
+    if (env.NODE_ENV === "production" && !env.TURNSTILE_SECRET && !env.TURNSTILE_DISABLED) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["TURNSTILE_SECRET"],
+        message: "is required in production (set TURNSTILE_DISABLED=true to run without bot protection)",
+      });
+    }
+    if (env.TURNSTILE_SECRET && !env.TURNSTILE_DISABLED && !env.TURNSTILE_SITE_KEY) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["TURNSTILE_SITE_KEY"],
+        message: "is required when TURNSTILE_SECRET is set (clients need it to render the challenge)",
+      });
+    }
     if (Boolean(env.TURN_USERNAME) !== Boolean(env.TURN_CREDENTIAL)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -100,7 +154,7 @@ const envSchema = z
 
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
-export interface Config {
+export interface Config extends MatchConfig {
   nodeEnv: "development" | "production" | "test";
   port: number;
   /** "*" allows any origin (never in production). */
@@ -111,7 +165,9 @@ export interface Config {
   /**
    * New connections per client IP (per instance): a burst, then a steady
    * rate. Per-socket rate limits start full, so without this a client could
-   * reconnect to refill them. Not an env var; tests loosen it.
+   * reconnect to refill them. CONNECT_BURST_PER_IP and
+   * CONNECT_RATE_PER_IP_PER_SEC; raise them only for load tests, where every
+   * virtual user comes from one address.
    */
   connectRatePerIp: { capacity: number; refillPerSec: number };
   stunUrls: string[];
@@ -123,6 +179,32 @@ export interface Config {
   logLevel: LogLevel;
   metricsToken?: string;
   shutdownGraceMs: number;
+  /** Signs session and age tokens. Random per process outside production when unset. */
+  sessionSecret: string;
+  /** True when sessionSecret was generated at startup (tokens die with the process). */
+  sessionSecretGenerated: boolean;
+  /** Old secret still accepted for verification during a rotation. */
+  sessionSecretPrevious?: string;
+  /** Turnstile Siteverify secret; undefined means verification is off. */
+  turnstileSecret?: string;
+  turnstileSiteKey?: string;
+  /** CF-IPCountry is trusted (both hosts are behind Cloudflare and the origin only accepts Cloudflare). */
+  trustCloudflare: boolean;
+  sessionRatePerIpPerMin: number;
+  sessionRatePerNetworkPerMin: number;
+  matchCapPerDevicePerHour: number;
+  matchCapPerIpPerHour: number;
+  sentryDsn?: string;
+  sentryDsnFrontend?: string;
+  posthogKey?: string;
+  posthogHost?: string;
+  /**
+   * The Socket.IO handshake requires a session token. Always true from the
+   * environment; only tests turn it off (via createServer's config).
+   */
+  requireSession: boolean;
+  /** How often matching:status is re-checked for staffed-hours boundaries. */
+  matchingStatusIntervalMs: number;
   /** Unique id of this process, used to own sessions in a shared store. */
   instanceId: string;
 
@@ -163,12 +245,23 @@ export interface Config {
   declineBlockMs: number;
   /** Pair block per skip; multiplied by the pair's skip count. */
   skipBlockMs: number;
-  /** Pair block after a report, and the window for counting reporters. */
+  /** Pair block after a report. */
   reportBlockMs: number;
-  reportWindowMs: number;
-  /** Distinct reporter devices within reportWindowMs that trigger a ban. */
-  reportsToBan: number;
-  banMs: number;
+  /** A report is accepted this long after its room ended. */
+  reportAfterEndMs: number;
+
+  /* Enforcement (src/enforcement). */
+  /** Bearer token for /admin/api. Unset: the admin API answers 503 (never open). */
+  adminToken?: string;
+  /** Exact client IPs allowed to use the admin API; empty allows any. */
+  adminAllowedIps: string[];
+  /** Local evidence directory, used when no S3 bucket is set. */
+  evidenceDir: string;
+  evidenceS3Bucket?: string;
+  evidenceS3Region?: string;
+  evidenceS3KmsKeyId?: string;
+  /** Salt for the pseudonymous device ids admins see. Defaults to one derived from ADMIN_TOKEN. */
+  pseudonymSalt?: string;
 }
 
 export class ConfigError extends Error {}
@@ -194,7 +287,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     redisUrl: e.REDIS_URL,
     trustProxy: e.TRUST_PROXY,
     maxConnectionsPerIp: e.MAX_CONNECTIONS_PER_IP,
-    connectRatePerIp: { capacity: 20, refillPerSec: 1 },
+    connectRatePerIp: { capacity: e.CONNECT_BURST_PER_IP, refillPerSec: e.CONNECT_RATE_PER_IP_PER_SEC },
     stunUrls: csv(e.STUN_URLS),
     turnUrls: csv(e.TURN_URLS),
     turnSecret: e.TURN_SECRET,
@@ -204,6 +297,22 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     logLevel: e.LOG_LEVEL,
     metricsToken: e.METRICS_TOKEN,
     shutdownGraceMs: e.SHUTDOWN_GRACE_MS,
+    sessionSecret: e.SESSION_SECRET ?? randomBytes(32).toString("hex"),
+    sessionSecretGenerated: !e.SESSION_SECRET,
+    sessionSecretPrevious: e.SESSION_SECRET_PREVIOUS,
+    turnstileSecret: e.TURNSTILE_DISABLED ? undefined : e.TURNSTILE_SECRET,
+    turnstileSiteKey: e.TURNSTILE_DISABLED ? undefined : e.TURNSTILE_SITE_KEY,
+    trustCloudflare: e.TRUST_CLOUDFLARE,
+    sessionRatePerIpPerMin: e.SESSION_RATE_PER_IP_PER_MIN,
+    sessionRatePerNetworkPerMin: e.SESSION_RATE_PER_NETWORK_PER_MIN,
+    matchCapPerDevicePerHour: e.MATCH_CAP_PER_DEVICE_PER_HOUR,
+    matchCapPerIpPerHour: e.MATCH_CAP_PER_IP_PER_HOUR,
+    sentryDsn: e.SENTRY_DSN,
+    sentryDsnFrontend: e.SENTRY_DSN_FRONTEND,
+    posthogKey: e.POSTHOG_KEY,
+    posthogHost: e.POSTHOG_HOST,
+    requireSession: true,
+    matchingStatusIntervalMs: 30_000,
     instanceId: randomUUID(),
     matchAcceptTimeoutMs: e.MATCH_ACCEPT_TIMEOUT_MS,
     matchAcceptGraceMs: 750,
@@ -219,8 +328,14 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     declineBlockMs: 30_000,
     skipBlockMs: 5 * 60_000,
     reportBlockMs: 24 * 60 * 60_000,
-    reportWindowMs: 24 * 60 * 60_000,
-    reportsToBan: 3,
-    banMs: 24 * 60 * 60_000,
+    reportAfterEndMs: 60_000,
+    adminToken: e.ADMIN_TOKEN,
+    adminAllowedIps: csv(e.ADMIN_ALLOWED_IPS),
+    evidenceDir: e.EVIDENCE_DIR,
+    evidenceS3Bucket: e.EVIDENCE_S3_BUCKET,
+    evidenceS3Region: e.EVIDENCE_S3_REGION,
+    evidenceS3KmsKeyId: e.EVIDENCE_S3_KMS_KEY_ID,
+    pseudonymSalt: e.PSEUDONYM_SALT,
+    ...matchConfigFromEnv(e),
   };
 }

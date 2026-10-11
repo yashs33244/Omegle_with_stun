@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  FRIENDS_MESSAGE,
+  friendsMessage,
   initialSignalingState,
   secondsLeft,
   signalingReducer,
@@ -76,6 +76,18 @@ describe("signalingReducer", () => {
     expect(s.status).toBe("in-call");
   });
 
+  it("keeps the match mode and the per-call media until the room ends", () => {
+    const media = { iceServers: [{ urls: "turn:t", username: "u", credential: "c" }], maxBitrateKbps: 900, relayMaxBitrateKbps: 500, privateModeAllowed: true };
+    let s = run([hello, { ...found, mode: "instant" }]);
+    expect(s.matchMode).toBe("instant");
+    s = run([{ ...start, media }], s);
+    expect(s.callMedia).toEqual(media);
+    expect(s.matchMode).toBe("instant");
+    s = run([{ type: "match-ended", roomId: ROOM, reason: "skipped" }], s);
+    expect(s.callMedia).toBeNull();
+    expect(s.matchMode).toBeNull();
+  });
+
   it("ignores events for another room", () => {
     const base = run([hello, found]);
     expect(run([{ type: "partner-accepted", roomId: OTHER_ROOM }], base)).toBe(base);
@@ -98,6 +110,14 @@ describe("signalingReducer", () => {
     expect(s.initiator).toBeNull();
     expect(s.messages).toEqual([]);
     expect(s.coins).toBe(100);
+  });
+
+  it("letting the accept window expire leaves us idle until the next hello", () => {
+    const s = run([hello, found, { type: "match-ended", roomId: ROOM, reason: "accept-timeout" }]);
+    expect(s.status).toBe("idle");
+    expect(s.lastEndReason).toBe("accept-timeout");
+    expect(s.roomId).toBeNull();
+    expect(run([hello], s).status).toBe("waiting");
   });
 
   it("a new match clears the previous end reason", () => {
@@ -206,7 +226,7 @@ describe("signalingReducer", () => {
 
     let s = run([hello, found, start, { type: "friends-new", roomId: ROOM }]);
     expect(s.isFriend).toBe(true);
-    expect(s.messages.filter((m) => m.from === "system").map((m) => m.text)).toEqual([FRIENDS_MESSAGE]);
+    expect(s.messages.filter((m) => m.from === "system").map((m) => m.text)).toEqual([friendsMessage()]);
     s = run([{ type: "friends-new", roomId: ROOM }], s);
     expect(s.messages).toHaveLength(1);
   });

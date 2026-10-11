@@ -61,13 +61,20 @@ const backendEnv = (port: number, acceptTimeoutMs: number) => ({
   LOG_LEVEL: "warn",
   // Always the in-memory store, whatever the calling shell exports.
   REDIS_URL: "",
+  // Cloudflare's Turnstile test keys: the always-pass site key and secret.
+  TURNSTILE_SITE_KEY: "1x00000000000000000000AA",
+  TURNSTILE_SECRET: "1x0000000000000000000000000000000AA",
+  // Lets a test pick its country with the CF-IPCountry header (e2e only).
+  TRUST_CLOUDFLARE: "true",
 });
 
 /** Production build pointed at one backend, served by `vite preview` with the production security headers. */
 const frontendServer = (port: number, apiPort: number) => ({
   command: `npx vite build --outDir dist-e2e/${port} --emptyOutDir && npx vite preview --config e2e/vite.preview.config.ts --outDir dist-e2e/${port} --port ${port} --strictPort`,
   url: web(port),
-  env: { VITE_API_URL: api(apiPort), BROWSERSLIST_IGNORE_OLD_DATA: "1" },
+  // VITE_E2E enables the moderation test switches (src/moderation/testHooks.ts);
+  // an empty VITE_PROBE_STUN_URLS keeps the pre-flight probe off third-party STUN servers.
+  env: { VITE_API_URL: api(apiPort), BROWSERSLIST_IGNORE_OLD_DATA: "1", VITE_E2E: "1", VITE_PROBE_STUN_URLS: "" },
   reuseExistingServer: false,
   timeout: 120_000,
   stdout: "ignore" as const,

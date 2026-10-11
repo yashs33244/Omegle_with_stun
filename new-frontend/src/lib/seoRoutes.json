@@ -1,0 +1,34 @@
+{
+  "/": {
+    "title": "Chizzy - Video chat with strangers who share your interests",
+    "description": "Chizzy is a free, anonymous video chat that matches you with people who share your interests. Pick your topics, accept a match and start talking."
+  },
+  "/terms": {
+    "title": "Terms of Service | Chizzy",
+    "description": "The terms you agree to when you use Chizzy: who may use the service, the rules, automated safety tools, reports, appeals and liability."
+  },
+  "/privacy": {
+    "title": "Privacy Policy | Chizzy",
+    "description": "What Chizzy collects while you chat, how long it is kept, who can see it and the choices you have. We do not record video, audio or chat."
+  },
+  "/guidelines": {
+    "title": "Community Guidelines | Chizzy",
+    "description": "The rules for behaviour on Chizzy, what happens when someone breaks them and how reports are reviewed."
+  },
+  "/safety": {
+    "title": "Safety | Chizzy",
+    "description": "How to stay safe while video chatting with strangers on Chizzy, what to do if something goes wrong and where to get help."
+  },
+  "/grievance": {
+    "title": "Grievance Officer | Chizzy",
+    "description": "How to reach Chizzy's grievance officer and how complaints are acknowledged and resolved."
+  },
+  "/law-enforcement": {
+    "title": "Law enforcement requests | Chizzy",
+    "description": "How law enforcement agencies can send requests to Chizzy, what data may exist, how long it is kept and how to ask for preservation."
+  },
+  "/takedown": {
+    "title": "Report content for removal | Chizzy",
+    "description": "Ask Chizzy to remove content or report a user. Tell us what happened and we will review the request."
+  }
+}

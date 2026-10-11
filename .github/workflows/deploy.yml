@@ -55,6 +55,7 @@ jobs:
           # VITE_API_URL is new; REACT_APP_API_URL is the older secret with the same value.
           build-args: |
             VITE_API_URL=${{ secrets.VITE_API_URL || secrets.REACT_APP_API_URL || 'https://chizzyapi.itsyash.space' }}
+            VITE_SITE_URL=${{ secrets.VITE_SITE_URL || 'https://chizzy.itsyash.space' }}
           tags: |
             ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
             ${{ env.FRONTEND_IMAGE }}:latest
@@ -74,15 +75,15 @@ jobs:
 
       # The host always runs the compose file and deploy/ from this commit. They
       # land in .incoming/ and deploy.sh installs them (keeping the previous
-      # copy for rollback).
-      - name: Copy compose file and deploy/ to the host
+      # copy for rollback), plus the host scripts for Redis backups.
+      - name: Copy compose file, deploy/ and host scripts to the host
         uses: appleboy/scp-action@ff85246acaad7bdce478db94a363cd2bf7c90345 # v1.0.0
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           fingerprint: ${{ secrets.EC2_SSH_FINGERPRINT }}
-          source: docker-compose.yml,deploy
+          source: docker-compose.yml,deploy,scripts/backup-redis.sh,scripts/restore-redis.sh
           target: ${{ env.PROJECT_PATH }}/.incoming
           rm: true
 
@@ -102,6 +103,8 @@ jobs:
           BACKEND_PORT: ${{ secrets.BACKEND_PORT }}
           FRONTEND_PORT: ${{ secrets.FRONTEND_PORT }}
           MAX_CONNECTIONS_PER_IP: ${{ secrets.MAX_CONNECTIONS_PER_IP }}
+          CONNECT_BURST_PER_IP: ${{ secrets.CONNECT_BURST_PER_IP }}
+          CONNECT_RATE_PER_IP_PER_SEC: ${{ secrets.CONNECT_RATE_PER_IP_PER_SEC }}
           MATCH_ACCEPT_TIMEOUT_MS: ${{ secrets.MATCH_ACCEPT_TIMEOUT_MS }}
           SHUTDOWN_GRACE_MS: ${{ secrets.SHUTDOWN_GRACE_MS }}
           STUN_URLS: ${{ secrets.STUN_URLS }}
@@ -110,20 +113,46 @@ jobs:
           TURN_USERNAME: ${{ secrets.TURN_USERNAME }}
           TURN_CREDENTIAL: ${{ secrets.TURN_CREDENTIAL }}
           TURN_TTL_SECONDS: ${{ secrets.TURN_TTL_SECONDS }}
-          TURN_REALM: ${{ secrets.TURN_REALM }}
-          TURN_EXTERNAL_IP: ${{ secrets.TURN_EXTERNAL_IP }}
-          TURN_MIN_PORT: ${{ secrets.TURN_MIN_PORT }}
-          TURN_MAX_PORT: ${{ secrets.TURN_MAX_PORT }}
-          RUN_COTURN: ${{ secrets.RUN_COTURN }}
           METRICS_TOKEN: ${{ secrets.METRICS_TOKEN }}
           LOG_LEVEL: ${{ secrets.LOG_LEVEL }}
+          SESSION_SECRET: ${{ secrets.SESSION_SECRET }}
+          SESSION_SECRET_PREVIOUS: ${{ secrets.SESSION_SECRET_PREVIOUS }}
+          TURNSTILE_SECRET: ${{ secrets.TURNSTILE_SECRET }}
+          TURNSTILE_SITE_KEY: ${{ secrets.TURNSTILE_SITE_KEY }}
+          TURNSTILE_DISABLED: ${{ secrets.TURNSTILE_DISABLED }}
+          SESSION_RATE_PER_IP_PER_MIN: ${{ secrets.SESSION_RATE_PER_IP_PER_MIN }}
+          SESSION_RATE_PER_NETWORK_PER_MIN: ${{ secrets.SESSION_RATE_PER_NETWORK_PER_MIN }}
+          MATCH_CAP_PER_DEVICE_PER_HOUR: ${{ secrets.MATCH_CAP_PER_DEVICE_PER_HOUR }}
+          MATCH_CAP_PER_IP_PER_HOUR: ${{ secrets.MATCH_CAP_PER_IP_PER_HOUR }}
+          TRUST_CLOUDFLARE: ${{ secrets.TRUST_CLOUDFLARE }}
+          TURN_PROVIDER: ${{ secrets.TURN_PROVIDER }}
+          CF_TURN_KEY_ID: ${{ secrets.CF_TURN_KEY_ID }}
+          CF_TURN_API_TOKEN: ${{ secrets.CF_TURN_API_TOKEN }}
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_ANALYTICS_TOKEN: ${{ secrets.CF_ANALYTICS_TOKEN }}
+          TURN_CACHE_SECONDS: ${{ secrets.TURN_CACHE_SECONDS }}
+          TURN_MAX_PER_DEVICE_HOUR: ${{ secrets.TURN_MAX_PER_DEVICE_HOUR }}
+          TURN_MAX_PER_IP_HOUR: ${{ secrets.TURN_MAX_PER_IP_HOUR }}
+          TURN_SPEND_DAILY_GB: ${{ secrets.TURN_SPEND_DAILY_GB }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          SENTRY_DSN_FRONTEND: ${{ secrets.SENTRY_DSN_FRONTEND }}
+          POSTHOG_KEY: ${{ secrets.POSTHOG_KEY }}
+          POSTHOG_HOST: ${{ secrets.POSTHOG_HOST }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
+          ADMIN_ALLOWED_IPS: ${{ secrets.ADMIN_ALLOWED_IPS }}
+          PSEUDONYM_SALT: ${{ secrets.PSEUDONYM_SALT }}
+          EVIDENCE_S3_BUCKET: ${{ secrets.EVIDENCE_S3_BUCKET }}
+          EVIDENCE_S3_REGION: ${{ secrets.EVIDENCE_S3_REGION }}
+          EVIDENCE_S3_KMS_KEY_ID: ${{ secrets.EVIDENCE_S3_KMS_KEY_ID }}
+          CLOUDFLARE_ONLY: ${{ secrets.CLOUDFLARE_ONLY }}
+          BACKUP_S3_URI: ${{ secrets.BACKUP_S3_URI }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           fingerprint: ${{ secrets.EC2_SSH_FINGERPRINT }}
           command_timeout: 15m
-          envs: PROJECT_PATH,BACKEND_IMAGE,FRONTEND_IMAGE,DEPLOY_WRITE_ENV,DEPLOY_TAG,CORS_ORIGINS,REDIS_PASSWORD,BACKEND_REPLICAS,BIND_ADDRESS,BACKEND_PORT,FRONTEND_PORT,MAX_CONNECTIONS_PER_IP,MATCH_ACCEPT_TIMEOUT_MS,SHUTDOWN_GRACE_MS,STUN_URLS,TURN_URLS,TURN_SECRET,TURN_USERNAME,TURN_CREDENTIAL,TURN_TTL_SECONDS,TURN_REALM,TURN_EXTERNAL_IP,TURN_MIN_PORT,TURN_MAX_PORT,RUN_COTURN,METRICS_TOKEN,LOG_LEVEL
+          envs: PROJECT_PATH,BACKEND_IMAGE,FRONTEND_IMAGE,DEPLOY_WRITE_ENV,DEPLOY_TAG,CORS_ORIGINS,REDIS_PASSWORD,BACKEND_REPLICAS,BIND_ADDRESS,BACKEND_PORT,FRONTEND_PORT,MAX_CONNECTIONS_PER_IP,CONNECT_BURST_PER_IP,CONNECT_RATE_PER_IP_PER_SEC,MATCH_ACCEPT_TIMEOUT_MS,SHUTDOWN_GRACE_MS,STUN_URLS,TURN_URLS,TURN_SECRET,TURN_USERNAME,TURN_CREDENTIAL,TURN_TTL_SECONDS,METRICS_TOKEN,LOG_LEVEL,SESSION_SECRET,SESSION_SECRET_PREVIOUS,TURNSTILE_SECRET,TURNSTILE_SITE_KEY,TURNSTILE_DISABLED,SESSION_RATE_PER_IP_PER_MIN,SESSION_RATE_PER_NETWORK_PER_MIN,MATCH_CAP_PER_DEVICE_PER_HOUR,MATCH_CAP_PER_IP_PER_HOUR,TRUST_CLOUDFLARE,TURN_PROVIDER,CF_TURN_KEY_ID,CF_TURN_API_TOKEN,CF_ACCOUNT_ID,CF_ANALYTICS_TOKEN,TURN_CACHE_SECONDS,TURN_MAX_PER_DEVICE_HOUR,TURN_MAX_PER_IP_HOUR,TURN_SPEND_DAILY_GB,SENTRY_DSN,SENTRY_DSN_FRONTEND,POSTHOG_KEY,POSTHOG_HOST,ADMIN_TOKEN,ADMIN_ALLOWED_IPS,PSEUDONYM_SALT,EVIDENCE_S3_BUCKET,EVIDENCE_S3_REGION,EVIDENCE_S3_KMS_KEY_ID,CLOUDFLARE_ONLY,BACKUP_S3_URI
           script: |
             set -eu
             cd "$PROJECT_PATH"

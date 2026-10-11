@@ -29,7 +29,7 @@ describe("hello and matching", () => {
     c.on("queue:waiting", () => order.push("queue:waiting"));
     const ack = await sendHello(c, hello());
     order.push("ack");
-    expect(ack).toEqual({ ok: true, coins: 100, iceServers: [{ urls: ts.config.stunUrls }] });
+    expect(ack).toEqual({ ok: true, coins: 100, iceServers: [{ urls: ts.config.stunUrls }], mode: "preview" });
     await next(c, "queue:waiting").catch(() => undefined);
     expect(order[0]).toBe("ack");
   });
@@ -62,8 +62,8 @@ describe("hello and matching", () => {
     const startB = next(cb, "call:start");
     cb.emit("match:accept", { roomId: fa.roomId });
     const [sa, sb] = await Promise.all([startA, startB]);
-    expect(sa).toEqual({ roomId: fa.roomId, initiator: true }); // the older waiter
-    expect(sb).toEqual({ roomId: fa.roomId, initiator: false });
+    expect(sa).toMatchObject({ roomId: fa.roomId, initiator: true }); // the older waiter
+    expect(sb).toMatchObject({ roomId: fa.roomId, initiator: false });
   });
 
   test("rtc:signal is relayed unchanged to the partner", async () => {
@@ -201,18 +201,43 @@ describe("ending a match", () => {
     await found;
   });
 
-  test("nobody accepting times out both, re-queues and blocks", async () => {
+  test("accept window expiring re-queues the side that accepted and idles the other", async () => {
     ts = await startServer();
-    const { ca, cb, roomId } = await matchedPair(ts);
+    const { ca, cb, roomId, a, b } = await matchedPair(ts);
     const endA = next(ca, "match:ended", 2000);
     const endB = next(cb, "match:ended", 2000);
+    const waitA = next(ca, "queue:waiting", 2000);
     ca.emit("match:accept", { roomId }); // one side accepting is not enough
     expect(await endA).toEqual({ roomId, reason: "timeout" });
-    expect(await endB).toEqual({ roomId, reason: "timeout" });
-    expect(await arrives(ca, "match:found", 300)).toBe(false);
+    expect(await endB).toEqual({ roomId, reason: "accept-timeout" });
+    await waitA;
+    expect((await ts.store.getSession(ca.id!))!.state).toBe("waiting");
+    expect((await ts.store.getSession(cb.id!))!.state).toBe("idle");
+    expect(await ts.store.listWaiting()).toEqual([ca.id!]);
+    expect(await arrives(cb, "queue:waiting", 300)).toBe(false);
+    expect(await ts.store.getBlock(a.deviceId, b.deviceId)).not.toBeNull();
     // A late accept for the dead room does nothing.
     ca.emit("match:accept", { roomId });
     expect(await arrives(ca, "call:start", 200)).toBe(false);
+  });
+
+  test("nobody accepting idles both and tells each they did not accept in time", async () => {
+    ts = await startServer();
+    const { ca, cb, roomId, b } = await matchedPair(ts);
+    const endA = next(ca, "match:ended", 2000);
+    const endB = next(cb, "match:ended", 2000);
+    expect(await endA).toEqual({ roomId, reason: "accept-timeout" });
+    expect(await endB).toEqual({ roomId, reason: "accept-timeout" });
+    expect(await ts.store.listWaiting()).toEqual([]);
+    expect((await ts.store.getSession(ca.id!))!.state).toBe("idle");
+    expect((await ts.store.getSession(cb.id!))!.state).toBe("idle");
+    expect(await arrives(ca, "match:found", 300)).toBe(false);
+    // Pressing Start again from idle (a re-hello) searches as usual.
+    const found = next(cb, "match:found");
+    const c = await ts.connect();
+    await sendHello(c, hello());
+    await sendHello(cb, b);
+    await found;
   });
 
   test("an accept within the grace window after expiresAt still starts the call", async () => {
@@ -312,6 +337,7 @@ describe("ending a match", () => {
         instanceId: "other-instance",
         profile: p,
         preferences: prefs({ genderFilter: "female" }),
+        mode: "preview",
         state: "waiting",
         waitingSince: now - 1000 + i,
         connectedAt: now,

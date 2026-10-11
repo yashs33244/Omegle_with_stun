@@ -3,6 +3,9 @@
  */
 import { ConfigError, loadConfig, type Config } from "./config";
 import { createLogger } from "./logger";
+import Redis from "ioredis";
+import { RedisFlagsStore } from "./flags/flags";
+import { closeSentry, initSentry } from "./observability/sentry";
 import { connectRedisAdapter, type RedisAdapterHandle } from "./realtime/redisAdapter";
 import { createServer } from "./server";
 import { MemoryStore } from "./store/MemoryStore";
@@ -24,20 +27,32 @@ function readConfig(): Config {
 async function main(): Promise<void> {
   const config = readConfig();
   const logger = createLogger(config.logLevel, config.instanceId);
+  if (await initSentry(config)) logger.info("sentry error reporting enabled");
 
   let store: MatchStore;
   let adapter: RedisAdapterHandle | undefined;
+  let appRedis: Redis | undefined;
   if (config.redisUrl) {
     // Shared state and cross-instance emits: safe to run several replicas.
     store = await RedisStore.connect(config.redisUrl, { logger });
     adapter = await connectRedisAdapter(config.redisUrl, logger);
+    // Shared client for feature stores (flags, session, enforcement).
+    appRedis = new Redis(config.redisUrl, { lazyConnect: true, maxRetriesPerRequest: 2, commandTimeout: 5_000 });
+    appRedis.on("error", (err) => logger.warn({ err }, "app redis connection error"));
+    await appRedis.connect();
     logger.info("using Redis store and Socket.IO Redis adapter");
   } else {
     store = new MemoryStore();
     logger.info("using in-memory store (single instance)");
   }
 
-  const server = createServer(config, { store, logger, configureIo: adapter?.install });
+  const server = createServer(config, {
+    store,
+    logger,
+    configureIo: adapter?.install,
+    redis: appRedis,
+    flags: appRedis ? new RedisFlagsStore(appRedis) : undefined,
+  });
   const port = await server.listen(config.port);
   logger.info({ port, env: config.nodeEnv }, "listening");
 
@@ -55,6 +70,8 @@ async function main(): Promise<void> {
       .close()
       .then(() => store.close())
       .then(() => adapter?.close())
+      .then(() => appRedis?.quit())
+      .then(() => closeSentry())
       .then(
         () => {
           logger.info("shutdown complete");

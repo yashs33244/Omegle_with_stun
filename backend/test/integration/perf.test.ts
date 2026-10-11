@@ -31,6 +31,7 @@ async function fillUnmatchable(store: MemoryStore, count: number): Promise<void>
       instanceId: "other-instance",
       profile: base,
       preferences: prefs({ languageFilter: "hi" }),
+      mode: "preview",
       state: "waiting",
       waitingSince: now - count + i,
       connectedAt: now,

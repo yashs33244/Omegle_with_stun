@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Volume2 } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 interface VideoTileProps {
   stream: MediaStream | null;
@@ -12,6 +13,10 @@ interface VideoTileProps {
   hidden?: boolean;
   /** Shows a spinner with this text until the first frame arrives. */
   loadingLabel?: string;
+  /** Safe-start blur: the partner's video is blurred until the on-device check passes. */
+  blurred?: boolean;
+  /** Gives the <video> to frame samplers (on-device moderation). */
+  onVideoElement?: (video: HTMLVideoElement | null) => void;
 }
 
 /**
@@ -25,10 +30,35 @@ export const VideoTile: React.FC<VideoTileProps> = ({
   testId,
   hidden = false,
   loadingLabel,
+  blurred = false,
+  onVideoElement,
 }) => {
+  const { t } = useTranslation("room");
   const videoRef = useRef<HTMLVideoElement>(null);
   const [audioBlocked, setAudioBlocked] = useState(false);
   const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    onVideoElement?.(videoRef.current);
+    return () => onVideoElement?.(null);
+  }, [onVideoElement]);
+
+  // iOS Safari can leave a video frozen after the page was in the background:
+  // re-attach the stream and play again when the page is visible.
+  useEffect(() => {
+    const onVisible = () => {
+      const video = videoRef.current;
+      if (document.visibilityState !== "visible" || !video || !stream) return;
+      if (video.srcObject !== stream) video.srcObject = stream;
+      if (video.paused) {
+        video.play().catch(() => {
+          // The autoplay fallback below already offers "Tap to enable audio".
+        });
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [stream]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -76,10 +106,15 @@ export const VideoTile: React.FC<VideoTileProps> = ({
         playsInline
         muted={muted}
         onLoadedData={() => setLoaded(true)}
+        data-blurred={blurred ? "true" : "false"}
         className={`w-full h-full object-cover ${hidden ? "hidden" : ""}`}
         style={{
           transform: mirrored ? "scaleX(-1)" : undefined,
-          filter: mirrored ? undefined : "brightness(1.1) contrast(1.1) saturate(1.1)",
+          filter: blurred
+            ? "blur(24px)"
+            : mirrored
+              ? undefined
+              : "brightness(1.1) contrast(1.1) saturate(1.1)",
           zIndex: 3,
           position: "relative",
         }}
@@ -96,7 +131,7 @@ export const VideoTile: React.FC<VideoTileProps> = ({
         <div className="absolute inset-x-0 bottom-16 flex justify-center" style={{ zIndex: 25 }}>
           <button type="button" onClick={enableAudio} className="retro-button flex items-center gap-2">
             <Volume2 className="w-5 h-5" />
-            Tap to enable audio
+            {t("video.enableAudio")}
           </button>
         </div>
       )}

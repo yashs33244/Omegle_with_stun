@@ -37,19 +37,50 @@ after(async () => {
   await once(server, "exit");
 });
 
-function connect() {
-  const client = io(base, { transports: ["websocket"], forceNew: true, reconnection: false });
+// The built server keeps the session gate on, so every client gets a token first.
+async function newSession() {
+  const deviceId = randomUUID();
+  const res = await fetch(`${base}/api/session`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      deviceId,
+      fingerprint: "e".repeat(64),
+      age: { dob: "1990-01-01", attest18: true, tosVersion: "2026-10-draft" },
+    }),
+  });
+  const body = await res.json();
+  assert.equal(body.ok, true, `session refused: ${body.error}`);
+  return { deviceId, sessionToken: body.sessionToken };
+}
+
+async function connect(session) {
+  session ??= await newSession();
+  const client = io(base, {
+    transports: ["websocket"],
+    forceNew: true,
+    reconnection: false,
+    auth: { sessionToken: session.sessionToken },
+  });
   return new Promise((resolve, reject) => {
     client.once("connect", () => resolve(client));
     client.once("connect_error", reject);
   });
 }
 
-const helloPayload = () => ({
-  protocolVersion: 2,
-  deviceId: randomUUID(),
+const helloPayload = (deviceId) => ({
+  protocolVersion: 3,
+  mode: "preview",
+  deviceId,
   profile: { name: "Node", country: "IN", language: "en", gender: "unspecified", topics: ["general"] },
   preferences: { genderFilter: "all", languageFilter: "any" },
+});
+
+test("the handshake refuses a socket without a session token", async () => {
+  const client = io(base, { transports: ["websocket"], forceNew: true, reconnection: false });
+  const [err] = await once(client, "connect_error");
+  assert.equal(err.data?.code, "session_required");
+  client.close();
 });
 
 test("an oversized frame closes only the sender; the server stays healthy", async () => {
@@ -63,8 +94,9 @@ test("an oversized frame closes only the sender; the server stays healthy", asyn
   assert.equal(bystander.connected, true);
   const health = await fetch(`${base}/healthz`);
   assert.equal(health.status, 200);
-  const fresh = await connect();
-  const ack = await fresh.timeout(2000).emitWithAck("session:hello", helloPayload());
+  const session = await newSession();
+  const fresh = await connect(session);
+  const ack = await fresh.timeout(2000).emitWithAck("session:hello", helloPayload(session.deviceId));
   assert.equal(ack.ok, true);
   bystander.disconnect();
   fresh.disconnect();

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { describeMediaError, useMediaStream } from "./useMediaStream";
+import { describeMediaError, needsReacquire, useMediaStream, videoConstraints } from "./useMediaStream";
+import i18n from "@/lib/i18n";
 
 interface FakeTrack {
   kind: "audio" | "video";
@@ -48,8 +49,8 @@ describe("describeMediaError", () => {
   ])("maps %s to %s", (name, kind) => {
     const described = describeMediaError(domError(name));
     expect(described.kind).toBe(kind);
-    expect(described.title).not.toBe("");
-    expect(described.message).not.toBe("");
+    expect(i18n.exists(`room:camera.${described.kind}.title`)).toBe(true);
+    expect(i18n.exists(`room:camera.${described.kind}.message`)).toBe(true);
   });
 });
 
@@ -146,5 +147,26 @@ describe("useMediaStream", () => {
     expect(tracks.find((t) => t.kind === "video")?.enabled).toBe(false);
     expect(result.current.micEnabled).toBe(false);
     expect(result.current.cameraEnabled).toBe(false);
+  });
+});
+
+describe("capture constraints and recovery", () => {
+  it("captures 640x480 at 24 fps on phones and 720p on desktops", () => {
+    expect(videoConstraints(true, "environment")).toEqual({
+      width: { ideal: 640 },
+      height: { ideal: 480 },
+      frameRate: { ideal: 24 },
+      facingMode: "environment",
+    });
+    expect(videoConstraints(false)).toEqual({ width: { ideal: 1280 }, height: { ideal: 720 } });
+  });
+
+  it("reopens the camera when a track ended or the video stayed muted", () => {
+    const stream = (tracks: Array<Partial<MediaStreamTrack>>) => ({ getTracks: () => tracks }) as unknown as MediaStream;
+    expect(needsReacquire(null)).toBe(false);
+    expect(needsReacquire(stream([{ kind: "video", readyState: "live", muted: false }]))).toBe(false);
+    expect(needsReacquire(stream([{ kind: "video", readyState: "ended", muted: false }]))).toBe(true);
+    expect(needsReacquire(stream([{ kind: "video", readyState: "live", muted: true }]))).toBe(true);
+    expect(needsReacquire(stream([{ kind: "audio", readyState: "ended", muted: false }]))).toBe(true);
   });
 });

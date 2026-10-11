@@ -10,37 +10,40 @@ export interface ProfileForm {
   photo?: string;
 }
 
+export type ProfileFormErrorKey = "form.errors.nameRequired" | "form.errors.topicsRequired";
+
 export interface ProfileFormErrors {
-  name?: string;
-  topics?: string;
+  name?: ProfileFormErrorKey;
+  topics?: ProfileFormErrorKey;
 }
 
-export const GENDER_CHOICES: ReadonlyArray<{ value: Gender; label: string }> = [
-  { value: "male", label: "Male" },
-  { value: "female", label: "Female" },
-  { value: "other", label: "Other" },
-  { value: "unspecified", label: "Prefer not to say" },
-];
+/** Labels are landing-namespace keys, translated where they render. */
+export const GENDER_CHOICES = [
+  { value: "male", label: "form.gender.male" },
+  { value: "female", label: "form.gender.female" },
+  { value: "other", label: "form.gender.other" },
+  { value: "unspecified", label: "form.gender.unspecified" },
+] as const satisfies ReadonlyArray<{ value: Gender; label: `form.gender.${Gender}` }>;
 
-export const TOPIC_LABELS: Record<Topic, { name: string; emoji: string }> = {
-  general: { name: "General Chat", emoji: "💬" },
-  gaming: { name: "Gaming", emoji: "🎮" },
-  music: { name: "Music", emoji: "🎵" },
-  movies: { name: "Movies", emoji: "🎬" },
-  sports: { name: "Sports", emoji: "⚽" },
-  technology: { name: "Technology", emoji: "💻" },
-  art: { name: "Art & Design", emoji: "🎨" },
-  travel: { name: "Travel", emoji: "✈️" },
-  food: { name: "Food", emoji: "🍕" },
-  books: { name: "Books", emoji: "📚" },
+export const TOPIC_EMOJI: Record<Topic, string> = {
+  general: "💬",
+  gaming: "🎮",
+  music: "🎵",
+  movies: "🎬",
+  sports: "⚽",
+  technology: "💻",
+  art: "🎨",
+  travel: "✈️",
+  food: "🍕",
+  books: "📚",
 };
 
 export const isTopic = (id: string): id is Topic => (TOPICS as readonly string[]).includes(id);
 
 export function validateProfileForm(form: Pick<ProfileForm, "name" | "topics">): ProfileFormErrors {
   const errors: ProfileFormErrors = {};
-  if (form.name.trim().length === 0) errors.name = "Enter your name.";
-  if (form.topics.length === 0) errors.topics = "Choose at least one topic.";
+  if (form.name.trim().length === 0) errors.name = "form.errors.nameRequired";
+  if (form.topics.length === 0) errors.topics = "form.errors.topicsRequired";
   return errors;
 }
 
