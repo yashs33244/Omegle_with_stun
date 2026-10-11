@@ -1,0 +1,28 @@
+{
+  "button": {
+    "label": "Spark",
+    "title": "Spark: an icebreaker you both see at once",
+    "cooldown": "Next Spark in {{seconds}}s"
+  },
+  "card": {
+    "heading": "Spark",
+    "fromYou": "You sparked",
+    "fromPartner": "Your partner sparked",
+    "another": "Another",
+    "dismiss": "Dismiss",
+    "loading": "Loading the prompt…",
+    "unavailable": "Could not load the prompt. Try another."
+  },
+  "captions": {
+    "toggle": "Live captions",
+    "on": "Captions on",
+    "off": "Captions off",
+    "unsupported": "Captions need Chrome",
+    "privacy": "Your words are transcribed by your browser and sent to your partner only. Nothing is stored.",
+    "gotIt": "Got it",
+    "original": "original",
+    "listening": "Listening",
+    "micOff": "Captions pause while your mic is off",
+    "overlay": "Your partner's captions"
+  }
+}

@@ -329,8 +329,11 @@ export interface CallMedia {
 }
 
 /** Client events other hooks may send without touching this file. */
-export type ExtraClientEvent = "call:failed" | "call:telemetry" | "moderation:signal";
-type ExtraPayload<E extends ExtraClientEvent> = Parameters<ClientToServerEvents[E]>[0];
+export type ExtraClientEvent = "call:failed" | "call:telemetry" | "moderation:signal" | "caption:segment";
+/** Acked client events other hooks may send through request(). */
+export type ExtraAckEvent = "spark:request";
+type ExtraPayload<E extends keyof ClientToServerEvents> = Parameters<ClientToServerEvents[E]>[0];
+type ExtraAck<E extends ExtraAckEvent> = Parameters<Parameters<ClientToServerEvents[E]>[1]>[0];
 
 export type ServerEvent = keyof ServerToClientEvents;
 type ServerHandler<E extends ServerEvent> = ServerToClientEvents[E];
@@ -373,8 +376,10 @@ export interface Signaling {
    * Returns an unsubscribe function. Handlers run after this hook's own reducer handling.
    */
   subscribe: <E extends ServerEvent>(event: E, handler: ServerHandler<E>) => () => void;
-  /** Send telemetry, call-failed and moderation signals for the current connection. */
+  /** Send telemetry, call-failed, moderation and caption events for the current connection. */
   send: <E extends ExtraClientEvent>(event: E, payload: ExtraPayload<E>) => void;
+  /** Send an acked feature event; resolves with the server's ack (or an `internal` ack when not connected). */
+  request: <E extends ExtraAckEvent>(event: E, payload: ExtraPayload<E>) => Promise<ExtraAck<E>>;
 }
 
 function notConnected<T extends object>(): Promise<Ack<T>> {
@@ -723,6 +728,19 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
     (socket.emit as (e: string, p: unknown) => void)(event, payload);
   }, []);
 
+  const request = useCallback(async <E extends ExtraAckEvent>(event: E, payload: ExtraPayload<E>) => {
+    const socket = connectedSocket();
+    if (!socket) return notConnected() as Promise<ExtraAck<E>>;
+    // The generic event map cannot be narrowed through the rest parameter.
+    const timed = socket.timeout(ACK_TIMEOUT_MS);
+    const emitWithAck = timed.emitWithAck.bind(timed) as (e: string, p: unknown) => Promise<ExtraAck<E>>;
+    try {
+      return await emitWithAck(event, payload);
+    } catch {
+      return { ok: false, error: "internal", message: i18n.t("room:signaling.noAnswer") } as ExtraAck<E>;
+    }
+  }, []);
+
   const retry = useCallback(() => {
     const socket = socketRef.current;
     if (!socket || TERMINAL.includes(stateRef.current.status)) return;
@@ -752,5 +770,6 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
     search,
     subscribe,
     send,
+    request,
   };
 }

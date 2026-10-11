@@ -14,12 +14,14 @@ import enLanding from "@/locales/en/landing.json";
 import enLegal from "@/locales/en/legal.json";
 import enRoom from "@/locales/en/room.json";
 import enSafety from "@/locales/en/safety.json";
+import enSpark from "@/locales/en/spark.json";
 import hiCommon from "@/locales/hi/common.json";
 import hiGate from "@/locales/hi/gate.json";
 import hiLanding from "@/locales/hi/landing.json";
 import hiLegal from "@/locales/hi/legal.json";
 import hiRoom from "@/locales/hi/room.json";
 import hiSafety from "@/locales/hi/safety.json";
+import hiSpark from "@/locales/hi/spark.json";
 
 export const LANG_STORAGE_KEY = "chizzy.lang";
 
@@ -40,6 +42,7 @@ export const resources = {
     gate: enGate,
     room: enRoom,
     safety: enSafety,
+    spark: enSpark,
     legal: enLegal,
     admin: enAdmin,
   },
@@ -49,6 +52,7 @@ export const resources = {
     gate: hiGate,
     room: hiRoom,
     safety: hiSafety,
+    spark: hiSpark,
     legal: hiLegal,
   },
 } as const;
