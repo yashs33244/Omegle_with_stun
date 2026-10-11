@@ -24,6 +24,23 @@ browser -> Cloudflare (proxy, Turnstile; TURN for relayed media)
                                    -> gateway :3004 -> backend replicas -> Redis
 ```
 
+## Environments
+
+Three ways to run the stack exist; which one is live is decided by what is
+configured, not by the branch:
+
+| environment | where | deploys on |
+|---|---|---|
+| local | `bun run dev` in `backend/` and `new-frontend/` (README "Quick start") | never |
+| PR preview | Vercel preview deployment per pushed branch, talking to the production backend | every push |
+| production | frontend https://chizzy-chat.vercel.app (Vercel) or https://chizzy.pages.dev (Pages, opt-in); backend https://chizzy-api.onrender.com (Render Free, `render.yaml`) | merge to `new-v` |
+| compose on a host | this page's EC2 path | paused; `workflow_dispatch` or `EC2_DEPLOY_ENABLED` |
+
+The ops model (who deploys, health checks, canary, metrics, logs, secrets,
+cost, SLOs) is in [docs/OPERATIONS.md](docs/OPERATIONS.md); step-by-step
+pages are [docs/runbooks/rollback.md](docs/runbooks/rollback.md) and
+[docs/runbooks/release.md](docs/runbooks/release.md).
+
 ## GitHub secrets
 
 Settings -> Secrets and variables -> Actions. Values are never printed by the

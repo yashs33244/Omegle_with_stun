@@ -310,6 +310,10 @@ https://chizzy-chat.vercel.app and https://chizzy-api.onrender.com.
 
 ## Operations
 
+- **Ops model**: [docs/OPERATIONS.md](docs/OPERATIONS.md) (environments,
+  who deploys what, health checks, metrics, logs, secrets, cost, SLOs).
+- **Rollback and release**: [docs/runbooks/rollback.md](docs/runbooks/rollback.md),
+  [docs/runbooks/release.md](docs/runbooks/release.md).
 - **Kill switch and flags**: `/admin` -> Flags. `matching_enabled` off stops
   matching (live calls continue), `new_sessions_enabled` off stops new
   sessions, `banner_message` shows a banner, `default_mode` switches Instant

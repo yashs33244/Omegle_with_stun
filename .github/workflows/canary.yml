@@ -11,8 +11,9 @@ name: Canary
 #
 # Turnstile: the canary sends the secret CANARY_TURNSTILE_BYPASS as its token
 # when the owner configures one; otherwise Cloudflare's dummy test token, which
-# only a backend running with a Turnstile TEST secret accepts (a staging
-# stack). See DEPLOYMENT.md, "Synthetic canary".
+# passes only where the backend does not verify tokens: TURNSTILE_DISABLED=true
+# (production on Render today) or a Turnstile TEST secret (a staging stack).
+# See docs/OPERATIONS.md, "Keep-alive and canary".
 on:
   schedule:
     - cron: "*/15 * * * *"
