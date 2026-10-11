@@ -79,7 +79,7 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
               className="flex min-w-0 max-w-full items-center gap-2 rounded-full bg-black/50 py-1.5 pl-2 pr-3 text-white backdrop-blur-sm"
               data-testid="partner-chip"
             >
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gray-700">
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gray-700 max-[379px]:hidden">
                 <UserRound className="h-4 w-4" aria-hidden="true" />
               </span>
               <span className="min-w-0 truncate text-sm font-semibold">{partner.name}</span>

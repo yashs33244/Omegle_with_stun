@@ -36,7 +36,7 @@ export const CaptionsToggle: React.FC<CaptionsToggleProps> = ({ captions, classN
         data-testid="captions-toggle"
         data-listening={listening ? "1" : undefined}
         className={cn(
-          "relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full border-2 border-black shadow-[0_3px_0_#000] transition-colors",
+          "relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full border-2 border-black shadow-[0_3px_0_#000] transition-colors max-[379px]:h-12 max-[379px]:w-12",
           "focus:outline-none focus-visible:ring-2 focus-visible:ring-yellow-400 disabled:cursor-not-allowed disabled:opacity-50",
           enabled ? "bg-yellow-400 text-black hover:bg-yellow-300" : "bg-black/60 text-white hover:bg-gray-800",
         )}

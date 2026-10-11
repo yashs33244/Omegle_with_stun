@@ -25,8 +25,9 @@ interface CallActionBarProps {
   captions?: CaptionsHandle;
 }
 
+/** Icon buttons: 56 px, 48 px on phones narrower than 380 px so six of them fit in one row with their gaps. */
 const ROUND =
-  "relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full border-2 border-black text-white shadow-[0_3px_0_#000] transition-transform active:translate-y-0.5 active:shadow-none focus:outline-none focus-visible:ring-2 focus-visible:ring-yellow-400";
+  "relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full border-2 border-black text-white shadow-[0_3px_0_#000] transition-transform active:translate-y-0.5 active:shadow-none focus:outline-none focus-visible:ring-2 focus-visible:ring-yellow-400 max-[379px]:h-12 max-[379px]:w-12";
 
 const RoundButton: React.FC<
   React.ButtonHTMLAttributes<HTMLButtonElement> & { label: string; tone?: "dark" | "danger" | "active" }
@@ -43,8 +44,9 @@ const RoundButton: React.FC<
 /**
  * The one thumb-reachable control strip of the call. Phones (portrait): two
  * rows pinned over the bottom of the video, above the home indicator.
- * Phones (landscape): a rail on the right edge. Desktop: one row under the
- * video. Icon buttons are 56 px; Next is the only wide, yellow one.
+ * Phones (landscape): a rail on the right edge, the icons in two columns so
+ * the rail stays shorter than the screen. Desktop: one row under the video.
+ * Icon buttons are 56 px; Next is the only wide, yellow one.
  */
 export const CallActionBar = React.forwardRef<HTMLDivElement, CallActionBarProps>(
   (
@@ -76,7 +78,7 @@ export const CallActionBar = React.forwardRef<HTMLDivElement, CallActionBarProps
         className="absolute inset-x-0 bottom-0 z-[35] flex flex-col items-center gap-3 bg-gradient-to-t from-black/90 via-black/60 to-transparent px-2 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-6 max-lg:landscape:inset-x-auto max-lg:landscape:inset-y-0 max-lg:landscape:right-0 max-lg:landscape:w-auto max-lg:landscape:flex-row max-lg:landscape:items-center max-lg:landscape:justify-center max-lg:landscape:gap-3 max-lg:landscape:bg-gradient-to-l max-lg:landscape:py-2 max-lg:landscape:pl-6 max-lg:landscape:pr-[max(0.75rem,env(safe-area-inset-right))] lg:static lg:flex-row lg:justify-center lg:gap-6 lg:border-t lg:border-gray-800 lg:bg-gray-900 lg:px-6 lg:py-4"
       >
         {!connecting && (
-          <div className="flex items-center justify-center gap-2 max-lg:landscape:flex-col lg:gap-3">
+          <div className="flex items-center justify-center gap-2 max-lg:landscape:grid max-lg:landscape:grid-cols-2 lg:gap-3">
             <RoundButton
               label={micEnabled ? t("mic.mute") : t("mic.unmute")}
               aria-pressed={!micEnabled}
