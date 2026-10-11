@@ -164,6 +164,13 @@ const envSchema = z
         message: "RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET must be set together",
       });
     }
+    if (env.NODE_ENV === "production" && env.RAZORPAY_KEY_ID && !env.RAZORPAY_WEBHOOK_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["RAZORPAY_WEBHOOK_SECRET"],
+        message: "is required in production when RAZORPAY_KEY_ID is set (the webhook is the second crediting path)",
+      });
+    }
     if (env.RAZORPAY_FAKE && env.NODE_ENV === "production") {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
@@ -299,7 +306,7 @@ export interface Config extends MatchConfig {
   /* Billing (src/billing). Razorpay keys from Settings > API Keys; unset: /api/billing answers 503 billing_disabled. */
   razorpayKeyId?: string;
   razorpayKeySecret?: string;
-  /** Secret chosen when creating the webhook in the Razorpay dashboard. Unset: POST /api/billing/webhook answers 503. */
+  /** Secret chosen when creating the webhook in the Razorpay dashboard. Required in production with RAZORPAY_KEY_ID; unset elsewhere: POST /api/billing/webhook answers 503. */
   razorpayWebhookSecret?: string;
   /** Test-only fake gateway (no HTTP, fixed signature). Refused in production. */
   razorpayFake: boolean;

@@ -103,6 +103,10 @@ check_production_secrets() {
   if [ -n "$(setting EVIDENCE_S3_BUCKET)" ] && [ -z "$(setting EVIDENCE_S3_REGION)" ]; then
     missing="$missing EVIDENCE_S3_REGION"
   fi
+  if [ -n "$(setting RAZORPAY_KEY_ID)" ]; then
+    [ -n "$(setting RAZORPAY_KEY_SECRET)" ] || missing="$missing RAZORPAY_KEY_SECRET"
+    [ -n "$(setting RAZORPAY_WEBHOOK_SECRET)" ] || missing="$missing RAZORPAY_WEBHOOK_SECRET"
+  fi
   val=$(setting PSEUDONYM_SALT)
   if [ -z "$val" ]; then
     log "WARNING: PSEUDONYM_SALT is empty; admin pseudonyms come from ADMIN_TOKEN and change when it is rotated"

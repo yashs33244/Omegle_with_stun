@@ -51,9 +51,11 @@ The scope and the owner decisions behind it are in `.planning/BUILD_V1.md`
   "Everyone" needs an active unlock bought with coins (1, 7 or 30 days at
   `gender_filter_coins_per_day`). Coins are earned in calls or bought as
   Razorpay packs (`coin_packs`, default 99 INR = 700 and 299 INR = 3000). The
-  server enforces it (`premium_required` on `session:hello` and
-  `session:preferences`); `premium_filters_enabled=false` makes the filter
-  free again. Wallets and orders are visible in the admin API.
+  server enforces it (`session:hello` downgrades a locked filter to `all` and
+  says so in the ack; `session:preferences` answers `premium_required`; an
+  unlock that lapses mid-session stops applying at the next queue entry);
+  `premium_filters_enabled=false` makes the filter free again. Wallets and
+  orders are visible in the admin API.
 - Horizontal scaling: N backend replicas share state through Redis.
 
 ## Architecture
@@ -217,8 +219,8 @@ Empty values mean "use the default". Compose passes every variable below.
 | EVIDENCE_DIR | compose: `/data/evidence` | the `evidence-data` volume, shared by the replicas |
 | EVIDENCE_S3_BUCKET / EVIDENCE_S3_REGION | unset | store evidence in S3 instead (instance role credentials); the region is required with a bucket |
 | EVIDENCE_S3_KMS_KEY_ID | unset | SSE-KMS key for evidence objects (SSE-S3 without it) |
-| RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET | unset | Razorpay API key pair for coin packs; unset keeps `/api/billing` orders off (503 `billing_disabled`) while earned coins still work. Set both or neither |
-| RAZORPAY_WEBHOOK_SECRET | unset | secret of the Razorpay webhook (`payment.captured` to `https://<api host>/api/billing/webhook`); unset means only the Checkout success path credits coins |
+| RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET | unset | Razorpay API key pair for coin packs; unset keeps `/api/billing` orders off (503 `billing_disabled`) while earned coins still work. Set both or neither. In production they also need `REDIS_URL` (a memory wallet logs `BILLING DISABLED` and keeps orders off) |
+| RAZORPAY_WEBHOOK_SECRET | unset | secret of the Razorpay webhook (`payment.captured` to `https://<api host>/api/billing/webhook`); required in production whenever RAZORPAY_KEY_ID is set, elsewhere unset means only the Checkout success path credits coins |
 | RAZORPAY_FAKE | false | test only (refused in production): fake gateway with no HTTP, used by the e2e suite |
 
 ### Frontend build
@@ -286,6 +288,14 @@ and https://chizzy-api.onrender.com.
   evidence on the ephemeral disk goes with them unless `EVIDENCE_S3_*` is
   set), no Cloudflare TURN until `TURN_PROVIDER=cloudflare` is configured,
   no bot check until Turnstile keys are set.
+- **Coin packs need a durable store.** With `RAZORPAY_KEY_ID` set but no
+  `REDIS_URL`, a production backend logs `BILLING DISABLED` and keeps
+  `/api/billing` orders off: purchased coins, unlocks and payment records in
+  memory would vanish on the next deploy or spin-down. Attach a persistent
+  Redis first (the Upstash free tier is persistent; Render Key Value free is
+  not) and set `REDIS_URL`, then `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`
+  and `RAZORPAY_WEBHOOK_SECRET` together (production refuses to start with
+  keys but no webhook secret).
 
 ## Operations
 

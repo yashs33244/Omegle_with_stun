@@ -10,7 +10,8 @@
 #   instance hours a month, so keep it the only Free web service in the workspace.
 # - ephemeral filesystem and a single instance: the in-memory store is used
 #   (no REDIS_URL), so sessions, bans and report evidence are lost on every
-#   deploy or restart. Set EVIDENCE_S3_* and a Redis URL to keep them.
+#   deploy or restart. Set EVIDENCE_S3_* and a Redis URL to keep them. Coin
+#   purchases are refused on the memory store (see RAZORPAY_* below).
 # - Render sits behind Cloudflare, so True-Client-IP and CF-IPCountry are
 #   trustworthy: TRUST_PROXY + PROXY_IP_HEADER give real per-IP limits and
 #   TRUST_CLOUDFLARE enables the country blocklist.
@@ -57,8 +58,14 @@ services:
       - key: EVIDENCE_DIR
         value: /data/evidence
       # Razorpay (coin packs). Fill in the dashboard (Environment tab) with the
-      # live key pair and the webhook secret; sync: false keeps the blueprint
-      # from overwriting them. Empty keeps /api/billing orders off.
+      # live key pair AND the webhook secret (production refuses to start with
+      # keys but no webhook secret); sync: false keeps the blueprint from
+      # overwriting them. Empty keeps /api/billing orders off.
+      # Real payments need a durable wallet: with keys set but no REDIS_URL the
+      # backend logs "BILLING DISABLED" and answers billing_disabled, because
+      # balances, unlocks and payment records in memory vanish on every deploy
+      # or spin-down. Attach a persistent Redis first (Upstash free tier is
+      # persistent; Render Key Value free is NOT), then set RAZORPAY_*.
       - key: RAZORPAY_KEY_ID
         sync: false
       - key: RAZORPAY_KEY_SECRET

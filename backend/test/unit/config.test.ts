@@ -140,6 +140,14 @@ describe("loadConfig", () => {
     expect(loadConfig({}).razorpayFake).toBe(false);
   });
 
+  test("production with Razorpay keys requires the webhook secret", () => {
+    const keys = { RAZORPAY_KEY_ID: "rzp_live_x", RAZORPAY_KEY_SECRET: "s" };
+    expect(() => loadConfig({ ...PROD, ...keys })).toThrow(/RAZORPAY_WEBHOOK_SECRET: is required in production/);
+    expect(loadConfig({ ...PROD, ...keys, RAZORPAY_WEBHOOK_SECRET: "w" }).razorpayWebhookSecret).toBe("w");
+    expect(loadConfig({ ...PROD }).razorpayWebhookSecret).toBeUndefined();
+    expect(loadConfig(keys).razorpayWebhookSecret).toBeUndefined();
+  });
+
   test("PROXY_IP_HEADER counts only with TRUST_PROXY; keep-alive URL falls back to Render's /healthz", () => {
     expect(loadConfig({ PROXY_IP_HEADER: "True-Client-IP" }).proxyIpHeader).toBeNull();
     expect(loadConfig({ TRUST_PROXY: "true", PROXY_IP_HEADER: "True-Client-IP" }).proxyIpHeader).toBe("true-client-ip");
