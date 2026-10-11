@@ -124,9 +124,10 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
           )}
           <div
             key={coinBump}
+            role="status"
             aria-label={coins === null ? t("header.coinsLoading") : t("header.coins", { coins })}
             className={`coin-counter flex items-center gap-1 rounded-full border border-yellow-500 bg-black/50 px-2 py-1 backdrop-blur-sm ${
-              coinBump > 0 ? "animate-coin-pop" : ""
+              coinBump > 0 ? "animate-coin-pop motion-reduce:animate-none" : ""
             }`}
           >
             <Coins className="h-4 w-4 text-yellow-400" aria-hidden="true" />

@@ -163,7 +163,7 @@ export const UnlockSheet: React.FC = () => {
           {feedback.text}
         </p>
       )}
-      <p className="mt-4 text-xs text-gray-500">{t("earnHint")}</p>
+      <p className="mt-4 text-xs text-gray-400">{t("earnHint")}</p>
     </BottomSheet>
   );
 };

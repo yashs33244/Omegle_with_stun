@@ -144,8 +144,8 @@ export const WaitingPanel: React.FC<WaitingPanelProps> = ({
       }
     >
       <div className="relative mx-auto h-24 w-24">
-        <span className="absolute inset-0 animate-ping rounded-full bg-yellow-400/30" aria-hidden="true" />
-        <span className="absolute -inset-2 animate-pulse rounded-full border-2 border-yellow-400/60" aria-hidden="true" />
+        <span className="absolute inset-0 animate-ping rounded-full bg-yellow-400/30 motion-reduce:animate-none" aria-hidden="true" />
+        <span className="absolute -inset-2 animate-pulse rounded-full border-2 border-yellow-400/60 motion-reduce:animate-none" aria-hidden="true" />
         {photo ? (
           <img src={photo} alt={t("waiting.profileAlt")} className="relative h-24 w-24 rounded-full border-4 border-yellow-400 object-cover" />
         ) : (

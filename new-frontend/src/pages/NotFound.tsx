@@ -36,7 +36,7 @@ const NotFound = () => {
               {t("notFound.home")}
             </Button>
 
-            <p className="text-sm text-gray-500">{t("notFound.tagline")}</p>
+            <p className="text-sm text-gray-600">{t("notFound.tagline")}</p>
           </div>
         </CardContent>
       </Card>
