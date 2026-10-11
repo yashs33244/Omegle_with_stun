@@ -22,6 +22,7 @@ if [ -n "$bad" ]; then
   exit 1
 fi
 
+# shellcheck disable=SC2016 # the ${...} below is a JavaScript template literal, not shell
 degraded=$(node -e '
   const { packages } = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
   const missing = Object.entries(packages)
