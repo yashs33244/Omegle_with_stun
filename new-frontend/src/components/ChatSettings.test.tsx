@@ -3,7 +3,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { ChatSettings } from "./ChatSettings";
 import type { Preferences, SimpleAck } from "@/lib/protocol";
-import { GENDER_OPTIONS, LANGUAGE_OPTIONS } from "@/lib/utils";
+import { LANGUAGE_OPTIONS } from "@/lib/utils";
 
 const prefs: Preferences = { genderFilter: "all", languageFilter: "any" };
 
@@ -48,7 +48,7 @@ describe("ChatSettings", () => {
     renderSettings();
     const { listbox } = await openSelect("Who do you want to meet?");
     const options = within(listbox).getAllByRole("option").map((o) => o.textContent);
-    expect(options).toEqual(GENDER_OPTIONS.map((o) => o.label));
+    expect(options).toEqual(["Everyone", "Male", "Female", "Other"]);
   });
 
   it("renders any language plus every language option", async () => {
@@ -90,6 +90,11 @@ describe("ChatSettings", () => {
     expect(screen.getByRole("button", { name: "Preferred Language" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Report/ })).not.toBeInTheDocument();
     expect(screen.getByText(/tap the flag on their video/)).toBeInTheDocument();
+  });
+
+  it("offers the UI language switcher", () => {
+    renderSettings();
+    expect(screen.getByTestId("language-switcher")).toBeInTheDocument();
   });
 
   it("close button calls onClose", async () => {

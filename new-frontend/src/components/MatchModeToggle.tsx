@@ -1,18 +1,20 @@
 import React from "react";
 import { Eye, Zap } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import type { MatchMode } from "@/lib/protocol";
 
-const OPTIONS: Array<{ mode: MatchMode; label: string; hint: string; Icon: typeof Zap }> = [
-  { mode: "instant", label: "Instant", hint: "The call starts right away, video blurred until it is checked.", Icon: Zap },
-  { mode: "preview", label: "Preview", hint: "See their name and photo first, then accept or pass.", Icon: Eye },
+const OPTIONS: Array<{ mode: MatchMode; label: "matchMode.instant" | "matchMode.preview"; hint: "matchMode.instantHint" | "matchMode.previewHint"; Icon: typeof Zap }> = [
+  { mode: "instant", label: "matchMode.instant", hint: "matchMode.instantHint", Icon: Zap },
+  { mode: "preview", label: "matchMode.preview", hint: "matchMode.previewHint", Icon: Eye },
 ];
 
 /** Instant / Preview segmented control on the start screen. */
 export const MatchModeToggle: React.FC<{ mode: MatchMode; onChange: (mode: MatchMode) => void }> = ({ mode, onChange }) => {
+  const { t } = useTranslation("room");
   const hint = OPTIONS.find((o) => o.mode === mode)?.hint;
   return (
     <div className="space-y-1">
-      <div role="radiogroup" aria-label="Match mode" className="inline-flex rounded-lg border-2 border-black bg-black bg-opacity-60 p-1">
+      <div role="radiogroup" aria-label={t("matchMode.label")} className="inline-flex rounded-lg border-2 border-black bg-black bg-opacity-60 p-1">
         {OPTIONS.map(({ mode: value, label, Icon }) => {
           const selected = value === mode;
           return (
@@ -28,12 +30,12 @@ export const MatchModeToggle: React.FC<{ mode: MatchMode; onChange: (mode: Match
               }`}
             >
               <Icon className="w-4 h-4" aria-hidden="true" />
-              {label}
+              {t(label)}
             </button>
           );
         })}
       </div>
-      {hint && <p className="text-xs text-gray-200">{hint}</p>}
+      {hint && <p className="text-xs text-gray-200">{t(hint)}</p>}
     </div>
   );
 };

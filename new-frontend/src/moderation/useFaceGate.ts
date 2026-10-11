@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import i18n from "@/lib/i18n";
 import { FaceGateMonitor } from "./faceGate";
 import { grabFrame } from "./frames";
 import { faceModel } from "./modelClient";
@@ -52,7 +53,7 @@ export function useFaceGate({ stream, enabled, roomId, onNoFace }: FaceGateOptio
       detect: async (image) => (await faceModel().run(image)).faces > 0,
       onPausedChange: (nowPaused, episodes) => {
         current?.stop();
-        current = nowPaused ? createPausedPlaceholder(video) : null;
+        current = nowPaused ? createPausedPlaceholder(video, i18n.t("room:faceGate.placeholder")) : null;
         setPlaceholder(current);
         setPaused(nowPaused);
         setEpisode(episodes);

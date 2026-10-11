@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Check, Heart, Loader, UserRound, X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { getCountryByCode } from "@/lib/data";
 import { formatTopics } from "@/lib/utils";
 import type { PublicProfile } from "@/lib/protocol";
@@ -38,6 +39,7 @@ export const MatchPrompt: React.FC<MatchPromptProps> = ({
   onAccept,
   onDecline,
 }) => {
+  const { t } = useTranslation("room");
   const remaining = useSecondsLeft(expiresAt);
   // Time is up: the server ends this match, so answering it does nothing.
   const expired = remaining === 0;
@@ -51,7 +53,7 @@ export const MatchPrompt: React.FC<MatchPromptProps> = ({
     >
       {partner.photo?.startsWith("data:image/") ? (
         // Blurred on this device until the on-device classifier passes it.
-        <PartnerPhoto photo={partner.photo} alt={`${partner.name}'s photo`} className="w-full h-full object-cover" />
+        <PartnerPhoto photo={partner.photo} alt={t("match.photoAlt", { name: partner.name })} className="w-full h-full object-cover" />
       ) : (
         <div className="w-full h-full bg-gray-800 flex items-center justify-center">
           <UserRound className="w-32 h-32 text-gray-400" />
@@ -61,7 +63,7 @@ export const MatchPrompt: React.FC<MatchPromptProps> = ({
       {/* Timer countdown */}
       {remaining !== null && remaining > 0 && (
         <div className="timer-text" aria-live="polite" data-testid="match-countdown">
-          {remaining}s
+          {t("match.countdown", { seconds: remaining })}
         </div>
       )}
 
@@ -76,21 +78,22 @@ export const MatchPrompt: React.FC<MatchPromptProps> = ({
       <div className="match-overlay" style={{ zIndex: 4 }}>
         <div className="text-center space-y-6 px-4">
           <div className="text-white space-y-2">
-            <h3 className="text-2xl font-bold">Someone wants to chat!</h3>
+            <h3 className="text-2xl font-bold">{t("match.title")}</h3>
             <p className="text-gray-300">
-              {partner.name}
-              {country && ` from ${country.name}`}
+              {country
+                ? t("match.partnerFrom", { name: partner.name, country: t(`landing:countries.${country.code}`, { defaultValue: country.name }) })
+                : partner.name}
             </p>
-            <p className="text-sm text-gray-400">Interested in: {formatTopics(partner.topics)}</p>
+            <p className="text-sm text-gray-400">{t("match.interestedIn", { topics: formatTopics(partner.topics) })}</p>
             {isFriend && (
               <p className="text-sm text-pink-400 flex items-center justify-center gap-1">
-                <Heart className="w-4 h-4" /> You are friends
+                <Heart className="w-4 h-4" /> {t("match.friends")}
               </p>
             )}
             {partnerAccepted && !accepted && (
               <div className="bg-green-500 bg-opacity-20 border border-green-500 rounded-lg p-2 mt-3">
                 <p className="text-green-400 text-sm">
-                  ✅ {partner.name} has accepted! Waiting for your response...
+                  {t("match.partnerAccepted", { name: partner.name })}
                 </p>
               </div>
             )}
@@ -100,16 +103,14 @@ export const MatchPrompt: React.FC<MatchPromptProps> = ({
             <div className="flex items-center justify-center gap-3 text-white">
               <Loader className="w-5 h-5 text-yellow-400 animate-spin" />
               <span>
-                {partnerAccepted
-                  ? "Both users accepted! Setting up video call..."
-                  : `Waiting for ${partner.name} to accept...`}
+                {partnerAccepted ? t("match.bothAccepted") : t("match.waitingFor", { name: partner.name })}
               </span>
             </div>
           ) : (
             <div className="space-y-3">
               {expired && (
                 <p className="text-gray-300" role="status">
-                  Time's up. Finding someone new...
+                  {t("match.expired")}
                 </p>
               )}
               <div className="flex gap-4 justify-center">
@@ -121,7 +122,7 @@ export const MatchPrompt: React.FC<MatchPromptProps> = ({
                   className="retro-button bg-red-500 border-red-600 text-white hover:bg-red-400 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <X className="w-5 h-5 inline mr-2" />
-                  Pass
+                  {t("match.pass")}
                 </button>
                 <button
                   type="button"
@@ -131,7 +132,7 @@ export const MatchPrompt: React.FC<MatchPromptProps> = ({
                   className="retro-button bg-green-500 border-green-600 text-white hover:bg-green-400 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Check className="w-5 h-5 inline mr-2" />
-                  Accept
+                  {t("match.accept")}
                 </button>
               </div>
             </div>

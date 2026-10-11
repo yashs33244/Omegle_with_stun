@@ -13,7 +13,7 @@ export interface Placeholder {
   stop: () => void;
 }
 
-export function createPausedPlaceholder(source: HTMLVideoElement | null, text = "Video paused"): Placeholder | null {
+export function createPausedPlaceholder(source: HTMLVideoElement | null, text: string): Placeholder | null {
   const canvas = document.createElement("canvas");
   if (typeof canvas.captureStream !== "function") return null;
   canvas.width = WIDTH;

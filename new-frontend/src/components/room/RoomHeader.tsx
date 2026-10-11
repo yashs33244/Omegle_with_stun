@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Coins, Heart, Home, Settings, SkipForward, Loader } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/retroui/Button";
 import { ConnectionIndicator } from "@/components/ConnectionIndicator";
 import { formatConnectionTime } from "@/lib/utils";
@@ -44,6 +45,7 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
   onSettings,
   onSkip,
 }) => {
+  const { t } = useTranslation("room");
   const elapsed = useElapsedSeconds(inCall ? callStartedAt : null);
 
   return (
@@ -56,14 +58,14 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
         <button
           type="button"
           onClick={onHome}
-          aria-label="Chizzy home"
+          aria-label={t("header.home")}
           className="text-yellow-400 hover:text-yellow-300 transition-colors"
         >
           <h1 className={`${isMobile ? "text-lg" : "text-2xl"} font-bold`}>Chizzy</h1>
         </button>
         <div
           key={coinBump}
-          aria-label={`Coins: ${coins ?? "loading"}`}
+          aria-label={coins === null ? t("header.coinsLoading") : t("header.coins", { coins })}
           className={`coin-counter flex items-center gap-2 bg-yellow-500 bg-opacity-20 ${
             isMobile ? "px-2 py-1" : "px-3 py-1"
           } rounded-full border border-yellow-500 ${coinBump > 0 ? "animate-coin-pop" : ""}`}
@@ -78,13 +80,13 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
             } rounded-full border border-pink-500`}
           >
             <Heart className={`${isMobile ? "w-4 h-4" : "w-5 h-5"} text-pink-400`} />
-            <span className={`font-bold text-pink-400 ${isMobile ? "text-sm" : ""}`}>Friends</span>
+            <span className={`font-bold text-pink-400 ${isMobile ? "text-sm" : ""}`}>{t("header.friends")}</span>
           </div>
         )}
         {reconnecting && (
           <div role="status" className="flex items-center gap-2 text-sm text-orange-300">
             <Loader className="w-4 h-4 animate-spin" />
-            {!isMobile && "Reconnecting..."}
+            {!isMobile && t("header.reconnecting")}
           </div>
         )}
       </div>
@@ -93,47 +95,47 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
         {inCall && (
           <div className="flex items-center gap-2 text-white text-sm">
             <ConnectionIndicator quality={quality} />
-            {!isMobile && <span>Connected: {formatConnectionTime(elapsed)}</span>}
+            {!isMobile && <span>{t("header.connected", { time: formatConnectionTime(elapsed) })}</span>}
           </div>
         )}
         <Button
           onClick={onSettings}
           variant="outline"
           size="sm"
-          aria-label="Settings"
+          aria-label={t("header.settings")}
           className={`flex items-center ${
             isMobile ? "gap-1 px-2" : "gap-2"
           } bg-gray-800 border-gray-600 text-white hover:bg-gray-700`}
         >
           <Settings className="w-4 h-4" />
-          {!isMobile && "Settings"}
+          {!isMobile && t("header.settings")}
         </Button>
         {inCall && (
           <Button
             onClick={onSkip}
             variant="outline"
             size="sm"
-            aria-label="Skip"
+            aria-label={t("header.skip")}
             data-testid="skip-button"
             className={`flex items-center ${
               isMobile ? "gap-1 px-2" : "gap-2"
             } bg-orange-600 border-orange-500 text-white hover:bg-orange-500`}
           >
             <SkipForward className="w-4 h-4" />
-            {!isMobile && "Skip"}
+            {!isMobile && t("header.skip")}
           </Button>
         )}
         <Button
           onClick={onHome}
           variant="outline"
           size="sm"
-          aria-label="Home"
+          aria-label={t("header.homeButton")}
           className={`flex items-center ${
             isMobile ? "gap-1 px-2" : "gap-2"
           } bg-gray-800 border-gray-600 text-white hover:bg-gray-700`}
         >
           <Home className="w-4 h-4" />
-          {!isMobile && "Home"}
+          {!isMobile && t("header.homeButton")}
         </Button>
       </div>
     </div>
