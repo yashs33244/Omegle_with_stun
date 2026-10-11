@@ -2,13 +2,13 @@
   "profile": {
     "editAria": "प्रोफ़ाइल फ़ोटो और विवरण संपादित करें",
     "guest": "अतिथि उपयोगकर्ता",
-    "speaks": "मैं बोलता/बोलती हूँ: {{language}}",
-    "topicsHeading": "मेरे विषय:",
-    "more_one": "+{{count}} और",
-    "more_other": "+{{count}} और",
-    "edit": "प्रोफ़ाइल संपादित करें"
+    "topicsCount_one": "{{count}} विषय",
+    "topicsCount_other": "{{count}} विषय",
+    "meeting": "मिलना है: {{gender}}",
+    "edit": "बदलें"
   },
   "camera": {
+    "preview": "आपका कैमरा",
     "ready": "कैमरा तैयार है",
     "starting": "कैमरा शुरू हो रहा है...",
     "off": "कैमरा बंद है",
@@ -16,15 +16,21 @@
     "required": "कैमरा एक्सेस ज़रूरी है",
     "enable": "कैमरा चालू करें",
     "tryAgain": "फिर से कोशिश करें",
-    "allowToContinue": "जारी रखने के लिए कृपया कैमरा एक्सेस की अनुमति दें"
+    "allowToContinue": "जारी रखने के लिए कैमरा एक्सेस की अनुमति दें"
   },
   "settings": {
-    "language": "भाषा",
-    "country": "देश"
+    "open": "सेटिंग्स",
+    "title": "सेटिंग्स",
+    "matchHeading": "किससे मिलना है",
+    "profileHeading": "आपके बारे में",
+    "privacyHeading": "निजता",
+    "language": "मैं बोलता/बोलती हूँ",
+    "country": "देश",
+    "done": "हो गया"
   },
   "start": "शुरू करें",
   "rules": {
-    "reminder": "याद रखें: केवल 18+ के लिए। नग्नता, उत्पीड़न, नफ़रत या स्पैम की अनुमति नहीं है। नियम तोड़ने पर आपको हटाया जा सकता है। <guidelines>सामुदायिक दिशानिर्देश</guidelines> पढ़ें।"
+    "reminder": "केवल 18+ के लिए। नग्नता, नफ़रत या स्पैम नहीं। <guidelines>नियम</guidelines>"
   },
   "setup": {
     "captureTitle": "अपनी फ़ोटो लें",

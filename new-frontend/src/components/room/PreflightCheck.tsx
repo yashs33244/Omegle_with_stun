@@ -15,44 +15,54 @@ function networkText(network: NetworkCheck): { ok: boolean | null; key: NetworkK
   return { ok: null, key: "preflight.network.maybeRelay" };
 }
 
-/** Pre-flight check on the start screen: mic meter, lighting hint and network probe. */
+/**
+ * Pre-flight check under the camera tile: mic meter, lighting hint and
+ * network probe, in one compact row so the start screen stays one screen.
+ */
 export const PreflightCheck: React.FC<{ stream: MediaStream | null }> = ({ stream }) => {
   const { t } = useTranslation("room");
   const { micLevel, lighting, network } = usePreflight(stream);
   const net = networkText(network);
   const NetIcon = network.status === "checking" ? Loader : net.ok === false ? WifiOff : Wifi;
+  const level = Math.round(micLevel * 100);
 
   return (
-    <section aria-label={t("preflight.label")} className="space-y-2 text-sm" data-testid="preflight">
-      <h2 className="font-medium text-sm">{t("preflight.title")}</h2>
-      <div className="flex items-center gap-2">
-        <Mic className="w-4 h-4 shrink-0" aria-hidden="true" />
-        <div
-          className="flex-1 h-2 bg-white bg-opacity-20 rounded"
-          role="meter"
-          aria-label={t("preflight.micLevel")}
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(micLevel * 100)}
-        >
-          <div className="h-2 bg-green-400 rounded transition-all" style={{ width: `${Math.round(micLevel * 100)}%` }} />
+    <section aria-label={t("preflight.label")} className="text-xs text-gray-300 space-y-1" data-testid="preflight">
+      <h2 className="sr-only">{t("preflight.title")}</h2>
+      <div className="flex items-center gap-3">
+        <div className="flex items-center gap-1.5 min-w-0 w-28 shrink-0">
+          <Mic className="w-4 h-4 shrink-0" aria-hidden="true" />
+          <div
+            className="flex-1 h-1.5 bg-white/20 rounded"
+            role="meter"
+            aria-label={t("preflight.micLevel")}
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={level}
+          >
+            <div className="h-1.5 bg-green-400 rounded transition-all" style={{ width: `${level}%` }} />
+          </div>
         </div>
+        {lighting === "dark" && (
+          <p className="flex items-center gap-1 text-yellow-300 min-w-0" role="status">
+            <Lightbulb className="w-4 h-4 shrink-0" aria-hidden="true" />
+            <span className="truncate">{t("preflight.dark")}</span>
+          </p>
+        )}
+        {lighting === "ok" && (
+          <p className="flex items-center gap-1 min-w-0">
+            <CheckCircle2 className="w-4 h-4 shrink-0 text-green-400" aria-hidden="true" />
+            <span className="truncate">{t("preflight.lightingOk")}</span>
+          </p>
+        )}
       </div>
-      {lighting === "dark" && (
-        <p className="flex items-center gap-2 text-yellow-300" role="status">
-          <Lightbulb className="w-4 h-4 shrink-0" aria-hidden="true" />
-          {t("preflight.dark")}
-        </p>
-      )}
-      {lighting === "ok" && (
-        <p className="flex items-center gap-2 text-gray-300">
-          <CheckCircle2 className="w-4 h-4 shrink-0 text-green-400" aria-hidden="true" />
-          {t("preflight.lightingOk")}
-        </p>
-      )}
-      <p className={`flex items-center gap-2 ${net.ok === false ? "text-red-300" : "text-gray-300"}`} role="status" data-testid="preflight-network">
+      <p
+        className={`flex items-start gap-1 ${net.ok === false ? "text-red-300" : ""}`}
+        role="status"
+        data-testid="preflight-network"
+      >
         <NetIcon className={`w-4 h-4 shrink-0 ${network.status === "checking" ? "animate-spin" : ""}`} aria-hidden="true" />
-        {t(net.key)}
+        <span>{t(net.key)}</span>
       </p>
     </section>
   );

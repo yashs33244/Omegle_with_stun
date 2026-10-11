@@ -103,10 +103,13 @@ test("Hide my IP is offered in the call when the server allows it, and says so w
   const eve = await openStranger("Eve");
   const fay = await openStranger("Fay");
   await allowPrivateMode(eve.context);
-  // Fay asks for Hide my IP on the start screen; this e2e backend has no TURN relay to use.
+  // Fay asks for Hide my IP in the start screen's settings sheet; this e2e backend has no TURN relay to use.
   await passGate(fay);
+  await fay.page.getByTestId("open-settings").click();
   await fay.page.getByTestId("hide-ip-toggle").click();
   await expect(fay.page.getByTestId("hide-ip-toggle")).toHaveAttribute("aria-checked", "true");
+  await fay.page.getByTestId("settings-done").click();
+  await expect(fay.page.getByTestId("start-settings")).toBeHidden();
   await startInstantCall(eve, fay);
   await expect(fay.page.getByTestId("private-unavailable")).toBeVisible();
   await expect(fay.page.getByTestId("private-badge")).toHaveCount(0);
