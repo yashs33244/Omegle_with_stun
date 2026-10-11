@@ -2,7 +2,9 @@
  * <SparkCard spark={useSpark(...)} />
  *
  * The prompt card both sides see for SPARK.cardMs, rendered once near the
- * room root (fixed, above the video). Shows the prompt in the viewer's UI
+ * room root (fixed, above the video). While a modal sheet is open the card
+ * waits out of sight (it would be inert above the sheet) and shows once the
+ * sheet closes. Shows the prompt in the viewer's UI
  * language, who sparked it, "Another" (a new request, disabled while the
  * room cooldown runs) and a dismiss button. data-testid="spark-card" with
  * data-prompt-id; the prompt text is in data-testid="spark-text".
@@ -26,13 +28,13 @@ export const SparkCard: React.FC<SparkCardProps> = ({ spark }) => {
   // The bar starts full and shrinks to nothing over the card's life.
   const [barFull, setBarFull] = useState(true);
   useEffect(() => {
-    if (!card) return;
+    if (!card || spark.held) return;
     setBarFull(true);
     const frame = requestAnimationFrame(() => setBarFull(false));
     return () => cancelAnimationFrame(frame);
-  }, [card]);
+  }, [card, spark.held]);
 
-  if (!card) return null;
+  if (!card || spark.held) return null;
   const cooling = remaining > 0;
   const text = spark.text === null ? t("card.loading") : spark.text || t("card.unavailable");
 

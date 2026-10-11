@@ -1,6 +1,7 @@
 import React from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
+import { BottomSheet } from "@/components/ui/BottomSheet";
 import type { Signaling } from "@/hooks/useSignaling";
 import { SPARK, type ServerToClientEvents, type SparkAck } from "@/lib/protocol";
 import { resetPromptCache } from "./prompts";
@@ -128,6 +129,36 @@ describe("useSpark", () => {
     expect(screen.getByTestId("spark-button")).toBeEnabled();
     act(() => {
       vi.advanceTimersByTime(SPARK.cardMs - SPARK.cooldownMs);
+    });
+    expect(screen.queryByTestId("spark-card")).toBeNull();
+  });
+
+  it("a spark that arrives while a modal sheet is open waits, then gets its full time once the sheet closes", () => {
+    vi.useFakeTimers();
+    const signaling = fakeSignaling();
+    const { rerender } = render(
+      <>
+        <Harness signaling={signaling} roomId={ROOM} />
+        <BottomSheet open title="Settings" onOpenChange={() => {}}>
+          body
+        </BottomSheet>
+      </>,
+    );
+    signaling.fire({ roomId: ROOM, promptId: "food-04", from: "partner", at: Date.now() });
+    expect(screen.queryByTestId("spark-card")).toBeNull();
+    // Longer than the card normally lives: the hold keeps it.
+    act(() => {
+      vi.advanceTimersByTime(SPARK.cardMs + 1_000);
+    });
+
+    rerender(<Harness signaling={signaling} roomId={ROOM} />);
+    expect(screen.getByTestId("spark-card")).toHaveAttribute("data-prompt-id", "food-04");
+    act(() => {
+      vi.advanceTimersByTime(SPARK.cardMs - 100);
+    });
+    expect(screen.getByTestId("spark-card")).toBeInTheDocument();
+    act(() => {
+      vi.advanceTimersByTime(200);
     });
     expect(screen.queryByTestId("spark-card")).toBeNull();
   });

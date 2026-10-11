@@ -5,6 +5,7 @@ import type { Preferences, Profile } from "@/lib/protocol";
 import { initialSignalingState, type SignalingState } from "@/hooks/useSignaling";
 import type { PeerConnectionState } from "@/hooks/usePeerConnection";
 import { SAFETY_COACH_KEY } from "@/components/safety/safetyText";
+import { CAPTIONS_KEY } from "@/captions";
 import type * as MediaQuery from "@/hooks/useMediaQuery";
 import { PremiumContext, type PremiumValue } from "@/premium/PremiumContext";
 
@@ -12,6 +13,11 @@ let signalingState: SignalingState;
 let peerState: PeerConnectionState;
 const skip = vi.fn();
 const reportConnected = vi.fn();
+/** Server events the room subscribed to (captions, spark), by event name. */
+const subscribers = new Map<string, Set<(payload: unknown) => void>>();
+function emitServerEvent(event: string, payload: unknown) {
+  act(() => subscribers.get(event)?.forEach((handler) => handler(payload)));
+}
 
 vi.mock("@/hooks/useSignaling", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/hooks/useSignaling")>();
@@ -31,7 +37,12 @@ vi.mock("@/hooks/useSignaling", async (importOriginal) => {
       subscribeSignals: vi.fn(() => () => {}),
       retry: vi.fn(),
       search: vi.fn(),
-      subscribe: vi.fn(() => () => {}),
+      subscribe: vi.fn((event: string, handler: (payload: unknown) => void) => {
+        const set = subscribers.get(event) ?? new Set();
+        set.add(handler);
+        subscribers.set(event, set);
+        return () => set.delete(handler);
+      }),
       send: vi.fn(),
       request: vi.fn(async () => ({ ok: false as const, error: "internal" as const })),
     }),
@@ -41,9 +52,14 @@ vi.mock("@/hooks/usePeerConnection", () => ({ usePeerConnection: () => peerState
 vi.mock("@/hooks/useAudioLevelDetection", () => ({ useAudioLevelDetection: () => ({ isSpeaking: false }) }));
 // jsdom has no matchMedia: these tests render the desktop (two-column) layout.
 let desktopLayout = true;
+let landscapeLayout = false;
 vi.mock("@/hooks/useMediaQuery", async (importOriginal) => {
   const actual = await importOriginal<typeof MediaQuery>();
-  return { ...actual, useMediaQuery: (query: string) => (query === actual.DESKTOP_QUERY ? desktopLayout : false) };
+  return {
+    ...actual,
+    useMediaQuery: (query: string) =>
+      query === actual.DESKTOP_QUERY ? desktopLayout : query === actual.LANDSCAPE_QUERY ? landscapeLayout : false,
+  };
 });
 
 const { Room } = await import("./Room");
@@ -288,6 +304,7 @@ describe("Room action bar and chat", () => {
   });
   afterEach(() => {
     desktopLayout = true;
+    landscapeLayout = false;
     vi.clearAllMocks();
   });
 
@@ -331,6 +348,25 @@ describe("Room action bar and chat", () => {
     fireEvent.click(screen.getByRole("button", { name: /Text Only/ }));
     expect(screen.getByTestId("chat-sheet")).toBeInTheDocument();
     expect(screen.queryByTestId("chat-close")).not.toBeInTheDocument();
+  });
+
+  it("keeps the captions overlay above the bar on portrait phones and beside the rail in landscape", () => {
+    localStorage.setItem(CAPTIONS_KEY, "1");
+    desktopLayout = false;
+    const { micChanges, cameraChanges, rerender } = renderRoom();
+    const segment = { roomId: ROOM, id: "p1", text: "hello there", final: true, lang: "en" };
+    emitServerEvent("caption:segment", segment);
+    const overlay = screen.getByTestId("captions-overlay");
+    expect(overlay).toHaveTextContent("hello there");
+    expect(overlay.style.bottom).toMatch(/^calc\(\d+px \+ 0\.75rem\)$/);
+    expect(overlay.style.right).toBe("");
+
+    landscapeLayout = true;
+    rerender(<Harness micChanges={micChanges} cameraChanges={cameraChanges} />);
+    const rail = screen.getByTestId("captions-overlay");
+    expect(rail.style.bottom).toContain("env(safe-area-inset-bottom)");
+    expect(rail.style.bottom).toContain("0.75rem");
+    expect(rail.style.right).toMatch(/^calc\(\d+px \+ 0\.5rem\)$/);
   });
 });
 

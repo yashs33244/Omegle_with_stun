@@ -355,19 +355,21 @@ const RoomSession: React.FC<RoomProps> = ({
   );
   const dismissToast = useCallback(() => setToast(null), []);
 
-  // The phone chat sheet sits on top of the action bar, whatever its height.
+  // The phone chat sheet sits on top of the action bar, whatever its height; on landscape
+  // phones the bar is a right rail, and the captions overlay stays clear of its width.
   const actionBarRef = useRef<HTMLDivElement>(null);
-  const [actionBarHeight, setActionBarHeight] = useState(0);
+  const [actionBarSize, setActionBarSize] = useState({ width: 0, height: 0 });
   const showActionBar = inCall || instantConnecting;
   useLayoutEffect(() => {
     const el = actionBarRef.current;
     if (!el || desktop || typeof ResizeObserver === "undefined") {
-      setActionBarHeight(0);
+      setActionBarSize({ width: 0, height: 0 });
       return;
     }
-    const observer = new ResizeObserver(() => setActionBarHeight(el.offsetHeight));
+    const measure = () => setActionBarSize({ width: el.offsetWidth, height: el.offsetHeight });
+    const observer = new ResizeObserver(measure);
     observer.observe(el);
-    setActionBarHeight(el.offsetHeight);
+    measure();
     return () => observer.disconnect();
   }, [desktop, showActionBar]);
 
@@ -426,9 +428,16 @@ const RoomSession: React.FC<RoomProps> = ({
             />
           )}
 
-          {/* The partner's live captions sit over the remote video, just above the action bar. */}
+          {/* The partner's live captions sit over the remote video, clear of the action bar (a right rail on landscape phones). */}
           {inCall && !textOnlyMode && (
-            <CaptionsOverlay captions={captions} style={{ bottom: `calc(${actionBarHeight}px + 0.75rem)` }} />
+            <CaptionsOverlay
+              captions={captions}
+              style={
+                landscape && !desktop
+                  ? { bottom: "calc(env(safe-area-inset-bottom) + 0.75rem)", right: `calc(${actionBarSize.width}px + 0.5rem)` }
+                  : { bottom: `calc(${actionBarSize.height}px + 0.75rem)` }
+              }
+            />
           )}
 
           {inCall && !textOnlyMode && !connectionFailed && peer.remoteStream && (
@@ -649,7 +658,7 @@ const RoomSession: React.FC<RoomProps> = ({
           open={chatVisible}
           dismissable={!textOnlyMode}
           landscape={landscape}
-          bottomOffset={actionBarHeight}
+          bottomOffset={actionBarSize.height}
           title={t("chat.title")}
           onClose={() => setShowChat(false)}
         >

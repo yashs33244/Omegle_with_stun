@@ -71,6 +71,8 @@ export function useCaptions({
   partnerLanguage,
   viewerLanguage,
 }: UseCaptionsOptions): CaptionsHandle {
+  // The signaling object is rebuilt every render; its callbacks are stable.
+  const { subscribe, send } = signaling;
   const [enabled, setEnabledState] = useState(() => read(CAPTIONS_KEY) === "1");
   const [noticeOpen, setNoticeOpen] = useState(false);
   const [buffer, dispatch] = useReducer(captionBufferReducer, initialCaptionBuffer);
@@ -95,7 +97,7 @@ export function useCaptions({
     enabled: enabled && micEnabled && roomId !== null,
     onSegment: (segment) => {
       const room = roomRef.current;
-      if (room) signaling.send("caption:segment", { roomId: room, ...segment });
+      if (room) send("caption:segment", { roomId: room, ...segment });
     },
   });
 
@@ -107,7 +109,7 @@ export function useCaptions({
   const target = baseLanguage(viewerLanguage);
   useEffect(
     () =>
-      signaling.subscribe("caption:segment", (segment) => {
+      subscribe("caption:segment", (segment) => {
         if (!enabledRef.current || segment.roomId !== roomRef.current) return;
         dispatch({ type: "segment", segment, now: Date.now() });
         if (!segment.final || baseLanguage(segment.lang) === target) return;
@@ -121,7 +123,7 @@ export function useCaptions({
           }
         });
       }),
-    [signaling, target],
+    [subscribe, target],
   );
 
   // Warm the translator for the pair as soon as the partner is known, so the first final line does not wait.

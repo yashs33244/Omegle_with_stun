@@ -6,6 +6,7 @@
  */
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useModalSheetOpen } from "@/components/ui/modalSheet";
 import type { Signaling } from "@/hooks/useSignaling";
 import { toLang } from "@/lib/i18n";
 import { SPARK } from "@/lib/protocol";
@@ -20,6 +21,8 @@ export interface UseSparkOptions {
 
 export interface SparkHandle {
   card: SparkCard | null;
+  /** A modal sheet is up: the card waits (its time on screen starts when the sheet closes). */
+  held: boolean;
   /** Prompt text for the card in the UI language; null while loading, "" when the catalog failed to load. */
   text: string | null;
   /** Local clock until which requests are refused; 0 when ready. */
@@ -32,6 +35,8 @@ export interface SparkHandle {
 }
 
 export function useSpark({ signaling, roomId }: UseSparkOptions): SparkHandle {
+  // The signaling object is rebuilt every render; its callbacks are stable.
+  const { subscribe, request: sendRequest } = signaling;
   const { i18n } = useTranslation();
   const [state, dispatch] = useReducer(sparkReducer, initialSparkState);
   const [texts, setTexts] = useState<PromptTexts | null>(null);
@@ -47,17 +52,18 @@ export function useSpark({ signaling, roomId }: UseSparkOptions): SparkHandle {
 
   useEffect(
     () =>
-      signaling.subscribe("spark:show", (show) => {
+      subscribe("spark:show", (show) => {
         if (show.roomId === roomRef.current) dispatch({ type: "show", show, now: Date.now() });
       }),
-    [signaling],
+    [subscribe],
   );
 
+  const held = useModalSheetOpen();
   useEffect(() => {
-    if (!state.card) return;
+    if (!state.card || held) return;
     const timer = setTimeout(() => dispatch({ type: "expire", now: Date.now() }), SPARK.cardMs);
     return () => clearTimeout(timer);
-  }, [state.card]);
+  }, [state.card, held]);
 
   const lang = toLang(i18n.resolvedLanguage ?? i18n.language);
   useEffect(() => {
@@ -76,17 +82,18 @@ export function useSpark({ signaling, roomId }: UseSparkOptions): SparkHandle {
     const now = Date.now();
     if (!room || !canRequest(stateRef.current, now)) return;
     dispatch({ type: "request", now });
-    void signaling.request("spark:request", { roomId: room }).then((ack) => {
+    void sendRequest("spark:request", { roomId: room }).then((ack) => {
       if (ack.ok) dispatch({ type: "ack", ok: true, now: Date.now() });
       else dispatch({ type: "ack", ok: false, error: ack.error, now: Date.now() });
     });
-  }, [signaling]);
+  }, [sendRequest]);
 
   const dismiss = useCallback(() => dispatch({ type: "dismiss" }), []);
 
   const text = state.card ? (texts ? (texts[state.card.promptId] ?? "") : null) : null;
   return {
     card: state.card,
+    held,
     text,
     cooldownUntil: state.cooldownUntil,
     pending: state.pending,
