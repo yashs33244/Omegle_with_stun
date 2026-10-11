@@ -12,6 +12,10 @@ COPY . .
 ARG VITE_API_URL=https://chizzyapi.itsyash.space
 # An empty build arg falls back like config.ts does, so the bundle and the CSP agree.
 ENV VITE_API_URL=${VITE_API_URL:-https://chizzyapi.itsyash.space}
+# Public origin of the site: canonical, og:url and og:image URLs, sitemap.xml
+# and robots.txt (vite.config.ts, scripts/prerender-meta.mjs).
+ARG VITE_SITE_URL=https://chizzy.itsyash.space
+ENV VITE_SITE_URL=${VITE_SITE_URL:-https://chizzy.itsyash.space}
 RUN npm run build
 
 FROM nginxinc/nginx-unprivileged:1.28.2-alpine3.23 AS runtime

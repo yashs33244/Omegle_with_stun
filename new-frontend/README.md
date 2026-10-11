@@ -23,6 +23,7 @@ npm is the package manager for this folder (`package-lock.json`).
 | variable | when | default |
 |---|---|---|
 | `VITE_API_URL` | build time | `http://localhost:3004` in dev, `https://chizzyapi.itsyash.space` in production builds |
+| `VITE_SITE_URL` | build time | `https://chizzy.itsyash.space`; public origin for the canonical and link preview URLs, `sitemap.xml` and `robots.txt` |
 
 Copy `.env.example` to `.env.local` to override it locally.
 

@@ -166,6 +166,8 @@ services:
       args:
         # Socket server URL baked into the bundle (the gateway's public URL).
         VITE_API_URL: ${VITE_API_URL:-http://localhost:3004}
+        # Public URL of the site, for the canonical/link preview URLs and the sitemap.
+        VITE_SITE_URL: ${VITE_SITE_URL:-http://localhost:5173}
     ports:
       - "${BIND_ADDRESS:-0.0.0.0}:${FRONTEND_PORT:-5173}:8080"
     ulimits:
