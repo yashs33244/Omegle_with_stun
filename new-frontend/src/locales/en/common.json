@@ -1,0 +1,37 @@
+{
+  "appName": "Chizzy",
+  "loading": "Loading...",
+  "language": {
+    "label": "Language",
+    "switchTo": "Switch to {{language}}"
+  },
+  "footer": {
+    "nav": "Legal and safety",
+    "terms": "Terms",
+    "privacy": "Privacy",
+    "guidelines": "Guidelines",
+    "safety": "Safety",
+    "grievance": "Grievances",
+    "lawEnforcement": "Law enforcement",
+    "takedown": "Report content"
+  },
+  "errorBoundary": {
+    "title": "Something went wrong",
+    "body": "Chizzy hit an unexpected error. Reload the page to start again.",
+    "reload": "Reload"
+  },
+  "notFound": {
+    "title": "Oops! Page not found",
+    "body": "Looks like you've wandered off the beaten path. Let's get you back to connecting with people!",
+    "home": "Return to Chizzy",
+    "tagline": "Start meeting interesting people from around the world"
+  },
+  "connection": {
+    "aria": "Connection: {{label}}",
+    "disconnected": "Disconnected",
+    "excellent": "Excellent",
+    "good": "Good",
+    "fair": "Fair",
+    "poor": "Poor"
+  }
+}

@@ -1,4 +1,5 @@
 import { lazy, Suspense } from "react";
+import { useTranslation } from "react-i18next";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -15,6 +16,11 @@ const LawEnforcement = lazy(() => import("./pages/legal/LawEnforcement"));
 const Takedown = lazy(() => import("./pages/legal/Takedown"));
 
 const PageFallback = () => <div className="min-h-screen bg-gray-100" aria-busy="true" />;
+
+const AdminFallback = () => {
+  const { t } = useTranslation();
+  return <p className="p-4 text-sm">{t("loading")}</p>;
+};
 
 // The moderation console is its own chunk, never part of the main bundle.
 const AdminPage = lazy(() => import("./pages/admin/AdminPage"));
@@ -35,7 +41,7 @@ const App = () => (
           <Route
             path="/admin/*"
             element={
-              <Suspense fallback={<p className="p-4 text-sm">Loading...</p>}>
+              <Suspense fallback={<AdminFallback />}>
                 <AdminPage />
               </Suspense>
             }

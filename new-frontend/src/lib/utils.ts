@@ -45,11 +45,11 @@ export const REPORT_REASON_LABELS: Record<ReportReason, string> = {
 
 // Connection quality indicators
 export const CONNECTION_QUALITY = {
-  EXCELLENT: { label: 'Excellent', color: 'text-green-400', bar: 'bg-green-400', bars: 4 },
-  GOOD: { label: 'Good', color: 'text-yellow-400', bar: 'bg-yellow-400', bars: 3 },
-  FAIR: { label: 'Fair', color: 'text-orange-400', bar: 'bg-orange-400', bars: 2 },
-  POOR: { label: 'Poor', color: 'text-red-400', bar: 'bg-red-400', bars: 1 },
-  DISCONNECTED: { label: 'Disconnected', color: 'text-red-400', bar: 'bg-red-400', bars: 0 }
+  EXCELLENT: { color: 'text-green-400', bar: 'bg-green-400', bars: 4 },
+  GOOD: { color: 'text-yellow-400', bar: 'bg-yellow-400', bars: 3 },
+  FAIR: { color: 'text-orange-400', bar: 'bg-orange-400', bars: 2 },
+  POOR: { color: 'text-red-400', bar: 'bg-red-400', bars: 1 },
+  DISCONNECTED: { color: 'text-red-400', bar: 'bg-red-400', bars: 0 }
 } as const;
 
 // "music, art" -> "Music, Art"

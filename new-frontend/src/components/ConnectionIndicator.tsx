@@ -1,5 +1,6 @@
 import React from 'react';
 import { WifiOff } from 'lucide-react';
+import { useTranslation } from 'react-i18next';
 import { CONNECTION_QUALITY } from '../lib/utils';
 
 interface ConnectionIndicatorProps {
@@ -8,12 +9,22 @@ interface ConnectionIndicatorProps {
   showLabel?: boolean;
 }
 
+const LABEL_KEYS = {
+  EXCELLENT: 'connection.excellent',
+  GOOD: 'connection.good',
+  FAIR: 'connection.fair',
+  POOR: 'connection.poor',
+  DISCONNECTED: 'connection.disconnected',
+} as const;
+
 export const ConnectionIndicator: React.FC<ConnectionIndicatorProps> = ({
   quality,
   className = '',
   showLabel = false
 }) => {
+  const { t } = useTranslation();
   const qualityInfo = CONNECTION_QUALITY[quality];
+  const label = t(LABEL_KEYS[quality]);
 
   const renderBars = () => {
     const bars: React.ReactElement[] = [];
@@ -33,25 +44,25 @@ export const ConnectionIndicator: React.FC<ConnectionIndicatorProps> = ({
 
   if (qualityInfo.bars === 0) {
     return (
-      <div className={`flex items-center gap-2 ${className}`} role="img" aria-label="Connection: Disconnected">
+      <div className={`flex items-center gap-2 ${className}`} role="img" aria-label={t('connection.aria', { label })}>
         <WifiOff className="w-4 h-4 text-red-400" />
         {showLabel && (
-          <span className="text-xs text-red-400">Disconnected</span>
+          <span className="text-xs text-red-400">{label}</span>
         )}
       </div>
     );
   }
 
   return (
-    <div className={`flex items-center gap-2 ${className}`} role="img" aria-label={`Connection: ${qualityInfo.label}`}>
+    <div className={`flex items-center gap-2 ${className}`} role="img" aria-label={t('connection.aria', { label })}>
       <div className="flex items-end gap-0.5 h-4">
         {renderBars()}
       </div>
       {showLabel && (
         <span className={`text-xs ${qualityInfo.color}`}>
-          {qualityInfo.label}
+          {label}
         </span>
       )}
     </div>
   );
-}; 
+};

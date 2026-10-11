@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import { captureError } from "@/lib/observability";
 
 interface ErrorBoundaryProps {
@@ -8,6 +9,21 @@ interface ErrorBoundaryProps {
 interface ErrorBoundaryState {
   hasError: boolean;
 }
+
+const ErrorScreen: React.FC = () => {
+  const { t } = useTranslation();
+  return (
+    <div role="alert" className="min-h-screen bg-gray-900 flex items-center justify-center p-6 text-white">
+      <div className="text-center space-y-4 max-w-sm">
+        <h1 className="text-2xl font-bold text-yellow-400">{t("errorBoundary.title")}</h1>
+        <p className="text-gray-300">{t("errorBoundary.body")}</p>
+        <button type="button" onClick={() => window.location.reload()} className="retro-button">
+          {t("errorBoundary.reload")}
+        </button>
+      </div>
+    </div>
+  );
+};
 
 /**
  * Last line of defense: a render error anywhere below shows a recovery screen
@@ -27,16 +43,6 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
 
   render() {
     if (!this.state.hasError) return this.props.children;
-    return (
-      <div role="alert" className="min-h-screen bg-gray-900 flex items-center justify-center p-6 text-white">
-        <div className="text-center space-y-4 max-w-sm">
-          <h1 className="text-2xl font-bold text-yellow-400">Something went wrong</h1>
-          <p className="text-gray-300">Chizzy hit an unexpected error. Reload the page to start again.</p>
-          <button type="button" onClick={() => window.location.reload()} className="retro-button">
-            Reload
-          </button>
-        </div>
-      </div>
-    );
+    return <ErrorScreen />;
   }
 }
