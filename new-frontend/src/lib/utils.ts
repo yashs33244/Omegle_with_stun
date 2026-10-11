@@ -1,5 +1,6 @@
 import { type ClassValue, clsx } from "clsx"
 import { twMerge } from "tailwind-merge"
+import type { ReportReason } from "./protocol"
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -29,26 +30,32 @@ export const LANGUAGE_OPTIONS = [
   { value: 'hi', label: 'Hindi', flag: '🇮🇳' }
 ] as const;
 
-// Report reasons for user reporting
-export const REPORT_REASONS = [
-  'Inappropriate behavior',
-  'Spam or unwanted content',
-  'Nudity or sexual content',
-  'Harassment or bullying',
-  'Hate speech',
-  'Violence or threats',
-  'Fake profile',
-  'Underage user',
-  'Other'
-] as const;
+// Human labels for the protocol report reasons
+export const REPORT_REASON_LABELS: Record<ReportReason, string> = {
+  inappropriate: 'Inappropriate behavior',
+  spam: 'Spam or unwanted content',
+  nudity: 'Nudity or sexual content',
+  harassment: 'Harassment or bullying',
+  hate: 'Hate speech',
+  violence: 'Violence or threats',
+  fake: 'Fake profile',
+  underage: 'Underage user',
+  other: 'Other'
+};
 
 // Connection quality indicators
 export const CONNECTION_QUALITY = {
-  EXCELLENT: { label: 'Excellent', color: 'text-green-400', bars: 4 },
-  GOOD: { label: 'Good', color: 'text-yellow-400', bars: 3 },
-  FAIR: { label: 'Fair', color: 'text-orange-400', bars: 2 },
-  POOR: { label: 'Poor', color: 'text-red-400', bars: 1 }
+  EXCELLENT: { label: 'Excellent', color: 'text-green-400', bar: 'bg-green-400', bars: 4 },
+  GOOD: { label: 'Good', color: 'text-yellow-400', bar: 'bg-yellow-400', bars: 3 },
+  FAIR: { label: 'Fair', color: 'text-orange-400', bar: 'bg-orange-400', bars: 2 },
+  POOR: { label: 'Poor', color: 'text-red-400', bar: 'bg-red-400', bars: 1 },
+  DISCONNECTED: { label: 'Disconnected', color: 'text-red-400', bar: 'bg-red-400', bars: 0 }
 } as const;
+
+// "music, art" -> "Music, Art"
+export function formatTopics(topics: readonly string[]): string {
+  return topics.map((t) => t.charAt(0).toUpperCase() + t.slice(1)).join(', ');
+}
 
 // Format connection time for display
 export function formatConnectionTime(seconds: number): string {
@@ -60,32 +67,4 @@ export function formatConnectionTime(seconds: number): string {
     return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   }
   return `${minutes}:${secs.toString().padStart(2, '0')}`;
-}
-
-// Generate random room ID
-export function generateRoomId(): string {
-  return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-}
-
-// Validate email format
-export function isValidEmail(email: string): boolean {
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  return emailRegex.test(email);
-}
-
-// Get random element from array
-export function getRandomElement<T>(array: T[]): T {
-  return array[Math.floor(Math.random() * array.length)];
-}
-
-// Debounce function for search/typing
-export function debounce<T extends (...args: any[]) => any>(
-  func: T,
-  delay: number
-): (...args: Parameters<T>) => void {
-  let timeoutId: NodeJS.Timeout;
-  return (...args: Parameters<T>) => {
-    clearTimeout(timeoutId);
-    timeoutId = setTimeout(() => func(...args), delay);
-  };
 }

@@ -16,7 +16,12 @@ export const useAudioLevelDetection = (audioTrack: MediaStreamTrack | null) => {
     // Create audio context and analyser
     const setupAudioAnalysis = async () => {
       try {
-        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        // Safari before 14.1 only ships the prefixed constructor.
+        const AudioContextCtor =
+          window.AudioContext ??
+          (window as Window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+        if (!AudioContextCtor) return;
+        const audioContext = new AudioContextCtor();
         audioContextRef.current = audioContext;
 
         const stream = new MediaStream([audioTrack]);

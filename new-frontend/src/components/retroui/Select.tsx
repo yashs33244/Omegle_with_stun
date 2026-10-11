@@ -1,6 +1,7 @@
 import * as React from "react";
 import { ChevronDown } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { markSelectDismissal } from "./selectDismissal";
 
 interface SelectProps {
   value: string;
@@ -8,61 +9,202 @@ interface SelectProps {
   children: React.ReactNode;
   placeholder?: string;
   className?: string;
+  disabled?: boolean;
+  id?: string;
+  /**
+   * Id of the visible label. The trigger is then named by that label plus the
+   * selected value ("Gender Female"), so screen readers announce the value.
+   * Without it the trigger is named by aria-label alone.
+   */
+  labelId?: string;
+  "aria-label"?: string;
+  "data-testid"?: string;
 }
 
 interface SelectItemProps {
   value: string;
   children: React.ReactNode;
   onSelect?: () => void;
+  selected?: boolean;
 }
 
+type FocusTarget = "selected" | "first" | "last";
+
+const optionElements = (container: HTMLElement | null): HTMLElement[] =>
+  Array.from(container?.querySelectorAll<HTMLElement>('[role="option"]') ?? []);
+
+/**
+ * Usage: <Select value onValueChange><SelectItem value="x">Label</SelectItem>...</Select>.
+ * There is no `options` prop; render one SelectItem per option.
+ *
+ * Keyboard: Enter, Space or the arrow keys open the list and focus the
+ * selected option; arrows, Home and End move; Enter or Space picks; Escape
+ * closes and returns focus to the trigger; Tab closes and moves on.
+ *
+ * A pointer press anywhere outside closes the list and still reaches its
+ * target. Dialogs that should stay open can check closedASelect().
+ */
 const Select = React.forwardRef<HTMLDivElement, SelectProps>(
-  ({ value, onValueChange, children, placeholder, className }, ref) => {
+  (
+    {
+      value,
+      onValueChange,
+      children,
+      placeholder,
+      className,
+      disabled,
+      id,
+      labelId,
+      "aria-label": ariaLabel,
+      "data-testid": testId,
+    },
+    ref
+  ) => {
     const [isOpen, setIsOpen] = React.useState(false);
-    const [selectedLabel, setSelectedLabel] = React.useState<string>("");
     const [dropdownPosition, setDropdownPosition] = React.useState<
       "bottom" | "top"
     >("bottom");
+    const [focusTarget, setFocusTarget] = React.useState<FocusTarget | null>(null);
     const containerRef = React.useRef<HTMLDivElement>(null);
+    const triggerRef = React.useRef<HTMLButtonElement>(null);
+    const listId = React.useId();
+    const valueId = React.useId();
+    React.useImperativeHandle(ref, () => containerRef.current as HTMLDivElement);
 
+    const items = React.Children.toArray(children).filter(
+      (child): child is React.ReactElement<SelectItemProps> =>
+        React.isValidElement<SelectItemProps>(child)
+    );
+    const selectedLabel = items.find((child) => child.props.value === value)
+      ?.props.children;
+
+    // Move focus into the list once it has rendered.
     React.useEffect(() => {
-      // Find the selected item's label from children
-      React.Children.forEach(children, (child) => {
-        if (React.isValidElement(child) && child.props.value === value) {
-          setSelectedLabel(child.props.children);
-        }
-      });
-    }, [value, children]);
+      if (!isOpen || !focusTarget) return;
+      const options = optionElements(containerRef.current);
+      const selectedIndex = options.findIndex(
+        (o) => o.getAttribute("aria-selected") === "true"
+      );
+      const index =
+        focusTarget === "first"
+          ? 0
+          : focusTarget === "last"
+            ? options.length - 1
+            : Math.max(0, selectedIndex);
+      options[index]?.focus();
+      setFocusTarget(null);
+    }, [isOpen, focusTarget]);
 
-    const handleToggle = () => {
-      if (!isOpen && containerRef.current) {
+    // Close on any press outside. A document listener, not a fixed backdrop: a
+    // backdrop is clipped by ancestors with transform or backdrop-filter.
+    React.useEffect(() => {
+      if (!isOpen) return;
+      const onPointerDown = (e: PointerEvent) => {
+        if (e.target instanceof Node && containerRef.current?.contains(e.target)) return;
+        markSelectDismissal(e);
+        setIsOpen(false);
+      };
+      document.addEventListener("pointerdown", onPointerDown, true);
+      return () => document.removeEventListener("pointerdown", onPointerDown, true);
+    }, [isOpen]);
+
+    const open = (target: FocusTarget) => {
+      if (disabled) return;
+      if (containerRef.current) {
         const rect = containerRef.current.getBoundingClientRect();
         const spaceBelow = window.innerHeight - rect.bottom;
         const spaceAbove = rect.top;
-
-        // If there's not enough space below (less than 200px) and more space above, render upward
-        if (spaceBelow < 200 && spaceAbove > spaceBelow) {
-          setDropdownPosition("top");
-        } else {
-          setDropdownPosition("bottom");
-        }
+        // Not enough room below (less than 200px) and more above: render upward.
+        setDropdownPosition(
+          spaceBelow < 200 && spaceAbove > spaceBelow ? "top" : "bottom"
+        );
       }
-      setIsOpen(!isOpen);
+      setIsOpen(true);
+      setFocusTarget(target);
+    };
+
+    const close = (restoreFocus: boolean) => {
+      setIsOpen(false);
+      if (restoreFocus) triggerRef.current?.focus();
+    };
+
+    const moveFocus = (step: number | "first" | "last") => {
+      const options = optionElements(containerRef.current);
+      if (options.length === 0) return;
+      const current = options.indexOf(document.activeElement as HTMLElement);
+      let next: number;
+      if (step === "first") next = 0;
+      else if (step === "last") next = options.length - 1;
+      else next = Math.min(options.length - 1, Math.max(0, current + step));
+      options[next]?.focus();
+    };
+
+    const onContainerKeyDown = (e: React.KeyboardEvent) => {
+      if (!isOpen) return;
+      switch (e.key) {
+        case "Escape":
+          e.preventDefault();
+          e.stopPropagation();
+          close(true);
+          break;
+        case "ArrowDown":
+          e.preventDefault();
+          moveFocus(1);
+          break;
+        case "ArrowUp":
+          e.preventDefault();
+          moveFocus(-1);
+          break;
+        case "Home":
+          e.preventDefault();
+          moveFocus("first");
+          break;
+        case "End":
+          e.preventDefault();
+          moveFocus("last");
+          break;
+        case "Tab":
+          close(false);
+          break;
+      }
+    };
+
+    const onTriggerKeyDown = (e: React.KeyboardEvent) => {
+      if (isOpen) return;
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        open("selected");
+      }
     };
 
     return (
-      <div ref={containerRef} className={cn("relative", className)}>
+      <div
+        ref={containerRef}
+        className={cn("relative", className)}
+        onKeyDown={onContainerKeyDown}
+      >
         <button
+          ref={triggerRef}
           type="button"
-          onClick={handleToggle}
-          className="flex h-10 w-full items-center justify-between rounded-md border-2 border-black bg-white px-3 py-2 text-sm shadow-sm transition-all hover:shadow-md focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2"
+          id={id}
+          onClick={() => (isOpen ? close(false) : open("selected"))}
+          onKeyDown={onTriggerKeyDown}
+          disabled={disabled}
+          aria-haspopup="listbox"
+          aria-expanded={isOpen}
+          aria-controls={isOpen ? listId : undefined}
+          aria-label={labelId ? undefined : ariaLabel}
+          aria-labelledby={labelId ? `${labelId} ${valueId}` : undefined}
+          data-testid={testId}
+          className="flex h-10 w-full items-center justify-between rounded-md border-2 border-black bg-white px-3 py-2 text-sm shadow-sm transition-all hover:shadow-md focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50"
         >
-          <span className={selectedLabel ? "text-black" : "text-gray-500"}>
+          <span id={valueId} className={cn("truncate", selectedLabel ? "text-black" : "text-gray-500")}>
             {selectedLabel || placeholder}
           </span>
           <ChevronDown
+            aria-hidden="true"
             className={cn(
-              "h-4 w-4 text-black transition-transform",
+              "h-4 w-4 shrink-0 text-black transition-transform",
               isOpen && "rotate-180"
             )}
           />
@@ -77,27 +219,23 @@ const Select = React.forwardRef<HTMLDivElement, SelectProps>(
                 : "bottom-full mb-1"
             )}
           >
-            <div className="max-h-60 overflow-auto p-1">
-              {React.Children.map(children, (child) => {
-                if (React.isValidElement(child)) {
-                  return React.cloneElement(child, {
-                    onSelect: () => {
-                      onValueChange(child.props.value);
-                      setIsOpen(false);
-                    },
-                  } as any);
-                }
-                return child;
-              })}
+            <div
+              id={listId}
+              className="max-h-60 overflow-auto p-1"
+              role="listbox"
+              aria-label={ariaLabel}
+            >
+              {items.map((child) =>
+                React.cloneElement(child, {
+                  selected: child.props.value === value,
+                  onSelect: () => {
+                    onValueChange(child.props.value);
+                    close(true);
+                  },
+                })
+              )}
             </div>
           </div>
-        )}
-
-        {isOpen && (
-          <div
-            className="fixed inset-0 z-[9998]"
-            onClick={() => setIsOpen(false)}
-          />
         )}
       </div>
     );
@@ -106,12 +244,21 @@ const Select = React.forwardRef<HTMLDivElement, SelectProps>(
 Select.displayName = "Select";
 
 const SelectItem = React.forwardRef<HTMLDivElement, SelectItemProps>(
-  ({ value, children, onSelect }, ref) => {
+  ({ children, onSelect, selected }, ref) => {
     return (
       <div
         ref={ref}
+        role="option"
+        aria-selected={selected ?? false}
+        tabIndex={-1}
         onClick={onSelect}
-        className="flex cursor-pointer items-center rounded-sm px-2 py-1.5 text-sm text-black hover:bg-gray-100 hover:text-black focus:bg-gray-100 focus:text-black"
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            onSelect?.();
+          }
+        }}
+        className="flex cursor-pointer items-center rounded-sm px-2 py-1.5 text-sm text-black hover:bg-gray-100 hover:text-black focus:bg-gray-100 focus:text-black focus:outline-none"
       >
         {children}
       </div>

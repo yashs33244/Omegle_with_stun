@@ -1,0 +1,19 @@
+# Keep the build context small and free of secrets.
+node_modules
+dist
+coverage
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+Dockerfile
+.dockerignore
+# npm lockfile is not used (bun is the backend package manager)
+package-lock.json
+# Tests are not part of the image
+test
+tests
+test-node
+**/*.test.ts
+**/*.spec.ts
