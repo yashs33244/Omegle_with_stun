@@ -198,7 +198,7 @@ export const Landing: React.FC<LandingProps> = ({
                   playsInline
                   muted
                   aria-hidden="true"
-                  className="w-full h-full object-cover"
+                  className="absolute inset-0 h-full w-full object-cover"
                   style={{ transform: "scaleX(-1)" }}
                 />
               )}
