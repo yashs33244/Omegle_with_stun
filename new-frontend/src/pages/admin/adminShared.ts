@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import type { AdminApi } from "@/lib/adminApi";
 import { AdminApiError } from "@/lib/adminApi";
+import i18n from "@/lib/i18n";
 import type { AdminReport, ReportReason, RestrictionReason, Severity } from "@/lib/protocol";
 
 export interface AdminContextValue {
@@ -20,8 +21,10 @@ export function useAdmin(): AdminContextValue {
 }
 
 export function errorText(err: unknown): string {
-  if (err instanceof AdminApiError) return err.status ? `${err.message} (HTTP ${err.status})` : err.message;
-  return err instanceof Error ? err.message : "Something went wrong.";
+  if (err instanceof AdminApiError) {
+    return err.status ? i18n.t("admin:errors.withStatus", { message: err.message, status: err.status }) : err.message;
+  }
+  return err instanceof Error ? err.message : i18n.t("admin:errors.generic");
 }
 
 /** Loads data through the admin API with loading, error and reload. */
@@ -67,17 +70,17 @@ export const SEVERITY_TONE: Record<Severity, string> = {
   low: "bg-gray-200 text-gray-800",
 };
 
-export const ADMIN_REASON_LABELS: Record<ReportReason, string> = {
-  underage: "Minor",
-  nudity: "Nudity",
-  harassment: "Harassment",
-  hate: "Hate",
-  violence: "Violence",
-  spam: "Spam or scam",
-  fake: "Fake or pre-recorded video",
-  inappropriate: "Inappropriate",
-  other: "Other",
-};
+export const ADMIN_REASON_KEYS = {
+  underage: "reasons.underage",
+  nudity: "reasons.nudity",
+  harassment: "reasons.harassment",
+  hate: "reasons.hate",
+  violence: "reasons.violence",
+  spam: "reasons.spam",
+  fake: "reasons.fake",
+  inappropriate: "reasons.inappropriate",
+  other: "reasons.other",
+} as const satisfies Record<ReportReason, string>;
 
 /** Default restriction reason for a report reason. */
 export const RESTRICTION_FOR_REPORT: Record<ReportReason, RestrictionReason> = {
@@ -99,27 +102,27 @@ const DAY = 24 * HOUR;
 /** "45 min", "3 h 20 min", "4 d 2 h". */
 export function formatSpan(ms: number): string {
   const abs = Math.abs(ms);
-  if (abs < HOUR) return `${Math.max(1, Math.round(abs / MIN))} min`;
+  if (abs < HOUR) return i18n.t("admin:span.min", { n: Math.max(1, Math.round(abs / MIN)) });
   if (abs < 2 * DAY) {
     const h = Math.floor(abs / HOUR);
     const m = Math.floor((abs % HOUR) / MIN);
-    return m ? `${h} h ${m} min` : `${h} h`;
+    return m ? i18n.t("admin:span.hm", { h, m }) : i18n.t("admin:span.h", { h });
   }
   const d = Math.floor(abs / DAY);
   const h = Math.floor((abs % DAY) / HOUR);
-  return h ? `${d} d ${h} h` : `${d} d`;
+  return h ? i18n.t("admin:span.dh", { d, h }) : i18n.t("admin:span.d", { d });
 }
 
 export function formatTime(ts: number): string {
   return new Date(ts).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
-export const DURATION_PRESETS: ReadonlyArray<{ label: string; ms: number | null }> = [
-  { label: "10 min", ms: 10 * MIN },
-  { label: "24 h", ms: DAY },
-  { label: "7 d", ms: 7 * DAY },
-  { label: "Permanent", ms: null },
-];
+export const DURATION_PRESETS = [
+  { key: "durations.tenMin", ms: 10 * MIN },
+  { key: "durations.day", ms: DAY },
+  { key: "durations.week", ms: 7 * DAY },
+  { key: "durations.permanent", ms: null },
+] as const satisfies ReadonlyArray<{ key: string; ms: number | null }>;
 
 export function downloadJson(filename: string, data: unknown): void {
   const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));
@@ -133,8 +136,8 @@ export function downloadJson(filename: string, data: unknown): void {
 }
 
 /** The deadline that matters now: acknowledge while open, then resolve. */
-export function nextDue(r: AdminReport): { label: string; dueAt: number } {
-  return r.status === "open" ? { label: "Ack", dueAt: r.ackDueAt } : { label: "Resolve", dueAt: r.resolveDueAt };
+export function nextDue(r: AdminReport): { labelKey: "due.ack" | "due.resolve"; dueAt: number } {
+  return r.status === "open" ? { labelKey: "due.ack", dueAt: r.ackDueAt } : { labelKey: "due.resolve", dueAt: r.resolveDueAt };
 }
 
 /** Severity first (minor > nudity > harassment > spam > other, as ranked by the server), then the nearest deadline. */

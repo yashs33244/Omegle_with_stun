@@ -1,4 +1,5 @@
 import React from "react";
+import { useTranslation } from "react-i18next";
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -12,6 +13,7 @@ import { formatSpan } from "./adminShared";
 
 /** Countdown to an SLA deadline: red once overdue, amber in the last 2 hours. */
 export const SlaChip: React.FC<{ label: string; dueAt: number; now: number }> = ({ label, dueAt, now }) => {
+  const { t } = useTranslation("admin");
   const left = dueAt - now;
   const overdue = left <= 0;
   const tone = overdue
@@ -25,7 +27,7 @@ export const SlaChip: React.FC<{ label: string; dueAt: number; now: number }> = 
       data-overdue={overdue ? "true" : "false"}
       className={`inline-flex items-center whitespace-nowrap rounded-full border px-2 py-0.5 text-xs font-medium ${tone}`}
     >
-      {label}: {overdue ? `overdue ${formatSpan(left)}` : `${formatSpan(left)} left`}
+      {label}: {overdue ? t("sla.overdue", { span: formatSpan(left) }) : t("sla.left", { span: formatSpan(left) })}
     </span>
   );
 };
@@ -68,21 +70,24 @@ interface ConfirmDialogProps {
 }
 
 /** Radix alert dialog: focus is trapped and Escape cancels. */
-export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({ open, title, description, confirmLabel, onConfirm, onCancel }) => (
-  <AlertDialog open={open} onOpenChange={(next) => !next && onCancel()}>
-    <AlertDialogContent>
-      <AlertDialogHeader>
-        <AlertDialogTitle>{title}</AlertDialogTitle>
-        <AlertDialogDescription asChild>
-          <div className="space-y-2 text-sm text-gray-700">{description}</div>
-        </AlertDialogDescription>
-      </AlertDialogHeader>
-      <AlertDialogFooter>
-        <AlertDialogCancel onClick={onCancel}>Cancel</AlertDialogCancel>
-        <Btn tone="danger" onClick={onConfirm}>
-          {confirmLabel}
-        </Btn>
-      </AlertDialogFooter>
-    </AlertDialogContent>
-  </AlertDialog>
-);
+export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({ open, title, description, confirmLabel, onConfirm, onCancel }) => {
+  const { t } = useTranslation("admin");
+  return (
+    <AlertDialog open={open} onOpenChange={(next) => !next && onCancel()}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>{title}</AlertDialogTitle>
+          <AlertDialogDescription asChild>
+            <div className="space-y-2 text-sm text-gray-700">{description}</div>
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel onClick={onCancel}>{t("ui.cancel")}</AlertDialogCancel>
+          <Btn tone="danger" onClick={onConfirm}>
+            {confirmLabel}
+          </Btn>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+};

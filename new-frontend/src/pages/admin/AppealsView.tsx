@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { AdminApi } from "@/lib/adminApi";
 import type { AdminAppeal } from "@/lib/protocol";
 import { formatTime, useAdmin, useAdminData } from "./adminShared";
@@ -7,6 +8,7 @@ import { Btn, Notice, SlaChip } from "./AdminUi";
 const loadAppeals = (api: AdminApi) => api.listAppeals();
 
 const AppealCard: React.FC<{ appeal: AdminAppeal; onChanged: () => void }> = ({ appeal, onChanged }) => {
+  const { t } = useTranslation("admin");
   const { api, fail, now } = useAdmin();
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
@@ -18,7 +20,7 @@ const AppealCard: React.FC<{ appeal: AdminAppeal; onChanged: () => void }> = ({ 
     setResult(null);
     try {
       await api.decideAppeal(appeal.id, decision, note.trim() || undefined);
-      setResult({ tone: "ok", text: decision === "uphold" ? "Restriction upheld." : "Restriction overturned." });
+      setResult({ tone: "ok", text: decision === "uphold" ? t("appeals.upheld") : t("appeals.overturned") });
       onChanged();
     } catch (err) {
       setResult({ tone: "error", text: fail(err) });
@@ -30,19 +32,19 @@ const AppealCard: React.FC<{ appeal: AdminAppeal; onChanged: () => void }> = ({ 
   return (
     <li className="space-y-2 rounded-lg border border-gray-200 bg-white p-3" data-testid="appeal-item">
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        <span className="font-semibold">
-          {r.kind} for {r.reason}
+        <span className="font-semibold">{t("appeals.summary", { kind: r.kind, reason: r.reason })}</span>
+        <span className="text-gray-500">
+          {r.until === null ? t("appeals.permanent") : t("appeals.until", { time: formatTime(r.until) })}
         </span>
-        <span className="text-gray-500">{r.until === null ? "permanent" : `until ${formatTime(r.until)}`}</span>
         <span className="text-gray-500">{appeal.status}</span>
-        {appeal.status === "pending" && <SlaChip label="Decide" dueAt={appeal.dueAt} now={now} />}
+        {appeal.status === "pending" && <SlaChip label={t("appeals.decideChip")} dueAt={appeal.dueAt} now={now} />}
       </div>
       <p className="whitespace-pre-wrap text-sm [overflow-wrap:anywhere]">{appeal.text}</p>
-      <p className="text-xs text-gray-500">Received {formatTime(appeal.createdAt)}</p>
+      <p className="text-xs text-gray-500">{t("appeals.received", { time: formatTime(appeal.createdAt) })}</p>
       {appeal.status === "pending" && (
         <div className="space-y-2">
           <label className="block text-sm">
-            <span className="mb-1 block text-gray-600">Note to keep with the decision</span>
+            <span className="mb-1 block text-gray-600">{t("appeals.noteLabel")}</span>
             <input
               value={note}
               onChange={(e) => setNote(e.target.value)}
@@ -52,10 +54,10 @@ const AppealCard: React.FC<{ appeal: AdminAppeal; onChanged: () => void }> = ({ 
           </label>
           <div className="flex gap-2">
             <Btn disabled={busy} onClick={() => void decide("uphold")}>
-              Uphold
+              {t("appeals.uphold")}
             </Btn>
             <Btn tone="primary" disabled={busy} onClick={() => void decide("overturn")}>
-              Overturn
+              {t("appeals.overturn")}
             </Btn>
           </div>
         </div>
@@ -66,6 +68,7 @@ const AppealCard: React.FC<{ appeal: AdminAppeal; onChanged: () => void }> = ({ 
 };
 
 export const AppealsView: React.FC = () => {
+  const { t } = useTranslation("admin");
   const { data, error, loading, reload } = useAdminData(loadAppeals);
   const appeals = useMemo(
     () =>
@@ -78,15 +81,15 @@ export const AppealsView: React.FC = () => {
     <section aria-labelledby="appeals-title" className="space-y-3">
       <div className="flex items-center justify-between">
         <h2 id="appeals-title" className="text-lg font-semibold">
-          Appeals
+          {t("appeals.title")}
         </h2>
         <Btn onClick={reload} disabled={loading}>
-          Refresh
+          {t("ui.refresh")}
         </Btn>
       </div>
       {error && <Notice tone="error">{error}</Notice>}
-      {loading && !data && <p className="text-sm text-gray-500">Loading...</p>}
-      {data && appeals.length === 0 && <p className="text-sm text-gray-500">No appeals.</p>}
+      {loading && !data && <p className="text-sm text-gray-500">{t("loading", { ns: "common" })}</p>}
+      {data && appeals.length === 0 && <p className="text-sm text-gray-500">{t("appeals.empty")}</p>}
       <ul className="space-y-2">
         {appeals.map((a) => (
           <AppealCard key={a.id} appeal={a} onChanged={reload} />

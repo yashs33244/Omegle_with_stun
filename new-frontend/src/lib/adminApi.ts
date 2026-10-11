@@ -1,3 +1,4 @@
+import i18n from "@/lib/i18n";
 import { API_URL } from "./config";
 import {
   flagsSchema,
@@ -66,7 +67,7 @@ function unwrap<T>(body: unknown, key: string): T {
 
 function list<T>(body: unknown, key: string): T[] {
   const value = unwrap<unknown>(body, key);
-  if (!Array.isArray(value)) throw new AdminApiError(500, `Unexpected response: no ${key} list.`);
+  if (!Array.isArray(value)) throw new AdminApiError(500, i18n.t("admin:errors.unexpectedList", { key }));
   return value as T[];
 }
 
@@ -81,7 +82,7 @@ async function errorMessage(res: Response): Promise<string> {
   } catch {
     // Not JSON.
   }
-  return `HTTP ${res.status}`;
+  return i18n.t("admin:errors.http", { status: res.status });
 }
 
 export function createAdminApi({
@@ -100,7 +101,7 @@ export function createAdminApi({
     try {
       res = await fetchImpl(`${base}${path}`, { ...init, headers, credentials: "omit", cache: "no-store" });
     } catch {
-      throw new AdminApiError(0, "Cannot reach the server.");
+      throw new AdminApiError(0, i18n.t("admin:errors.unreachable"));
     }
     if (!res.ok) throw new AdminApiError(res.status, await errorMessage(res));
     return res;
@@ -159,7 +160,7 @@ export function createAdminApi({
 
     async getFlags(): Promise<Flags> {
       const parsed = flagsSchema.safeParse(unwrap(await json(ADMIN_ROUTES.flags), "flags"));
-      if (!parsed.success) throw new AdminApiError(500, "The server sent flags this console does not understand.");
+      if (!parsed.success) throw new AdminApiError(500, i18n.t("admin:errors.badFlags"));
       return parsed.data;
     },
 
