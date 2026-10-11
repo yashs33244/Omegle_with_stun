@@ -9,7 +9,7 @@ import { join } from "node:path";
 import Redis from "ioredis";
 import { io as ioClient, type Socket } from "socket.io-client";
 import { loadConfig, type Config } from "../src/config";
-import { RedisEnforcementStore } from "../src/enforcement/store";
+import { RedisEnforcementStore } from "../src/enforcement/RedisEnforcementStore";
 import { createLogger } from "../src/logger";
 import {
   PROTOCOL_VERSION,
@@ -84,7 +84,7 @@ export interface TestServer {
 export async function startServer(
   overrides: Partial<Config> = {},
   store?: MatchStore,
-  deps: Pick<ServerDeps, "configureIo" | "fetch" | "restrictions" | "redis" | "flags" | "enforcement"> = {},
+  deps: Pick<ServerDeps, "configureIo" | "fetch" | "restrictions" | "redis" | "flags" | "enforcement" | "billing"> = {},
 ): Promise<TestServer> {
   // Each server gets its own evidence directory, removed on close.
   const evidenceDir = mkdtempSync(join(tmpdir(), "chizzy-evidence-"));

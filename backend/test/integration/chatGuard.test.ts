@@ -2,7 +2,8 @@
  * Server-side chat guard, safety nudges and the display-name guard over real sockets.
  */
 import { afterEach, describe, expect, test } from "bun:test";
-import { HIDDEN, nicknameFor } from "../../src/safety/guard";
+import { HIDDEN } from "../../src/safety/constants";
+import { nicknameFor } from "../../src/safety/guard";
 import { activePair, arrives, hello, next, profile, record, startServer, type TestServer } from "../helpers";
 
 let ts: TestServer;

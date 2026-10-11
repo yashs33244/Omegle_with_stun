@@ -128,9 +128,9 @@ export const VideoTile: React.FC<VideoTileProps> = ({
         </div>
       )}
       {!hidden && audioBlocked && (
-        <div className="absolute inset-x-0 bottom-16 flex justify-center" style={{ zIndex: 25 }}>
-          <button type="button" onClick={enableAudio} className="retro-button flex items-center gap-2">
-            <Volume2 className="w-5 h-5" />
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center" style={{ zIndex: 25 }}>
+          <button type="button" onClick={enableAudio} className="retro-button pointer-events-auto flex min-h-[3rem] items-center gap-2">
+            <Volume2 className="w-5 h-5" aria-hidden="true" />
             {t("video.enableAudio")}
           </button>
         </div>

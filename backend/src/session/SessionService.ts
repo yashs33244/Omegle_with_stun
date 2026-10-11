@@ -14,10 +14,11 @@ import {
   type SessionError,
   type SessionResponse,
 } from "../protocol";
-import { ADULT_AGE, ageInYears } from "./age";
+import { ageInYears } from "./age";
+import { ADULT_AGE, AGE_TOKEN_TTL_MS, SESSION_ERROR_STATUS, SESSION_TOKEN_TTL_MS } from "./constants";
 import { isCountryBlocked } from "./geo";
 import type { Lockout, SessionRateLimiter } from "./limits";
-import { AGE_TOKEN_TTL_MS, SESSION_TOKEN_TTL_MS, type TokenSigner } from "./tokens";
+import type { TokenSigner } from "./tokens";
 import { verifyTurnstile, type FetchLike } from "./turnstile";
 
 /**
@@ -48,19 +49,6 @@ export interface SessionServiceDeps {
   now?: () => number;
 }
 
-const STATUS: Record<SessionError, number> = {
-  invalid: 400,
-  tos_outdated: 400,
-  age_token_invalid: 401,
-  underage: 403,
-  locked: 403,
-  region_blocked: 403,
-  turnstile_failed: 403,
-  banned: 403,
-  rate_limited: 429,
-  closed: 503,
-};
-
 export interface SessionResult {
   status: number;
   body: SessionResponse;
@@ -77,7 +65,8 @@ export class SessionService {
     const { deps } = this;
     const fail = (error: SessionError, restriction?: Restriction): SessionResult => {
       deps.onResult?.(error);
-      return { status: STATUS[error], body: restriction ? { ok: false, error, restriction } : { ok: false, error } };
+      const status = SESSION_ERROR_STATUS[error];
+      return { status, body: restriction ? { ok: false, error, restriction } : { ok: false, error } };
     };
 
     if (!(await deps.rateLimiter.allow(ctx.ip))) return fail("rate_limited");

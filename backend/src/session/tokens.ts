@@ -6,12 +6,7 @@
  * everyone out. The MAC is compared in constant time.
  */
 import { createHmac, timingSafeEqual } from "node:crypto";
-
-const PREFIX = "c1";
-const MAX_TOKEN_CHARS = 4096;
-
-export const SESSION_TOKEN_TTL_MS = 24 * 60 * 60_000;
-export const AGE_TOKEN_TTL_MS = 180 * 24 * 60 * 60_000;
+import { MAX_TOKEN_CHARS, TOKEN_KEY_DOMAIN, TOKEN_PREFIX } from "./constants";
 
 export interface SessionTokenPayload {
   kind: "session";
@@ -36,7 +31,7 @@ export interface AgeTokenPayload {
 type Payload = SessionTokenPayload | AgeTokenPayload;
 
 function deriveKey(secret: string): Uint8Array {
-  return new Uint8Array(createHmac("sha256", secret).update("chizzy:token:v1").digest());
+  return new Uint8Array(createHmac("sha256", secret).update(TOKEN_KEY_DOMAIN).digest());
 }
 
 export class TokenSigner {
@@ -49,7 +44,7 @@ export class TokenSigner {
   }
 
   sign(payload: Payload): string {
-    const body = `${PREFIX}.${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
+    const body = `${TOKEN_PREFIX}.${Buffer.from(JSON.stringify(payload)).toString("base64url")}`;
     return `${body}.${Buffer.from(this.mac(this.keys[0]!, body)).toString("base64url")}`;
   }
 
@@ -74,7 +69,7 @@ export class TokenSigner {
   private verify(token: unknown, now: number): Payload | null {
     if (typeof token !== "string" || token.length > MAX_TOKEN_CHARS) return null;
     const parts = token.split(".");
-    if (parts.length !== 3 || parts[0] !== PREFIX) return null;
+    if (parts.length !== 3 || parts[0] !== TOKEN_PREFIX) return null;
     const body = `${parts[0]}.${parts[1]}`;
     const given = new Uint8Array(Buffer.from(parts[2]!, "base64url"));
     // Node's decoder skips junk characters; insist on the canonical encoding.

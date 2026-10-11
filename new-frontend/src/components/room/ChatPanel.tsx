@@ -7,12 +7,16 @@ import { LIMITS } from "@/lib/protocol";
 import type { ChatEntry } from "@/hooks/useSignaling";
 import { RedactedText } from "@/components/safety/RedactedText";
 
+/**
+ * The chat itself: header, message list, input. Fills whatever box the
+ * parent gives it (the desktop side column or the phone ChatSheet).
+ */
 interface ChatPanelProps {
   messages: ChatEntry[];
   partnerTyping: boolean;
   textOnly: boolean;
-  isMobile: boolean;
-  onClose: () => void;
+  /** Shows a close button in the header when given. */
+  onClose?: () => void;
   onSend: (text: string) => void;
   /** Called on every edit with whether the input currently has text. */
   onTyping: (typing: boolean) => void;
@@ -47,7 +51,6 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   messages,
   partnerTyping,
   textOnly,
-  isMobile,
   onClose,
   onSend,
   onTyping,
@@ -71,17 +74,9 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   };
 
   return (
-    <div
-      className={`${
-        textOnly
-          ? "flex-1 bg-gray-800 border-l border-gray-700"
-          : isMobile
-            ? "fixed inset-0 z-50 bg-gray-800 border-gray-700"
-            : "w-80 bg-gray-800 border-l border-gray-700"
-      } flex flex-col`}
-    >
+    <div className="flex h-full min-h-0 flex-col bg-gray-800 text-white">
       {/* Chat Header */}
-      <div className="p-4 border-b border-gray-700 flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2 border-b border-gray-700 px-4 py-2">
         <h3 className="font-medium text-white">{textOnly ? t("chat.textTitle") : t("chat.title")}</h3>
         <div className="flex items-center gap-2">
           {partnerTyping && !textOnly && (
@@ -90,16 +85,16 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
               {t("chat.typing")}
             </span>
           )}
-          {isMobile && !textOnly && (
-            <Button
+          {onClose && (
+            <button
+              type="button"
               onClick={onClose}
-              variant="outline"
-              size="sm"
               aria-label={t("chat.close")}
-              className="bg-gray-700 border-gray-600 text-white hover:bg-gray-600"
+              data-testid="chat-close"
+              className="flex h-11 w-11 items-center justify-center rounded-full text-gray-300 hover:bg-gray-700 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-yellow-400"
             >
-              <X className="w-4 h-4" />
-            </Button>
+              <X className="h-5 w-5" aria-hidden="true" />
+            </button>
           )}
         </div>
       </div>
@@ -156,8 +151,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
       </div>
 
       {/* Chat Input */}
-      <div className="p-4 border-t border-gray-700">
-        <div className="flex gap-2">
+      <div className="border-t border-gray-700 p-3">
+        <div className="flex items-center gap-2">
           <Input
             type="text"
             placeholder={t("chat.placeholder")}
@@ -165,6 +160,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             data-testid="chat-input"
             value={draft}
             maxLength={LIMITS.chatMax}
+            enterKeyHint="send"
+            autoComplete="off"
             onChange={(e) => {
               setDraft(e.target.value);
               onTyping(e.target.value.trim().length > 0);
@@ -175,17 +172,17 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
                 send();
               }
             }}
-            className="flex-1 bg-gray-700 border-gray-600 text-white placeholder-gray-400 focus:border-yellow-500"
+            className="h-11 flex-1 bg-gray-700 border-gray-600 text-base text-white placeholder-gray-400 focus:border-yellow-500"
           />
           <Button
             onClick={send}
             disabled={!draft.trim()}
-            size="sm"
+            size="icon"
             aria-label={t("chat.send")}
             data-testid="chat-send"
-            className="bg-yellow-500 text-black hover:bg-yellow-400"
+            className="h-11 w-11 shrink-0 justify-center rounded-full bg-yellow-400 text-black hover:bg-yellow-300 disabled:opacity-50"
           >
-            <Send className="w-4 h-4" />
+            <Send className="h-5 w-5" aria-hidden="true" />
           </Button>
         </div>
       </div>

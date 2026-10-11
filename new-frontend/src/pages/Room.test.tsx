@@ -5,11 +5,19 @@ import type { Preferences, Profile } from "@/lib/protocol";
 import { initialSignalingState, type SignalingState } from "@/hooks/useSignaling";
 import type { PeerConnectionState } from "@/hooks/usePeerConnection";
 import { SAFETY_COACH_KEY } from "@/components/safety/safetyText";
+import { CAPTIONS_KEY } from "@/captions";
+import type * as MediaQuery from "@/hooks/useMediaQuery";
+import { PremiumContext, type PremiumValue } from "@/premium/PremiumContext";
 
 let signalingState: SignalingState;
 let peerState: PeerConnectionState;
 const skip = vi.fn();
 const reportConnected = vi.fn();
+/** Server events the room subscribed to (captions, spark), by event name. */
+const subscribers = new Map<string, Set<(payload: unknown) => void>>();
+function emitServerEvent(event: string, payload: unknown) {
+  act(() => subscribers.get(event)?.forEach((handler) => handler(payload)));
+}
 
 vi.mock("@/hooks/useSignaling", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/hooks/useSignaling")>();
@@ -29,19 +37,50 @@ vi.mock("@/hooks/useSignaling", async (importOriginal) => {
       subscribeSignals: vi.fn(() => () => {}),
       retry: vi.fn(),
       search: vi.fn(),
-      subscribe: vi.fn(() => () => {}),
+      subscribe: vi.fn((event: string, handler: (payload: unknown) => void) => {
+        const set = subscribers.get(event) ?? new Set();
+        set.add(handler);
+        subscribers.set(event, set);
+        return () => set.delete(handler);
+      }),
       send: vi.fn(),
+      request: vi.fn(async () => ({ ok: false as const, error: "internal" as const })),
     }),
   };
 });
 vi.mock("@/hooks/usePeerConnection", () => ({ usePeerConnection: () => peerState }));
 vi.mock("@/hooks/useAudioLevelDetection", () => ({ useAudioLevelDetection: () => ({ isSpeaking: false }) }));
-vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => false }));
+// jsdom has no matchMedia: these tests render the desktop (two-column) layout.
+let desktopLayout = true;
+let landscapeLayout = false;
+vi.mock("@/hooks/useMediaQuery", async (importOriginal) => {
+  const actual = await importOriginal<typeof MediaQuery>();
+  return {
+    ...actual,
+    useMediaQuery: (query: string) =>
+      query === actual.DESKTOP_QUERY ? desktopLayout : query === actual.LANDSCAPE_QUERY ? landscapeLayout : false,
+  };
+});
 
 const { Room } = await import("./Room");
 
 /** The media lane's peer fields, for a call that is neither private nor degraded. */
 const PEER_EXTRAS = { failure: null, privateMode: false, privateRequested: false, relayed: false, lowBandwidth: false };
+/** A premium context with nothing unlocked, for the gender filter notice. */
+const PREMIUM_OFF: PremiumValue = {
+  catalogue: null,
+  wallet: null,
+  sheetOpen: false,
+  busy: null,
+  pending: false,
+  openUnlockSheet: vi.fn(),
+  closeUnlockSheet: vi.fn(),
+  refresh: vi.fn(async () => undefined),
+  applyWallet: vi.fn(),
+  applyCoins: vi.fn(),
+  unlock: vi.fn(async () => ({ ok: true as const })),
+  buy: vi.fn(async () => ({ ok: true as const })),
+};
 
 // These tests are about the call itself: the first-use safety card was already dismissed.
 beforeEach(() => {
@@ -246,5 +285,138 @@ describe("Room call timer and connection report", () => {
     expect(reportConnected).toHaveBeenCalledTimes(1);
     act(() => vi.advanceTimersByTime(65_000));
     expect(screen.getByText("Connected: 1:05")).toBeInTheDocument();
+  });
+});
+
+describe("Room action bar and chat", () => {
+  const message = (id: string, from: "me" | "partner", text: string) => ({ id, from, text, ts: 1 });
+
+  beforeEach(() => {
+    signalingState = inCall();
+    peerState = {
+      remoteStream: null,
+      remoteAudioTrack: null,
+      connectionState: "connected",
+      connectedAt: Date.now(),
+      quality: "GOOD",
+      ...PEER_EXTRAS,
+    };
+  });
+  afterEach(() => {
+    desktopLayout = true;
+    landscapeLayout = false;
+    vi.clearAllMocks();
+  });
+
+  it("has Next, Stop, Chat, Report and the mic in one bar, and Next skips", () => {
+    renderRoom();
+    const bar = screen.getByTestId("call-actions");
+    for (const id of ["next-button", "stop-button", "chat-toggle", "report-button", "mic-toggle", "text-only-toggle"]) {
+      expect(bar.contains(screen.getByTestId(id)), id).toBe(true);
+    }
+    expect(screen.queryByTestId("flip-camera")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("next-button"));
+    expect(skip).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts partner messages that arrive while the chat is closed and clears them on open", () => {
+    const { micChanges, cameraChanges, rerender } = renderRoom();
+    expect(screen.queryByTestId("chat-unread")).not.toBeInTheDocument();
+
+    signalingState = inCall({ messages: [message("a", "partner", "hi"), message("b", "me", "yo"), message("c", "partner", "there?")] });
+    rerender(<Harness micChanges={micChanges} cameraChanges={cameraChanges} />);
+    expect(screen.getByTestId("chat-unread")).toHaveTextContent("2");
+    expect(screen.getByTestId("chat-toast")).toHaveTextContent("there?");
+
+    fireEvent.click(screen.getByTestId("chat-toggle"));
+    expect(screen.getByTestId("chat-toggle")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("chat-input")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-unread")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("chat-toast")).not.toBeInTheDocument();
+  });
+
+  it("opens the chat as a sheet over the video on phones", () => {
+    desktopLayout = false;
+    renderRoom();
+    expect(screen.queryByTestId("chat-sheet")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("chat-toggle"));
+    const sheet = screen.getByTestId("chat-sheet");
+    expect(sheet.contains(screen.getByTestId("chat-input"))).toBe(true);
+    fireEvent.click(screen.getByTestId("chat-close"));
+    expect(screen.queryByTestId("chat-sheet")).not.toBeInTheDocument();
+    // Text-only keeps the sheet up without a close button.
+    fireEvent.click(screen.getByRole("button", { name: /Text Only/ }));
+    expect(screen.getByTestId("chat-sheet")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-close")).not.toBeInTheDocument();
+  });
+
+  it("keeps the captions overlay above the bar on portrait phones and beside the rail in landscape", () => {
+    localStorage.setItem(CAPTIONS_KEY, "1");
+    desktopLayout = false;
+    const { micChanges, cameraChanges, rerender } = renderRoom();
+    const segment = { roomId: ROOM, id: "p1", text: "hello there", final: true, lang: "en" };
+    emitServerEvent("caption:segment", segment);
+    const overlay = screen.getByTestId("captions-overlay");
+    expect(overlay).toHaveTextContent("hello there");
+    expect(overlay.style.bottom).toMatch(/^calc\(\d+px \+ 0\.75rem\)$/);
+    expect(overlay.style.right).toBe("");
+
+    landscapeLayout = true;
+    rerender(<Harness micChanges={micChanges} cameraChanges={cameraChanges} />);
+    const rail = screen.getByTestId("captions-overlay");
+    expect(rail.style.bottom).toContain("env(safe-area-inset-bottom)");
+    expect(rail.style.bottom).toContain("0.75rem");
+    expect(rail.style.right).toMatch(/^calc\(\d+px \+ 0\.5rem\)$/);
+  });
+});
+
+describe("Room gender filter downgrade", () => {
+  beforeEach(() => {
+    peerState = { remoteStream: null, remoteAudioTrack: null, connectionState: "new", connectedAt: null, quality: "GOOD", ...PEER_EXTRAS };
+  });
+
+  it("adopts the server's filter, tells Landing, and offers the unlock sheet", () => {
+    signalingState = { ...initialSignalingState, status: "waiting", coins: 100, genderFilter: "all" };
+    const onPreferencesChange = vi.fn();
+    const openUnlockSheet = vi.fn();
+    render(
+      <PremiumContext.Provider value={{ ...PREMIUM_OFF, openUnlockSheet }}>
+        <Room
+          profile={profile}
+          preferences={{ genderFilter: "female", languageFilter: "any" }}
+          onPreferencesChange={onPreferencesChange}
+          localStream={null}
+          micEnabled
+          onMicEnabledChange={vi.fn()}
+          onCameraEnabledChange={vi.fn()}
+          onBackToHome={vi.fn()}
+        />
+      </PremiumContext.Provider>,
+    );
+    expect(onPreferencesChange).toHaveBeenCalledWith({ genderFilter: "all", languageFilter: "any" });
+    const notice = screen.getByTestId("gender-filter-off");
+    expect(notice).toHaveTextContent("Gender filter turned off");
+    fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+    expect(openUnlockSheet).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("gender-filter-off")).not.toBeInTheDocument();
+  });
+
+  it("shows nothing when the server applies the filter that was sent", () => {
+    signalingState = { ...initialSignalingState, status: "waiting", coins: 100, genderFilter: "female" };
+    const onPreferencesChange = vi.fn();
+    render(
+      <Room
+        profile={profile}
+        preferences={{ genderFilter: "female", languageFilter: "any" }}
+        onPreferencesChange={onPreferencesChange}
+        localStream={null}
+        micEnabled
+        onMicEnabledChange={vi.fn()}
+        onCameraEnabledChange={vi.fn()}
+        onBackToHome={vi.fn()}
+      />,
+    );
+    expect(onPreferencesChange).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("gender-filter-off")).not.toBeInTheDocument();
   });
 });

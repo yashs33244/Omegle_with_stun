@@ -19,8 +19,10 @@
  *   reports, bans) do not need it.
  */
 import type { MatchMode, Preferences, Profile, ReportReason } from "../protocol";
+import type { ROOM_STATES, SESSION_STATES } from "./constants";
 
-export type SessionState = "idle" | "waiting" | "pending" | "active";
+export type SessionState = (typeof SESSION_STATES)[number];
+export type RoomState = (typeof ROOM_STATES)[number];
 
 /**
  * Profile as stored on a session. The photo (up to ~150 KB) lives under its
@@ -48,7 +50,7 @@ export interface Session {
 
 export interface Room {
   id: string;
-  state: "pending" | "active";
+  state: RoomState;
   /** Socket ids. members[0] is the older waiter and becomes the WebRTC initiator. */
   members: [string, string];
   devices: [string, string];
@@ -179,6 +181,3 @@ export interface MatchStore {
 export function pairKey(deviceA: string, deviceB: string): string {
   return deviceA < deviceB ? `${deviceA}:${deviceB}` : `${deviceB}:${deviceA}`;
 }
-
-/** Max entries kept in the report log. */
-export const REPORT_LOG_MAX = 10_000;

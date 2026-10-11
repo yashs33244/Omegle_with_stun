@@ -92,6 +92,8 @@ launch build"); the backend itself also refuses to start without them.
 | `SHUTDOWN_GRACE_MS` | `10000` | how long a replica drains on stop; keep it under the 15 s `stop_grace_period` in `docker-compose.yml` |
 | `STUN_URLS` | Google public STUN | comma list |
 | `TURN_URLS`, `TURN_SECRET`, `TURN_USERNAME`, `TURN_CREDENTIAL`, `TURN_TTL_SECONDS` | unset | self-hosted TURN on a separate host only (`TURN_PROVIDER` `static` or `secret`) |
+| `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` | unset | Razorpay API key pair (Dashboard -> Account & Settings -> API Keys). Unset: `/api/billing` orders answer 503 `billing_disabled`; earned coins still work. Real payments need a durable wallet: in production with these set but no `REDIS_URL` the backend logs `BILLING DISABLED` and keeps orders off (balances, unlocks and payment records in memory vanish on every deploy). On Render: attach a persistent Redis first (Upstash free tier is persistent; Render Key Value free is not), set `REDIS_URL`, then fill these in the Environment tab of `chizzy-api` |
+| `RAZORPAY_WEBHOOK_SECRET` | unset | secret typed when creating the webhook (Dashboard -> Account & Settings -> Webhooks): URL `https://chizzy-api.onrender.com/api/billing/webhook` (or `https://<api host>/api/billing/webhook`), active event `payment.captured` only. Required in production whenever `RAZORPAY_KEY_ID` is set (startup fails without it): the webhook is the guaranteed second crediting path next to the Checkout success handler (`POST /api/billing/verify`, which the client retries from local storage until it answers), so a closed tab still gets its coins |
 
 Repository **variable** (not a secret) and the canary secret:
 
@@ -374,6 +376,9 @@ every replica within about 2 s; no deploy or restart is needed:
 | `turn_enabled`, `private_mode_enabled`, `video_max_kbps`, `relay_video_max_kbps` | relay cost controls (the TURN spend poller also changes them) |
 | `blocked_countries` | country blocklist (comma separated ISO codes) |
 | `online_count_threshold` | show the real online count only above this |
+| `premium_filters_enabled` | on (default): the gender filter needs an unlock bought with coins; off: free for everyone (no lock in the app) |
+| `gender_filter_coins_per_day` | 100 by default; an unlock costs this x 1, 7 or 30 days |
+| `coin_packs` | JSON array of `{"id","coins","inr"}` sold through Razorpay; default `[{"id":"week","coins":700,"inr":99},{"id":"month","coins":3000,"inr":299}]` (99 INR ≈ a week, 299 INR ≈ a month). Prices are whole rupees; Razorpay is charged `inr x 100` paise |
 
 What to change when is in the runbooks: docs/runbooks/abuse-wave.md,
 docs/runbooks/turn-cost-spike.md, docs/runbooks/host-down.md.

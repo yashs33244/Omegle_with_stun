@@ -11,10 +11,12 @@ import { createSessionRouter } from "../http/session";
 import type { Logger } from "../logger";
 import type { MatchStore } from "../store/MatchStore";
 import { startMatchingBroadcast } from "./broadcast";
+import { SALT_PURPOSE } from "./constants";
 import { sessionHandshake } from "./handshake";
-import { MemoryKv, RedisKv } from "./kv";
 import { Lockout, MatchCaps, SessionRateLimiter, deriveSalt } from "./limits";
+import { MemoryKv } from "./MemoryKv";
 import { SessionQueueGate } from "./queueGate";
+import { RedisKv } from "./RedisKv";
 import { SessionService, type RestrictionChecker } from "./SessionService";
 import { TokenSigner } from "./tokens";
 import type { FetchLike } from "./turnstile";
@@ -40,7 +42,7 @@ export function createSessionFeature(deps: SessionFeatureDeps) {
   const secrets = [config.sessionSecret, ...(config.sessionSecretPrevious ? [config.sessionSecretPrevious] : [])];
   const tokens = new TokenSigner(secrets);
   const kv = deps.redis ? new RedisKv(deps.redis) : new MemoryKv();
-  const salt = deriveSalt(config.sessionSecret, "limits");
+  const salt = deriveSalt(config.sessionSecret, SALT_PURPOSE.limits);
   const caps = new MatchCaps(kv, salt, {
     perDevicePerHour: config.matchCapPerDevicePerHour,
     perIpPerHour: config.matchCapPerIpPerHour,
@@ -64,7 +66,7 @@ export function createSessionFeature(deps: SessionFeatureDeps) {
     flags,
     lockout: new Lockout(
       kv,
-      secrets.map((s) => deriveSalt(s, "lockout")),
+      secrets.map((s) => deriveSalt(s, SALT_PURPOSE.lockout)),
     ),
     rateLimiter: new SessionRateLimiter(kv, salt, {
       perIpPerMinute: config.sessionRatePerIpPerMin,

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { HIDDEN, containsSlur, guardChat, guardName, nicknameFor, normalize } from "../../src/safety/guard";
+import { HIDDEN } from "../../src/safety/constants";
+import { containsSlur, guardChat, guardName, nicknameFor, normalize } from "../../src/safety/guard";
 import { NAME_SLURS, SOLICITATION_PHRASES } from "../../src/safety/phrases";
 
 const DEVICE = "6f1c1f2e-8a8b-4c39-9b0e-6d2a6f1b9c11";
@@ -22,6 +23,8 @@ describe("chat guard redaction", () => {
     ["call 98765 43210", `call ${HIDDEN}`],
     ["+91 (987) 654-3210 ok", `${HIDDEN} ok`],
     ["number ९८७६५४३२१० hai", `number ${HIDDEN} hai`],
+    ["call 1234567", `call ${HIDDEN}`], // PHONE_MIN_DIGITS
+    ["card 123456789012345", `card ${HIDDEN}`], // PHONE_MAX_DIGITS
     ["instagram.com/priya", HIDDEN],
   ];
   test.each(hidden)("%p -> %p", (input, output) => {
@@ -38,6 +41,8 @@ describe("chat guard redaction", () => {
     "do you have insta account?",
     "the year 2024 was fun",
     "e.g. node.js is nice",
+    "pin 123456", // one digit short of a phone number
+    "ref 1234567890123456", // one digit past PHONE_MAX_DIGITS
   ];
   test.each(clean)("%p is left alone", (input) => {
     const r = on(input);

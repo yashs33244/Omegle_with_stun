@@ -6,8 +6,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
 import Redis from "ioredis";
 import type { Config } from "../../src/config";
-import { MemoryEnforcementStore, RedisEnforcementStore, type EnforcementStore } from "../../src/enforcement/store";
-import { DAY, SHORT_CALL_MS, YEAR } from "../../src/enforcement/policy";
+import { DAY, SHORT_CALL_MS, YEAR } from "../../src/enforcement/constants";
+import type { EnforcementStore } from "../../src/enforcement/EnforcementStore";
+import { MemoryEnforcementStore } from "../../src/enforcement/MemoryEnforcementStore";
+import { RedisEnforcementStore } from "../../src/enforcement/RedisEnforcementStore";
 import type { AdminReport, CsamReportPacket, Restriction, RestrictionView } from "../../src/protocol";
 import { jpegBytes, jpegDataUrl } from "../enforcementFixtures";
 import {

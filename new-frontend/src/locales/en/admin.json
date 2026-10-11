@@ -181,7 +181,10 @@
       "blocked_countries": { "label": "Blocked countries", "help": "Comma-separated ISO codes, e.g. GB,AU,DE." },
       "staffed_hours": { "label": "Staffed hours", "help": "e.g. \"20:00-24:00 Asia/Kolkata\". Empty means always open." },
       "default_mode": { "label": "Default match mode", "help": "instant or preview." },
-      "online_count_threshold": { "label": "Online count threshold", "help": "Show the online count only at or above this." }
+      "online_count_threshold": { "label": "Online count threshold", "help": "Show the online count only at or above this." },
+      "premium_filters_enabled": { "label": "Gender filter costs coins", "help": "Off makes the gender filter free for everyone." },
+      "gender_filter_coins_per_day": { "label": "Gender filter coins per day", "help": "Unlock prices are this times 1, 7 or 30 days." },
+      "coin_packs": { "label": "Coin packs (JSON)", "help": "Array of {\"id\", \"coins\", \"inr\"} sold through Razorpay. Prices are whole rupees." }
     },
     "risky": {
       "matchingOn": "Matching opens again for everyone (staffed hours still apply).",

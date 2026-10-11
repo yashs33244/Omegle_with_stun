@@ -1,10 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { AUTO_PAUSE_THRESHOLD, DAY, HIGH_WEIGHT, HOUR, MINUTE } from "../../src/enforcement/constants";
 import {
-  AUTO_PAUSE_THRESHOLD,
-  DAY,
-  HIGH_WEIGHT,
-  HOUR,
-  MINUTE,
   evidenceShowable,
   kindFor,
   ladderStep,

@@ -4,7 +4,9 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import Redis from "ioredis";
-import { MemoryEnforcementStore, RedisEnforcementStore, type EnforcementStore } from "../../src/enforcement/store";
+import type { EnforcementStore } from "../../src/enforcement/EnforcementStore";
+import { MemoryEnforcementStore } from "../../src/enforcement/MemoryEnforcementStore";
+import { RedisEnforcementStore } from "../../src/enforcement/RedisEnforcementStore";
 import { delay } from "../helpers";
 
 function contract(name: string, make: () => EnforcementStore) {

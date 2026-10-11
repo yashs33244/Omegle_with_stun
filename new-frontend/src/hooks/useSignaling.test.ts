@@ -24,7 +24,7 @@ function run(events: SignalingEvent[], from: SignalingState = initialSignalingSt
   return events.reduce(signalingReducer, from);
 }
 
-const hello: SignalingEvent = { type: "hello-ok", coins: 100, iceServers: [{ urls: "stun:x" }] };
+const hello: SignalingEvent = { type: "hello-ok", coins: 100, iceServers: [{ urls: "stun:x" }], genderFilter: "female" };
 const found: SignalingEvent = {
   type: "match-found",
   roomId: ROOM,
@@ -49,6 +49,18 @@ describe("signalingReducer", () => {
     const s = run([found, hello]);
     expect(s.status).toBe("match-found");
     expect(s.coins).toBe(100);
+  });
+
+  it("tracks the gender filter the server applies: hello ack, saved preferences, lapsed unlock", () => {
+    expect(initialSignalingState.genderFilter).toBeNull();
+    let s = run([{ ...hello, genderFilter: "all" }]);
+    expect(s.genderFilter).toBe("all");
+    s = run([{ type: "preferences-saved", genderFilter: "female" }], s);
+    expect(s.genderFilter).toBe("female");
+    s = run([{ type: "server-error", code: "premium_required" }], s);
+    expect(s.genderFilter).toBe("all");
+    expect(s.notice).toBeNull();
+    expect(s.status).toBe("waiting");
   });
 
   it("walks the happy path: match, accept, partner accepts, call starts", () => {

@@ -66,6 +66,10 @@ const envSchema = z
     EVIDENCE_S3_REGION: z.string().min(1).optional(),
     EVIDENCE_S3_KMS_KEY_ID: z.string().min(1).optional(),
     PSEUDONYM_SALT: z.string().min(16).optional(),
+    RAZORPAY_KEY_ID: z.string().min(1).optional(),
+    RAZORPAY_KEY_SECRET: z.string().min(1).optional(),
+    RAZORPAY_WEBHOOK_SECRET: z.string().min(1).optional(),
+    RAZORPAY_FAKE: bool.default("false"),
   })
   .superRefine((env, ctx) => {
     refineMatchEnv(env, ctx);
@@ -151,6 +155,27 @@ const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ["TURN_CREDENTIAL"],
         message: "TURN_USERNAME and TURN_CREDENTIAL must be set together",
+      });
+    }
+    if (Boolean(env.RAZORPAY_KEY_ID) !== Boolean(env.RAZORPAY_KEY_SECRET)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["RAZORPAY_KEY_SECRET"],
+        message: "RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET must be set together",
+      });
+    }
+    if (env.NODE_ENV === "production" && env.RAZORPAY_KEY_ID && !env.RAZORPAY_WEBHOOK_SECRET) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["RAZORPAY_WEBHOOK_SECRET"],
+        message: "is required in production when RAZORPAY_KEY_ID is set (the webhook is the second crediting path)",
+      });
+    }
+    if (env.RAZORPAY_FAKE && env.NODE_ENV === "production") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["RAZORPAY_FAKE"],
+        message: "is for tests only and must not be set in production",
       });
     }
   });
@@ -277,6 +302,14 @@ export interface Config extends MatchConfig {
   evidenceS3KmsKeyId?: string;
   /** Salt for the pseudonymous device ids admins see. Defaults to one derived from ADMIN_TOKEN. */
   pseudonymSalt?: string;
+
+  /* Billing (src/billing). Razorpay keys from Settings > API Keys; unset: /api/billing answers 503 billing_disabled. */
+  razorpayKeyId?: string;
+  razorpayKeySecret?: string;
+  /** Secret chosen when creating the webhook in the Razorpay dashboard. Required in production with RAZORPAY_KEY_ID; unset elsewhere: POST /api/billing/webhook answers 503. */
+  razorpayWebhookSecret?: string;
+  /** Test-only fake gateway (no HTTP, fixed signature). Refused in production. */
+  razorpayFake: boolean;
 }
 
 export class ConfigError extends Error {}
@@ -352,6 +385,10 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     evidenceS3Region: e.EVIDENCE_S3_REGION,
     evidenceS3KmsKeyId: e.EVIDENCE_S3_KMS_KEY_ID,
     pseudonymSalt: e.PSEUDONYM_SALT,
+    razorpayKeyId: e.RAZORPAY_KEY_ID,
+    razorpayKeySecret: e.RAZORPAY_KEY_SECRET,
+    razorpayWebhookSecret: e.RAZORPAY_WEBHOOK_SECRET,
+    razorpayFake: e.RAZORPAY_FAKE,
     ...matchConfigFromEnv(e),
   };
 }

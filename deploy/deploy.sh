@@ -44,6 +44,7 @@ ENV_KEYS=(
   SENTRY_DSN SENTRY_DSN_FRONTEND POSTHOG_KEY POSTHOG_HOST
   ADMIN_TOKEN ADMIN_ALLOWED_IPS PSEUDONYM_SALT
   EVIDENCE_S3_BUCKET EVIDENCE_S3_REGION EVIDENCE_S3_KMS_KEY_ID
+  RAZORPAY_KEY_ID RAZORPAY_KEY_SECRET RAZORPAY_WEBHOOK_SECRET
   CLOUDFLARE_ONLY BACKUP_S3_URI
 )
 installed=0
@@ -101,6 +102,10 @@ check_production_secrets() {
   esac
   if [ -n "$(setting EVIDENCE_S3_BUCKET)" ] && [ -z "$(setting EVIDENCE_S3_REGION)" ]; then
     missing="$missing EVIDENCE_S3_REGION"
+  fi
+  if [ -n "$(setting RAZORPAY_KEY_ID)" ]; then
+    [ -n "$(setting RAZORPAY_KEY_SECRET)" ] || missing="$missing RAZORPAY_KEY_SECRET"
+    [ -n "$(setting RAZORPAY_WEBHOOK_SECRET)" ] || missing="$missing RAZORPAY_WEBHOOK_SECRET"
   fi
   val=$(setting PSEUDONYM_SALT)
   if [ -z "$val" ]; then

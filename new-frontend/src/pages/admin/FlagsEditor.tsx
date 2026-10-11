@@ -20,6 +20,9 @@ const FIELDS: readonly FlagKey[] = [
   "staffed_hours",
   "default_mode",
   "online_count_threshold",
+  "premium_filters_enabled",
+  "gender_filter_coins_per_day",
+  "coin_packs",
 ];
 
 /** Changes to these flags need an explicit confirmation. */

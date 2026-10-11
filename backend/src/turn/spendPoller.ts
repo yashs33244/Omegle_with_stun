@@ -19,14 +19,22 @@ import type { Logger } from "../logger";
 import type { MatchMetrics } from "../match/matchMetrics";
 import type { Flags } from "../protocol";
 import type { FetchFn } from "./cloudflare";
-
-export const RELAY_STEP_DOWN_KBPS = 300;
-const GB = 1e9;
+import {
+  BYTES_PER_GB,
+  CLOUDFLARE_GRAPHQL_GROUP_LIMIT,
+  CLOUDFLARE_GRAPHQL_TIMEOUT_MS,
+  CLOUDFLARE_GRAPHQL_URL,
+  DAY_MS,
+  RELAY_STEP_DOWN_KBPS,
+  SPEND_LOCK_KEY,
+  SPEND_LOCK_LEASE_SHARE,
+  SPEND_LOCK_MIN_TTL_MS,
+  SPEND_STEP,
+  type SpendStep,
+} from "./constants";
 
 /** Returns TURN egress bytes between `start` (inclusive) and `end`. */
 export type EgressQuery = (start: Date, end: Date) => Promise<number>;
-
-export const CLOUDFLARE_GRAPHQL_URL = "https://api.cloudflare.com/client/v4/graphql";
 
 /**
  * Cloudflare Realtime TURN analytics. Dataset and field names follow the
@@ -36,7 +44,7 @@ export const CLOUDFLARE_GRAPHQL_URL = "https://api.cloudflare.com/client/v4/grap
 export const TURN_EGRESS_QUERY = `query TurnEgress($accountTag: string!, $start: Time!, $end: Time!) {
   viewer {
     accounts(filter: { accountTag: $accountTag }) {
-      callsTurnUsageAdaptiveGroups(limit: 10000, filter: { datetimeMinute_geq: $start, datetimeMinute_lt: $end }) {
+      callsTurnUsageAdaptiveGroups(limit: ${CLOUDFLARE_GRAPHQL_GROUP_LIMIT}, filter: { datetimeMinute_geq: $start, datetimeMinute_lt: $end }) {
         sum { egressBytes }
       }
     }
@@ -77,7 +85,7 @@ export function cloudflareEgressQuery(opts: { accountId: string; apiToken: strin
         query: TURN_EGRESS_QUERY,
         variables: { accountTag: opts.accountId, start: start.toISOString(), end: end.toISOString() },
       }),
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(CLOUDFLARE_GRAPHQL_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`cloudflare graphql returned ${res.status}`);
     return parseEgressResponse((await res.json()) as GraphqlResponse);
@@ -85,7 +93,7 @@ export function cloudflareEgressQuery(opts: { accountId: string; apiToken: strin
 }
 
 interface Step {
-  name: string;
+  name: SpendStep;
   /** True when the flags already reflect this step. */
   applied(f: Flags): boolean;
   patch: Partial<Flags>;
@@ -93,12 +101,12 @@ interface Step {
 
 const STEPS: Step[] = [
   {
-    name: "relay-bitrate",
+    name: SPEND_STEP.relayBitrate,
     applied: (f) => f.relay_video_max_kbps <= RELAY_STEP_DOWN_KBPS,
     patch: { relay_video_max_kbps: RELAY_STEP_DOWN_KBPS },
   },
-  { name: "private-mode-off", applied: (f) => !f.private_mode_enabled, patch: { private_mode_enabled: false } },
-  { name: "turn-off", applied: (f) => !f.turn_enabled, patch: { turn_enabled: false } },
+  { name: SPEND_STEP.privateModeOff, applied: (f) => !f.private_mode_enabled, patch: { private_mode_enabled: false } },
+  { name: SPEND_STEP.turnOff, applied: (f) => !f.turn_enabled, patch: { turn_enabled: false } },
 ];
 
 export interface SpendPollerDeps {
@@ -154,11 +162,11 @@ export class TurnSpendPoller {
     try {
       if (!(await this.acquire())) return { status: "skipped" };
       const now = this.now();
-      const dayStart = new Date(now - (now % 86_400_000));
+      const dayStart = new Date(now - (now % DAY_MS));
       const bytes = await deps.query(dayStart, new Date(now));
-      const gb = bytes / GB;
+      const gb = bytes / BYTES_PER_GB;
       deps.metrics.turnEgressGbToday.set(gb);
-      const applied: string[] = [];
+      const applied: SpendStep[] = [];
       for (let i = 0; i < STEPS.length; i++) {
         const step = STEPS[i]!;
         if (gb < deps.thresholdsGb[i]!) break;
@@ -183,8 +191,8 @@ export class TurnSpendPoller {
   /** A lease just under the poll interval, never released, so one instance polls per interval. */
   private async acquire(): Promise<boolean> {
     if (!this.deps.redis) return true;
-    const ttl = Math.max(1_000, Math.floor(this.deps.intervalMs * 0.9));
-    const res = await this.deps.redis.set(this.deps.lockKey ?? "chizzy:lock:turn-spend", randomUUID(), "PX", ttl, "NX");
+    const ttl = Math.max(SPEND_LOCK_MIN_TTL_MS, Math.floor(this.deps.intervalMs * SPEND_LOCK_LEASE_SHARE));
+    const res = await this.deps.redis.set(this.deps.lockKey ?? SPEND_LOCK_KEY, randomUUID(), "PX", ttl, "NX");
     return res === "OK";
   }
 }

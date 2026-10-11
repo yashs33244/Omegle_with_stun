@@ -62,6 +62,7 @@ describe("dependencies", () => {
       .map((f) => readFileSync(f, "utf8"))
       .join("\n");
     const unused = readdirSync(uiDir)
+      .filter((f) => !/\.test\.tsx?$/.test(f))
       .map((f) => f.replace(/\.tsx?$/, ""))
       .filter((name) => !outside.includes(`@/components/ui/${name}"`));
     expect(unused).toEqual([]);

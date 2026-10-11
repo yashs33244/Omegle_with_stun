@@ -64,6 +64,26 @@ export const LIMITS = {
   takedownDescriptionMax: 2_000,
 } as const;
 
+/** Spark icebreakers: one shared prompt shown to both sides at the same moment. */
+export const SPARK = {
+  /** Minimum gap between two prompts in one room; both sides share the cooldown. */
+  cooldownMs: 10_000,
+  /** How long a client keeps the prompt card on screen. */
+  cardMs: 12_000,
+  /** The server does not repeat any of the last N prompt ids of a room. */
+  historySize: 20,
+} as const;
+
+/** Live captions: the sender's browser transcribes its own speech; the server only relays. */
+export const CAPTIONS = {
+  /** UTF-8 bytes of one segment's text. */
+  maxBytes: 1_024,
+  /** Segments per second per socket; the rest are dropped. */
+  maxPerSec: 10,
+  /** Interim segments are sent at most this often; finals go out at once. */
+  interimEveryMs: 250,
+} as const;
+
 /* ------------------------------------------------------------------ */
 /* Shared value schemas                                                */
 /* ------------------------------------------------------------------ */
@@ -220,6 +240,29 @@ export const moderationSignalSchema = z.object({
   kind: z.enum(["nsfw-blur", "no-face", "virtual-camera", "model-unavailable"]),
 });
 
+export const sparkRequestSchema = roomRefSchema;
+
+/** Byte length as the wire sees it, so a 1 KB cap means 1 KB in any script. */
+const utf8Bytes = (text: string): number => new TextEncoder().encode(text).length;
+
+/**
+ * One piece of the sender's own transcript. Relayed to the partner only,
+ * never stored or logged. Later segments with the same id replace earlier
+ * (interim) ones until `final`.
+ */
+export const captionSegmentSchema = z.object({
+  roomId,
+  id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+  text: z
+    .string()
+    .trim()
+    .min(1)
+    .refine((text) => utf8Bytes(text) <= CAPTIONS.maxBytes, { message: `text must be at most ${CAPTIONS.maxBytes} bytes` }),
+  final: z.boolean(),
+  /** Language the sender's recogniser ran in; the receiver translates from it. */
+  lang: languageCode,
+});
+
 export type HelloPayload = z.infer<typeof helloSchema>;
 export type UpdatePreferencesPayload = z.infer<typeof updatePreferencesSchema>;
 export type RoomRef = z.infer<typeof roomRefSchema>;
@@ -230,6 +273,7 @@ export type ReportPayload = z.infer<typeof reportSchema>;
 export type CallFailedPayload = z.infer<typeof callFailedSchema>;
 export type CallTelemetryPayload = z.infer<typeof callTelemetrySchema>;
 export type ModerationSignalPayload = z.infer<typeof moderationSignalSchema>;
+export type CaptionSegmentPayload = z.infer<typeof captionSegmentSchema>;
 
 /* ------------------------------------------------------------------ */
 /* Acks                                                                */
@@ -245,6 +289,7 @@ export type ErrorCode =
   | "matching_closed" // kill switch or outside staffed hours
   | "session_required" // missing, invalid or expired session token (handshake)
   | "region_blocked"
+  | "premium_required" // genderFilter other than "all" needs an active gender_filter unlock (see /api/billing)
   | "internal";
 
 /* ------------------------------------------------------------------ */
@@ -288,9 +333,12 @@ export type HelloAck = Ack<{
   iceServers: IceServer[];
   /** The mode the server will use (a flag can force preview). */
   mode: MatchMode;
+  /** The gender filter in effect: "all" when the one sent needs an unlock the device does not have. */
+  genderFilter: GenderFilter;
 }>;
 export type ChatAck = Ack<{ id: string; ts: number; redacted: boolean }>;
 export type ReportAck = Ack<{ reportId: string }>;
+export type SparkAck = Ack<{ promptId: string }>;
 export type SimpleAck = Ack;
 
 /* ------------------------------------------------------------------ */
@@ -376,6 +424,16 @@ export interface ServerToClientEvents {
   "matching:status": (p: { open: boolean; reopensAt: number | null; message: string | null }) => void;
   /** A restriction was applied to this device. Any room is ended first. */
   "session:restricted": (p: { restriction: Restriction }) => void;
+  /** Coins and premium unlocks, sent after session:hello and after every purchase, unlock or admin adjustment. */
+  "wallet:update": (p: WalletView) => void;
+  /**
+   * An icebreaker for both members, sent at the same moment. `from` says whose
+   * tap it was. The id maps to text in each client's own language
+   * (new-frontend/public/spark/prompts.<lang>.json, generated from backend/src/spark/catalog.ts).
+   */
+  "spark:show": (p: { roomId: string; promptId: string; from: "you" | "partner"; at: number }) => void;
+  /** The partner's live caption, as their own browser transcribed it. */
+  "caption:segment": (p: CaptionSegmentPayload) => void;
 }
 
 export interface ClientToServerEvents {
@@ -398,6 +456,10 @@ export interface ClientToServerEvents {
   "call:failed": (p: CallFailedPayload) => void;
   "call:telemetry": (p: CallTelemetryPayload) => void;
   "moderation:signal": (p: ModerationSignalPayload) => void;
+  /** Ask for a Spark prompt; both sides get spark:show. rate_limited while the room cooldown runs. */
+  "spark:request": (p: RoomRef, ack: (res: SparkAck) => void) => void;
+  /** A piece of my own transcript for the partner. Dropped over CAPTIONS.maxPerSec. */
+  "caption:segment": (p: CaptionSegmentPayload) => void;
 }
 
 /* ------------------------------------------------------------------ */
@@ -504,6 +566,95 @@ export type TakedownRequest = z.infer<typeof takedownRequestSchema>;
 export type TakedownResponse = { ok: true; ticketId: string } | { ok: false; error: "invalid" | "turnstile_failed" | "rate_limited" };
 
 /* ------------------------------------------------------------------ */
+/* Billing (/api/billing/*, coins and premium unlocks)                 */
+/* ------------------------------------------------------------------ */
+
+/** Features a device can unlock for a period by spending coins. */
+export const PREMIUM_FEATURES = ["gender_filter"] as const;
+export type PremiumFeature = (typeof PREMIUM_FEATURES)[number];
+
+/** Unlock periods offered to users, in days. The price is `gender_filter_coins_per_day` x days. */
+export const UNLOCK_DAYS = [1, 7, 30] as const;
+export type UnlockDays = (typeof UNLOCK_DAYS)[number];
+
+/** One purchasable coin pack (flag `coin_packs`). `inr` is the price in whole rupees. */
+export const coinPackSchema = z.object({
+  id: z.string().regex(/^[a-z0-9_-]{1,32}$/),
+  coins: z.number().int().min(1).max(1_000_000),
+  inr: z.number().int().min(1).max(100_000),
+});
+export const coinPacksSchema = z.array(coinPackSchema).min(1).max(10);
+export type CoinPack = z.infer<typeof coinPackSchema>;
+
+export interface PremiumUnlock {
+  feature: PremiumFeature;
+  /** Epoch ms. */
+  expiresAt: number;
+}
+
+/** GET /api/billing/wallet and the wallet:update event. Only unlocks that are still active. */
+export interface WalletView {
+  coins: number;
+  unlocks: PremiumUnlock[];
+}
+
+/** GET /api/billing/packs: public, safe to cache for 30 s. */
+export interface BillingPacksResponse {
+  /** Razorpay is configured; orders can be created. */
+  enabled: boolean;
+  /** Flag premium_filters_enabled: false makes the gender filter free. */
+  premiumFiltersEnabled: boolean;
+  /** Razorpay key id for Checkout, null when billing is disabled. */
+  keyId: string | null;
+  /** Coins charged per day of gender_filter. */
+  costPerDay: number;
+  packs: CoinPack[];
+  unlockDays: readonly UnlockDays[];
+}
+
+export const billingOrderRequestSchema = z.object({ packId: coinPackSchema.shape.id });
+export type BillingOrderRequest = z.infer<typeof billingOrderRequestSchema>;
+
+/** POST /api/billing/orders: what Razorpay Checkout needs. `amount` is in paise. */
+export interface BillingOrder {
+  orderId: string;
+  amount: number;
+  currency: "INR";
+  keyId: string;
+  packId: string;
+  coins: number;
+}
+
+/** POST /api/billing/verify: the Checkout success handler's payload. */
+export const billingVerifyRequestSchema = z.object({
+  orderId: z.string().min(1).max(64),
+  paymentId: z.string().min(1).max(64),
+  signature: z.string().min(1).max(256),
+});
+export type BillingVerifyRequest = z.infer<typeof billingVerifyRequestSchema>;
+
+export const billingUnlockRequestSchema = z.object({
+  feature: z.enum(PREMIUM_FEATURES),
+  days: z.union([z.literal(1), z.literal(7), z.literal(30)]),
+});
+export type BillingUnlockRequest = z.infer<typeof billingUnlockRequestSchema>;
+
+export type BillingError =
+  | "billing_disabled" // no Razorpay keys on the server
+  | "session_required" // missing, invalid or expired session token (Authorization: Bearer)
+  | "invalid"
+  | "rate_limited"
+  | "unknown_pack"
+  | "order_unknown" // this server never created (or has lost) the order; nothing is credited
+  | "bad_signature"
+  | "payment_mismatch" // the payment does not match the order (amount, currency, device or status)
+  | "payment_pending" // Razorpay has authorized but not yet captured the payment; retry, or wait for the webhook
+  | "insufficient_coins"
+  | "upstream"; // Razorpay did not answer
+
+export type BillingResponse<T> = ({ ok: true } & T) | { ok: false; error: BillingError };
+
+/* ------------------------------------------------------------------ */
 /* Admin API (/admin/api/*, Authorization: Bearer ADMIN_TOKEN)         */
 /* ------------------------------------------------------------------ */
 
@@ -524,6 +675,11 @@ export const FLAG_DEFAULTS = {
   default_mode: "instant" as MatchMode,
   /** Show the real online count only when at least this many people are online. */
   online_count_threshold: 50,
+  /** Owner decision 2026-10-11: the gender filter costs coins. false makes it free again. */
+  premium_filters_enabled: true,
+  gender_filter_coins_per_day: 100,
+  /** JSON array of coin packs (coinPacksSchema). Sized so 99 INR is about a week and 299 INR about a month. */
+  coin_packs: '[{"id":"week","coins":700,"inr":99},{"id":"month","coins":3000,"inr":299}]',
 } as const;
 
 export const flagsSchema = z.object({
@@ -539,6 +695,18 @@ export const flagsSchema = z.object({
   staffed_hours: z.string().regex(/^(\d{2}:\d{2}-\d{2}:\d{2} [A-Za-z_]+\/[A-Za-z_]+)?$/),
   default_mode: z.enum(MATCH_MODES),
   online_count_threshold: z.number().int().min(0).max(1_000_000),
+  premium_filters_enabled: z.boolean(),
+  gender_filter_coins_per_day: z.number().int().min(1).max(100_000),
+  coin_packs: z
+    .string()
+    .max(2_000)
+    .refine((s) => {
+      try {
+        return coinPacksSchema.safeParse(JSON.parse(s)).success;
+      } catch {
+        return false;
+      }
+    }, "must be a JSON array of {id, coins, inr}"),
 });
 export type Flags = z.infer<typeof flagsSchema>;
 
@@ -613,6 +781,43 @@ export interface AdminAuditEntry {
   target: string;
   note: string | null;
   ip: string | null;
+}
+
+/** Coin movements, newest first. `ref` is the room, payment id or admin note. */
+export interface WalletLedgerEntry {
+  id: string;
+  deviceId: string;
+  delta: number;
+  reason: "earned" | "purchase" | "unlock" | "admin";
+  ref: string | null;
+  at: number;
+}
+
+/** GET /admin/api/wallets/:deviceId */
+export interface AdminWalletView extends WalletView {
+  deviceId: string;
+  ledger: WalletLedgerEntry[];
+}
+
+export const adminWalletAdjustSchema = z.object({
+  delta: z.number().int().min(-1_000_000).max(1_000_000).refine((d) => d !== 0, "must not be 0"),
+  note: z.string().trim().min(1).max(500),
+});
+export type AdminWalletAdjust = z.infer<typeof adminWalletAdjustSchema>;
+
+/** A Razorpay order this server created (GET /admin/api/billing/orders, newest first). */
+export interface BillingOrderRecord {
+  orderId: string;
+  deviceId: string;
+  packId: string;
+  coins: number;
+  /** Paise. */
+  amount: number;
+  currency: "INR";
+  status: "created" | "paid";
+  paymentId: string | null;
+  createdAt: number;
+  paidAt: number | null;
 }
 
 /** Packet for NCMEC CyberTipline / India NCRP filing, built without opening the image. */

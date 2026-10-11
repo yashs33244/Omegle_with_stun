@@ -7,6 +7,16 @@
  */
 import { isIPv4, isIPv6 } from "node:net";
 import type { Flags } from "../protocol";
+import {
+  COUNTRY_HEADER,
+  IPV4_MAPPED_PREFIX,
+  IPV4_NETWORK_OCTETS,
+  IPV6_GROUPS,
+  IPV6_NETWORK_GROUPS,
+  IPV6_SUBSCRIBER_GROUPS,
+  UNKNOWN_COUNTRY,
+  UNKNOWN_IP,
+} from "./constants";
 
 type Headers = Record<string, string | string[] | undefined>;
 
@@ -18,8 +28,8 @@ function header(headers: Headers, name: string): string | undefined {
 /** ISO country code from CF-IPCountry, or null (untrusted, missing, "XX" unknown, "T1" Tor). */
 export function requestCountry(headers: Headers, trustCloudflare: boolean): string | null {
   if (!trustCloudflare) return null;
-  const value = header(headers, "cf-ipcountry")?.toUpperCase();
-  if (!value || !/^[A-Z]{2}$/.test(value) || value === "XX") return null;
+  const value = header(headers, COUNTRY_HEADER)?.toUpperCase();
+  if (!value || !/^[A-Z]{2}$/.test(value) || value === UNKNOWN_COUNTRY) return null;
   return value;
 }
 
@@ -40,15 +50,15 @@ export function requestIp(headers: Headers, remoteAddress: string | undefined, p
     const real = header(headers, proxyIpHeader);
     if (real) return real;
   }
-  return remoteAddress ?? "unknown";
+  return remoteAddress ?? UNKNOWN_IP;
 }
 
-/** Expands an IPv6 address to 8 groups of 4 hex digits. */
+/** Expands an IPv6 address to IPV6_GROUPS groups of 4 hex digits. */
 function expandIPv6(ip: string): string[] {
   const [head, tail] = ip.split("::") as [string, string | undefined];
   const left = head ? head.split(":") : [];
   const right = tail !== undefined && tail !== "" ? tail.split(":") : [];
-  const fill = tail === undefined ? [] : new Array<string>(8 - left.length - right.length).fill("0");
+  const fill = tail === undefined ? [] : new Array<string>(IPV6_GROUPS - left.length - right.length).fill("0");
   return [...left, ...fill, ...right].map((g) => g.padStart(4, "0"));
 }
 
@@ -58,13 +68,18 @@ function expandIPv6(ip: string): string[] {
  */
 export function ipBuckets(rawIp: string): { ip: string; network: string } {
   let ip = rawIp.trim().toLowerCase();
-  if (ip.startsWith("::ffff:") && isIPv4(ip.slice(7))) ip = ip.slice(7);
+  if (ip.startsWith(IPV4_MAPPED_PREFIX) && isIPv4(ip.slice(IPV4_MAPPED_PREFIX.length))) {
+    ip = ip.slice(IPV4_MAPPED_PREFIX.length);
+  }
   if (isIPv4(ip)) {
-    return { ip, network: `${ip.split(".").slice(0, 3).join(".")}.0/24` };
+    return { ip, network: `${ip.split(".").slice(0, IPV4_NETWORK_OCTETS).join(".")}.0/24` };
   }
   if (isIPv6(ip)) {
     const groups = expandIPv6(ip.split("%")[0]!);
-    return { ip: `${groups.slice(0, 4).join(":")}::/64`, network: `${groups.slice(0, 3).join(":")}::/48` };
+    return {
+      ip: `${groups.slice(0, IPV6_SUBSCRIBER_GROUPS).join(":")}::/64`,
+      network: `${groups.slice(0, IPV6_NETWORK_GROUPS).join(":")}::/48`,
+    };
   }
   return { ip, network: ip };
 }

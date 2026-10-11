@@ -47,10 +47,17 @@ then.
 
 ## Layout
 
-- `src/pages/Landing.tsx` camera preview, profile setup (photo, name, gender, topics), then the room.
+- `src/pages/Landing.tsx` the start screen: camera tile, profile row, Instant/Preview and Start. The profile editor and the settings sheet are `src/components/landing/*`.
 - `src/pages/Room.tsx` the call screen, built from `src/components/room/*`.
 - `src/hooks/useSignaling.ts` typed socket and the matchmaking state machine.
 - `src/hooks/usePeerConnection.ts` and `src/lib/peerSession.ts` one RTCPeerConnection per call.
 - `src/hooks/useMediaStream.ts` camera and microphone, with errors explained by cause.
 - `src/lib/photo.ts` downscales the profile photo to a small JPEG within protocol limits.
-- `src/components/ui/*` vendored shadcn/ui components, kept as generated.
+- `src/components/ui/*` shared surfaces. `BottomSheet` (modal sheet on phones, dialog from `md`), `Segmented` and `StickyBar` are ours and document their props in the file header; `alert-dialog.tsx` is vendored shadcn/ui, kept as generated.
+- `src/premium/*` the gender-filter paywall contract (`PremiumProvider`, `useGenderFilterGate`); the stub here is replaced by the billing lane.
+
+## Mobile layout rules
+
+- Tokens live in `src/index.css` (`--tap-min`, `--safe-*`, `--app-height`) and are exposed by Tailwind as `min-h-tap`, `min-w-tap`, `h-app`/`min-h-app`, `pb-safe-bottom` and so on.
+- Anything a finger taps is at least 44 x 44 px; one primary action per screen, kept reachable without scrolling (`StickyBar`); forms open in a `BottomSheet` on phones.
+- Full-height screens use `min-h-app` (100dvh with a 100vh fallback), never `100vh` alone, and pad with `--safe-*` instead of fixed margins.

@@ -10,7 +10,12 @@ export interface BucketSpec {
   refillPerSec: number;
 }
 
-export type EventClass = "hello" | "preferences" | "control" | "signal" | "chat" | "typing" | "report" | "telemetry";
+/** Event classes, one bucket each. socket.ts maps every event name to one of these. */
+export const EVENT_CLASSES = ["hello", "preferences", "control", "signal", "chat", "typing", "report", "telemetry"] as const;
+export type EventClass = (typeof EVENT_CLASSES)[number];
+
+/** Refill rates are per second; the clock is in ms. */
+const MS_PER_SECOND = 1_000;
 
 /** Limits per event class. Signal is generous because ICE candidates arrive in bursts. */
 export const RATE_LIMITS: Record<EventClass, BucketSpec> = {
@@ -38,7 +43,7 @@ export class TokenBucket {
   }
 
   take(now: number): boolean {
-    const elapsedSec = Math.max(0, now - this.last) / 1000;
+    const elapsedSec = Math.max(0, now - this.last) / MS_PER_SECOND;
     this.tokens = Math.min(this.spec.capacity, this.tokens + elapsedSec * this.spec.refillPerSec);
     this.last = now;
     if (this.tokens < 1) return false;
@@ -48,7 +53,7 @@ export class TokenBucket {
 
   /** True once refilled to capacity, when dropping the bucket loses nothing. */
   full(now: number): boolean {
-    const elapsedSec = Math.max(0, now - this.last) / 1000;
+    const elapsedSec = Math.max(0, now - this.last) / MS_PER_SECOND;
     return this.tokens + elapsedSec * this.spec.refillPerSec >= this.spec.capacity;
   }
 }

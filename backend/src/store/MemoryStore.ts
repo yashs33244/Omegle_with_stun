@@ -2,8 +2,8 @@
  * In-process MatchStore for a single instance (local dev and tests).
  * Values are deep-copied in and out so behavior matches a serializing store.
  */
+import { PRUNE_EVERY_WRITES, REPORT_LOG_MAX } from "./constants";
 import {
-  REPORT_LOG_MAX,
   pairKey,
   type MatchStore,
   type PairBlock,
@@ -158,7 +158,7 @@ export class MemoryStore implements MatchStore {
     const now = Date.now();
     this.blocks.set(pairKey(deviceA, deviceB), { block: copy(block), retainUntil: now + retainMs });
     // Bound memory on long runs: drop expired blocks every so often.
-    if (++this.blockWrites % 1000 === 0) {
+    if (++this.blockWrites % PRUNE_EVERY_WRITES === 0) {
       for (const [key, entry] of this.blocks) if (entry.retainUntil <= now) this.blocks.delete(key);
     }
   }

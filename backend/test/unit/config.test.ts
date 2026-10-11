@@ -108,6 +108,7 @@ describe("loadConfig", () => {
         "TURN_MAX_PER_IP_HOUR", "CF_ACCOUNT_ID", "CF_ANALYTICS_TOKEN", "TURN_SPEND_DAILY_GB",
         "ADMIN_TOKEN", "ADMIN_ALLOWED_IPS", "EVIDENCE_DIR", "EVIDENCE_S3_BUCKET", "EVIDENCE_S3_REGION",
         "EVIDENCE_S3_KMS_KEY_ID", "PSEUDONYM_SALT",
+        "RAZORPAY_KEY_ID", "RAZORPAY_KEY_SECRET", "RAZORPAY_WEBHOOK_SECRET", "RAZORPAY_FAKE",
       ].sort(),
     );
     expect(() => loadConfig(env)).not.toThrow();
@@ -125,6 +126,26 @@ describe("loadConfig", () => {
     expect(c.turnUrls).toEqual(["turn:t:3478", "turns:t:5349"]);
     expect(c.proxyIpHeader).toBe("x-real-ip");
     expect(c.turnProvider).toBe("secret");
+  });
+
+  test("Razorpay keys come in pairs and the fake gateway is refused in production", () => {
+    expect(() => loadConfig({ RAZORPAY_KEY_ID: "rzp_test_x" })).toThrow(/RAZORPAY_KEY_SECRET/);
+    expect(() =>
+      loadConfig({ NODE_ENV: "production", CORS_ORIGINS: "https://a.b", ADMIN_TOKEN: "a".repeat(24), SESSION_SECRET: "s".repeat(32), TURNSTILE_DISABLED: "true", RAZORPAY_FAKE: "1" }),
+    ).toThrow(/RAZORPAY_FAKE/);
+    const c = loadConfig({ RAZORPAY_KEY_ID: "rzp_test_x", RAZORPAY_KEY_SECRET: "s", RAZORPAY_WEBHOOK_SECRET: "w", RAZORPAY_FAKE: "true" });
+    expect(c.razorpayKeyId).toBe("rzp_test_x");
+    expect(c.razorpayWebhookSecret).toBe("w");
+    expect(c.razorpayFake).toBe(true);
+    expect(loadConfig({}).razorpayFake).toBe(false);
+  });
+
+  test("production with Razorpay keys requires the webhook secret", () => {
+    const keys = { RAZORPAY_KEY_ID: "rzp_live_x", RAZORPAY_KEY_SECRET: "s" };
+    expect(() => loadConfig({ ...PROD, ...keys })).toThrow(/RAZORPAY_WEBHOOK_SECRET: is required in production/);
+    expect(loadConfig({ ...PROD, ...keys, RAZORPAY_WEBHOOK_SECRET: "w" }).razorpayWebhookSecret).toBe("w");
+    expect(loadConfig({ ...PROD }).razorpayWebhookSecret).toBeUndefined();
+    expect(loadConfig(keys).razorpayWebhookSecret).toBeUndefined();
   });
 
   test("PROXY_IP_HEADER counts only with TRUST_PROXY; keep-alive URL falls back to Render's /healthz", () => {

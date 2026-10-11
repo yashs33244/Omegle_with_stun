@@ -2,13 +2,13 @@
   "profile": {
     "editAria": "Edit profile photo and details",
     "guest": "Guest User",
-    "speaks": "I speak: {{language}}",
-    "topicsHeading": "My topics:",
-    "more_one": "+{{count}} more",
-    "more_other": "+{{count}} more",
-    "edit": "Edit profile"
+    "topicsCount_one": "{{count}} topic",
+    "topicsCount_other": "{{count}} topics",
+    "meeting": "Meeting: {{gender}}",
+    "edit": "Edit"
   },
   "camera": {
+    "preview": "Your camera",
     "ready": "Camera ready",
     "starting": "Starting camera...",
     "off": "Camera off",
@@ -16,15 +16,21 @@
     "required": "Camera access required",
     "enable": "Enable Camera",
     "tryAgain": "Try again",
-    "allowToContinue": "Please allow camera access to continue"
+    "allowToContinue": "Allow camera access to continue"
   },
   "settings": {
-    "language": "Language",
-    "country": "Country"
+    "open": "Settings",
+    "title": "Settings",
+    "matchHeading": "Who you meet",
+    "profileHeading": "About you",
+    "privacyHeading": "Privacy",
+    "language": "I speak",
+    "country": "Country",
+    "done": "Done"
   },
   "start": "Start",
   "rules": {
-    "reminder": "Reminder: 18+ only. No nudity, harassment, hate or spam. Rule breaks can get you removed. Read the <guidelines>Community Guidelines</guidelines>."
+    "reminder": "18+ only. No nudity, hate or spam. <guidelines>Rules</guidelines>"
   },
   "setup": {
     "captureTitle": "Capture Your Photo",

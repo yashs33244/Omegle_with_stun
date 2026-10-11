@@ -121,6 +121,10 @@ services:
       EVIDENCE_S3_BUCKET: ${EVIDENCE_S3_BUCKET:-}
       EVIDENCE_S3_REGION: ${EVIDENCE_S3_REGION:-}
       EVIDENCE_S3_KMS_KEY_ID: ${EVIDENCE_S3_KMS_KEY_ID:-}
+      # Billing (coin packs through Razorpay). Empty keeps /api/billing orders off.
+      RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+      RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+      RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-}
     volumes:
       # Shared by every replica on this host. The image creates /data/evidence
       # owned by the node user, and a new named volume copies that ownership.

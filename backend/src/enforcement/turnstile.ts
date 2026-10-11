@@ -1,12 +1,12 @@
 /**
- * Cloudflare Turnstile verification for the public takedown form.
- * `fetch` is injected so tests never call Cloudflare.
+ * Cloudflare Turnstile verification for the public takedown form: a boolean
+ * wrapper around the session gate's verifier (session/turnstile.ts), which
+ * fails closed and never throws. `fetch` is injected so tests never call Cloudflare.
  */
+import { verifyTurnstile, type FetchLike } from "../session/turnstile";
 
 /** True when the token is valid for this request. Never throws. */
 export type TurnstileVerifier = (token: string | undefined, ip: string | null) => Promise<boolean>;
-
-const SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 
 export function createTurnstileVerifier(opts: {
   secret?: string;
@@ -15,24 +15,17 @@ export function createTurnstileVerifier(opts: {
   fetch?: typeof fetch;
   timeoutMs?: number;
 }): TurnstileVerifier {
-  const doFetch = opts.fetch ?? fetch;
   const secret = opts.secret;
   if (!secret) return async () => !opts.production;
+  const doFetch: FetchLike = opts.fetch ?? fetch;
   return async (token, ip) => {
-    if (!token) return false;
-    const body = new URLSearchParams({ secret, response: token });
-    if (ip) body.set("remoteip", ip);
-    try {
-      const res = await doFetch(SITEVERIFY_URL, {
-        method: "POST",
-        body,
-        signal: AbortSignal.timeout(opts.timeoutMs ?? 5_000),
-      });
-      if (!res.ok) return false;
-      const data = (await res.json()) as { success?: unknown };
-      return data.success === true;
-    } catch {
-      return false;
-    }
+    const result = await verifyTurnstile({
+      secret,
+      token,
+      remoteIp: ip ?? undefined,
+      fetch: doFetch,
+      timeoutMs: opts.timeoutMs,
+    });
+    return result.success;
   };
 }

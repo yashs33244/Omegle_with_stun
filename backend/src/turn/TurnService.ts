@@ -17,11 +17,17 @@ import type { Logger } from "../logger";
 import type { MatchMetrics } from "../match/matchMetrics";
 import type { IceServer } from "../protocol";
 import { fetchCloudflareIceServers, type FetchFn } from "./cloudflare";
+import {
+  CAP_WINDOW_MS,
+  CREDENTIAL_RESULT,
+  DEVICE_IP_TTL_MS,
+  IP_KEY_DOMAIN,
+  IP_KEY_HEX_CHARS,
+  IP_SECRET_BYTES,
+  SECOND_MS,
+} from "./constants";
 import { buildIceServers } from "./coturn";
 import type { TurnStore } from "./store";
-
-const HOUR_MS = 60 * 60_000;
-const DEVICE_IP_TTL_MS = 24 * HOUR_MS;
 
 export interface CallMedia {
   iceServers: IceServer[];
@@ -47,7 +53,7 @@ export interface TurnServiceDeps {
  * is random per process, which makes the IP cap per instance.
  */
 export function ipKey(ip: string, secret: string): string {
-  return createHmac("sha256", secret).update(`chizzy-turn-ip:${ip}`).digest("hex").slice(0, 32);
+  return createHmac("sha256", secret).update(`${IP_KEY_DOMAIN}${ip}`).digest("hex").slice(0, IP_KEY_HEX_CHARS);
 }
 
 export class TurnService {
@@ -70,7 +76,8 @@ export class TurnService {
     this.metrics = deps.metrics;
     this.fetch = deps.fetch ?? ((input, init) => fetch(input, init));
     this.now = deps.now ?? Date.now;
-    this.ipSecret = this.config.cfTurnApiToken ?? this.config.turnSecret ?? randomBytes(32).toString("hex");
+    this.ipSecret =
+      this.config.cfTurnApiToken ?? this.config.turnSecret ?? randomBytes(IP_SECRET_BYTES).toString("hex");
   }
 
   /** For the hello ack: STUN only. */
@@ -99,7 +106,7 @@ export class TurnService {
   private async relayServers(deviceId: string): Promise<IceServer[] | null> {
     if (this.config.turnProvider === "none") return null;
     if (!this.flags.current().turn_enabled) {
-      this.metrics.turnCredentialsTotal.inc({ result: "disabled" });
+      this.metrics.turnCredentialsTotal.inc({ result: CREDENTIAL_RESULT.disabled });
       return null;
     }
     const pending = this.inflight.get(deviceId);
@@ -113,24 +120,24 @@ export class TurnService {
     try {
       const cached = await this.store.getCached(deviceId);
       if (cached) {
-        this.metrics.turnCredentialsTotal.inc({ result: "cached" });
+        this.metrics.turnCredentialsTotal.inc({ result: CREDENTIAL_RESULT.cached });
         return cached;
       }
-      const perDevice = await this.store.hit(`dev:${deviceId}`, HOUR_MS);
+      const perDevice = await this.store.hit(`dev:${deviceId}`, CAP_WINDOW_MS);
       const ipHash = await this.store.getDeviceIp(deviceId);
-      const perIp = ipHash ? await this.store.hit(`ip:${ipHash}`, HOUR_MS) : 0;
+      const perIp = ipHash ? await this.store.hit(`ip:${ipHash}`, CAP_WINDOW_MS) : 0;
       if (perDevice > this.config.turnMaxPerDeviceHour || perIp > this.config.turnMaxPerIpHour) {
-        this.metrics.turnCredentialsTotal.inc({ result: "capped" });
+        this.metrics.turnCredentialsTotal.inc({ result: CREDENTIAL_RESULT.capped });
         this.log.warn({ perDevice, perIp }, "TURN credential cap reached; STUN only");
         return null;
       }
       const servers = await this.generate(deviceId);
       if (!servers || servers.length === 0) return null;
-      await this.store.setCached(deviceId, servers, this.config.turnCacheSeconds * 1000);
-      this.metrics.turnCredentialsTotal.inc({ result: "issued" });
+      await this.store.setCached(deviceId, servers, this.config.turnCacheSeconds * SECOND_MS);
+      this.metrics.turnCredentialsTotal.inc({ result: CREDENTIAL_RESULT.issued });
       return servers;
     } catch (err) {
-      this.metrics.turnCredentialsTotal.inc({ result: "error" });
+      this.metrics.turnCredentialsTotal.inc({ result: CREDENTIAL_RESULT.error });
       this.log.error({ err }, "TURN credentials failed; STUN only");
       return null;
     }

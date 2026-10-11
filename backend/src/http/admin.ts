@@ -16,11 +16,14 @@
  *   GET  /takedowns                POST /takedowns/:id/resolve
  *   GET  /flags                    PUT /flags (partial, validated by flagsSchema)
  *   GET  /audit?limit=&before=     audit log, newest first
+ *   GET  /wallets/:deviceId        coins, active unlocks and ledger; POST /wallets/:deviceId/adjust {delta, note}
+ *   GET  /billing/orders?limit=    Razorpay orders, newest first
  * Every state change writes an audit entry.
  */
 import { createHash, timingSafeEqual } from "node:crypto";
 import express, { type Request, type RequestHandler, type Response, type Router } from "express";
 import { z } from "zod";
+import type { BillingService } from "../billing/BillingService";
 import type { Config } from "../config";
 import type { AdminError, AdminResult, EnforcementService } from "../enforcement/EnforcementService";
 import type { FlagsReader } from "../flags/flags";
@@ -29,13 +32,16 @@ import {
   adminAppealDecisionSchema,
   adminReportActionSchema,
   adminTakedownResolveSchema,
+  adminWalletAdjustSchema,
   flagsSchema,
+  type AdminWalletView,
 } from "../protocol";
 import { IpBuckets, jsonErrors, requestIp } from "./public";
 import { apiCors } from "./session";
 
 export interface AdminApiDeps {
   enforcement: EnforcementService;
+  billing: BillingService;
   flags: FlagsReader;
   logger: Logger;
   adminToken?: string;
@@ -190,6 +196,29 @@ export function adminApiRouter(deps: AdminApiDeps): Router {
     const q = auditQuery.safeParse(req.query);
     if (!q.success) return void res.status(400).json({ error: "invalid" });
     res.json(await deps.enforcement.listAudit(q.data.limit, q.data.before));
+  });
+
+  router.get("/wallets/:id", async (req, res) => {
+    const deviceId = idParam(req, res);
+    if (!deviceId) return;
+    const [view, ledger] = await Promise.all([deps.billing.walletView(deviceId), deps.billing.ledger(deviceId)]);
+    res.json({ deviceId, ...view, ledger } satisfies AdminWalletView);
+  });
+
+  router.post("/wallets/:id/adjust", json, async (req, res) => {
+    const deviceId = idParam(req, res);
+    if (!deviceId) return;
+    const body = adminWalletAdjustSchema.safeParse(req.body);
+    if (!body.success) return void res.status(400).json({ error: "invalid" });
+    const view = await deps.billing.adjust(deviceId, body.data.delta, body.data.note);
+    await deps.enforcement.audit("wallet.adjust", deviceId, `${body.data.delta > 0 ? "+" : ""}${body.data.delta}: ${body.data.note}`, actor(req).ip);
+    res.json({ deviceId, ...view, ledger: await deps.billing.ledger(deviceId) } satisfies AdminWalletView);
+  });
+
+  router.get("/billing/orders", async (req, res) => {
+    const q = auditQuery.pick({ limit: true }).safeParse(req.query);
+    if (!q.success) return void res.status(400).json({ error: "invalid" });
+    res.json(await deps.billing.listOrders(q.data.limit));
   });
 
   router.use((_req, res) => {

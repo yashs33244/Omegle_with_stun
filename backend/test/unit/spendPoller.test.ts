@@ -5,13 +5,8 @@ import { Registry } from "prom-client";
 import { FlagsReader, MemoryFlagsStore } from "../../src/flags/flags";
 import { createLogger } from "../../src/logger";
 import { createMatchMetrics } from "../../src/match/matchMetrics";
-import {
-  CLOUDFLARE_GRAPHQL_URL,
-  TurnSpendPoller,
-  cloudflareEgressQuery,
-  parseEgressResponse,
-  type EgressQuery,
-} from "../../src/turn/spendPoller";
+import { CLOUDFLARE_GRAPHQL_URL } from "../../src/turn/constants";
+import { TurnSpendPoller, cloudflareEgressQuery, parseEgressResponse, type EgressQuery } from "../../src/turn/spendPoller";
 
 const GB = 1e9;
 /** A Cloudflare GraphQL answer: one group per minute bucket. */

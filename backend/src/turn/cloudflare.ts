@@ -6,6 +6,7 @@
  * turns:443 (TLS over TCP 443) is kept, it is what gets through strict networks.
  */
 import type { IceServer } from "../protocol";
+import { BLOCKED_ICE_PORT, CLOUDFLARE_TURN_API_BASE, CLOUDFLARE_TURN_TIMEOUT_MS } from "./constants";
 
 export type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
 
@@ -18,12 +19,14 @@ export interface CloudflareTurnOptions {
 }
 
 export function cloudflareTurnUrl(keyId: string): string {
-  return `https://rtc.live.cloudflare.com/v1/turn/keys/${encodeURIComponent(keyId)}/credentials/generate-ice-servers`;
+  return `${CLOUDFLARE_TURN_API_BASE}${encodeURIComponent(keyId)}/credentials/generate-ice-servers`;
 }
 
-/** True for stun:/turn: URLs on port 53, e.g. "turn:turn.cloudflare.com:53?transport=udp". */
+const BLOCKED_PORT_RE = new RegExp(String.raw`^(stuns?|turns?):[^?]*:${BLOCKED_ICE_PORT}(\?|$)`, "i");
+
+/** True for stun:/turn: URLs on the blocked port, e.g. "turn:turn.cloudflare.com:53?transport=udp". */
 export function isPort53(url: string): boolean {
-  return /^(stuns?|turns?):[^?]*:53(\?|$)/i.test(url);
+  return BLOCKED_PORT_RE.test(url);
 }
 
 /** Removes port 53 URLs and any server left without URLs. */
@@ -56,7 +59,7 @@ export async function fetchCloudflareIceServers(opts: CloudflareTurnOptions): Pr
     method: "POST",
     headers: { Authorization: `Bearer ${opts.apiToken}`, "Content-Type": "application/json" },
     body: JSON.stringify({ ttl: opts.ttlSeconds }),
-    signal: AbortSignal.timeout(opts.timeoutMs ?? 3_000),
+    signal: AbortSignal.timeout(opts.timeoutMs ?? CLOUDFLARE_TURN_TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`cloudflare turn api returned ${res.status}`);
   const body = (await res.json()) as { iceServers?: unknown };

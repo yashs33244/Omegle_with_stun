@@ -10,6 +10,7 @@
 import { createHmac } from "node:crypto";
 import type { Config } from "../config";
 import type { IceServer } from "../protocol";
+import { SECOND_MS } from "./constants";
 
 export function turnCredential(secret: string, username: string): string {
   return createHmac("sha1", secret).update(username).digest("base64");
@@ -25,7 +26,7 @@ export function buildIceServers(
   if (config.turnUrls.length === 0) return servers;
 
   if (config.turnSecret) {
-    const expiry = Math.floor(nowMs / 1000) + config.turnTtlSeconds;
+    const expiry = Math.floor(nowMs / SECOND_MS) + config.turnTtlSeconds;
     const username = `${expiry}:${deviceId}`;
     servers.push({ urls: config.turnUrls, username, credential: turnCredential(config.turnSecret, username) });
   } else if (config.turnUsername && config.turnCredential) {

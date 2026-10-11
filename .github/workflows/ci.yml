@@ -50,7 +50,7 @@ jobs:
         run: >-
           docker run --rm -v "$PWD:/mnt:ro" -w /mnt koalaman/shellcheck:v0.11.0
           deploy/deploy.sh deploy/cloudflare-ips.sh scripts/backup-redis.sh scripts/restore-redis.sh
-          scripts/check-lockfiles.sh scripts/sync-protocol.sh scripts/check-pins.sh
+          scripts/check-lockfiles.sh scripts/sync-protocol.sh scripts/sync-spark-prompts.sh scripts/check-pins.sh
           scripts/check-deploy-env.sh scripts/test-deploy.sh scripts/test-gateway-real-ip.sh
           new-frontend/nginx-api-origin.envsh
 
@@ -82,6 +82,8 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
       - run: bun install --frozen-lockfile
       - run: bun run typecheck
+      - name: Spark prompt files match the catalog
+        run: sh ../scripts/sync-spark-prompts.sh --check
       - name: Typecheck the load test and canary (scripts/loadtest)
         run: node_modules/.bin/tsc -p ../scripts/loadtest
       - run: bun run lint

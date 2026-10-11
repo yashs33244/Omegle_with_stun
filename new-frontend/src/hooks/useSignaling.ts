@@ -12,6 +12,7 @@ import {
   type ChatAck,
   type ClientToServerEvents,
   type ErrorCode,
+  type GenderFilter,
   type HelloAck,
   type IceServer,
   type MatchEndReason,
@@ -79,6 +80,17 @@ export interface SignalingState {
   error: string | null;
   /** Short-lived server notice such as rate limiting. */
   notice: ErrorCode | null;
+  /**
+   * The gender filter the server applies to us: from the hello ack (which
+   * downgrades a locked filter to "all"), a saved session:preferences, or
+   * "all" after premium_required when an unlock lapsed mid-session. Null
+   * before hello.
+   */
+  genderFilter: GenderFilter | null;
+  /** How far the server widened the search while waiting: 0 topic + language, 1 language, 2 anyone. */
+  relaxStep: number;
+  /** People online, when the server shares the real count. */
+  online: number | null;
 }
 
 export const initialSignalingState: SignalingState = {
@@ -100,14 +112,17 @@ export const initialSignalingState: SignalingState = {
   lastEndReason: null,
   error: null,
   notice: null,
+  genderFilter: null,
+  relaxStep: 0,
+  online: null,
 };
 
 export type SignalingEvent =
   | { type: "socket-disconnected" }
   | { type: "connect-failed" }
-  | { type: "hello-ok"; coins: number; iceServers: IceServer[] }
+  | { type: "hello-ok"; coins: number; iceServers: IceServer[]; genderFilter: GenderFilter }
   | { type: "hello-failed"; error: ErrorCode | "timeout"; message?: string }
-  | { type: "queue-waiting" }
+  | { type: "queue-waiting"; relaxStep?: number; online?: number | null }
   | {
       type: "match-found";
       roomId: string;
@@ -132,6 +147,7 @@ export type SignalingEvent =
   | { type: "friends-new"; roomId: string }
   | { type: "session-replaced" }
   | { type: "server-error"; code: ErrorCode; message?: string }
+  | { type: "preferences-saved"; genderFilter: GenderFilter }
   | { type: "notice-cleared" };
 
 const TERMINAL: SignalingStatus[] = ["banned", "replaced"];
@@ -189,6 +205,7 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
         error: null,
         coins: event.coins,
         iceServers: event.iceServers,
+        genderFilter: event.genderFilter,
       };
     }
 
@@ -202,7 +219,7 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
       };
 
     case "queue-waiting":
-      return { ...clearRoom(state), status: "waiting" };
+      return { ...clearRoom(state), status: "waiting", relaxStep: event.relaxStep ?? 0, online: event.online ?? null };
 
     case "match-found":
       return {
@@ -301,7 +318,12 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
 
     case "server-error":
       if (event.code === "banned") return { ...clearRoom(state), status: "banned", reconnecting: false };
+      // The unlock ran out mid-session: the server queues us with the filter off.
+      if (event.code === "premium_required") return { ...state, genderFilter: "all" };
       return { ...state, notice: event.code };
+
+    case "preferences-saved":
+      return { ...state, genderFilter: event.genderFilter };
 
     case "notice-cleared":
       return state.notice ? { ...state, notice: null } : state;
@@ -329,8 +351,11 @@ export interface CallMedia {
 }
 
 /** Client events other hooks may send without touching this file. */
-export type ExtraClientEvent = "call:failed" | "call:telemetry" | "moderation:signal";
-type ExtraPayload<E extends ExtraClientEvent> = Parameters<ClientToServerEvents[E]>[0];
+export type ExtraClientEvent = "call:failed" | "call:telemetry" | "moderation:signal" | "caption:segment";
+/** Acked client events other hooks may send through request(). */
+export type ExtraAckEvent = "spark:request";
+type ExtraPayload<E extends keyof ClientToServerEvents> = Parameters<ClientToServerEvents[E]>[0];
+type ExtraAck<E extends ExtraAckEvent> = Parameters<Parameters<ClientToServerEvents[E]>[1]>[0];
 
 export type ServerEvent = keyof ServerToClientEvents;
 type ServerHandler<E extends ServerEvent> = ServerToClientEvents[E];
@@ -373,8 +398,10 @@ export interface Signaling {
    * Returns an unsubscribe function. Handlers run after this hook's own reducer handling.
    */
   subscribe: <E extends ServerEvent>(event: E, handler: ServerHandler<E>) => () => void;
-  /** Send telemetry, call-failed and moderation signals for the current connection. */
+  /** Send telemetry, call-failed, moderation and caption events for the current connection. */
   send: <E extends ExtraClientEvent>(event: E, payload: ExtraPayload<E>) => void;
+  /** Send an acked feature event; resolves with the server's ack (or an `internal` ack when not connected). */
+  request: <E extends ExtraAckEvent>(event: E, payload: ExtraPayload<E>) => Promise<ExtraAck<E>>;
 }
 
 function notConnected<T extends object>(): Promise<Ack<T>> {
@@ -453,7 +480,10 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
         if (err) {
           dispatch({ type: "hello-failed", error: "timeout", message: i18n.t("room:signaling.noAnswer") });
         } else if (res.ok === true) {
-          dispatch({ type: "hello-ok", coins: res.coins, iceServers: res.iceServers });
+          // An older server may not say which filter it applied; assume ours.
+          const genderFilter = res.genderFilter ?? preferencesRef.current.genderFilter;
+          if (genderFilter !== preferencesRef.current.genderFilter) preferencesRef.current = { ...preferencesRef.current, genderFilter };
+          dispatch({ type: "hello-ok", coins: res.coins, iceServers: res.iceServers, genderFilter });
         } else {
           dispatch({ type: "hello-failed", error: res.error, message: res.message });
           if (res.error === "banned") stop();
@@ -485,7 +515,7 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
       }
     });
 
-    socket.on("queue:waiting", () => dispatch({ type: "queue-waiting" }));
+    socket.on("queue:waiting", (p) => dispatch({ type: "queue-waiting", relaxStep: p?.relaxStep ?? 0, online: p?.online ?? null }));
     socket.on("match:found", (p) => {
       pendingSignals.current = [];
       dispatch({ type: "match-found", ...p, receivedAt: Date.now() });
@@ -677,7 +707,10 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
     if (!socket) return notConnected();
     try {
       const res = await socket.timeout(ACK_TIMEOUT_MS).emitWithAck("session:preferences", { preferences: next });
-      if (res.ok) preferencesRef.current = next;
+      if (res.ok) {
+        preferencesRef.current = next;
+        dispatch({ type: "preferences-saved", genderFilter: next.genderFilter });
+      }
       return res;
     } catch {
       return { ok: false, error: "internal", message: i18n.t("room:signaling.noAnswer") };
@@ -723,6 +756,19 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
     (socket.emit as (e: string, p: unknown) => void)(event, payload);
   }, []);
 
+  const request = useCallback(async <E extends ExtraAckEvent>(event: E, payload: ExtraPayload<E>) => {
+    const socket = connectedSocket();
+    if (!socket) return notConnected() as Promise<ExtraAck<E>>;
+    // The generic event map cannot be narrowed through the rest parameter.
+    const timed = socket.timeout(ACK_TIMEOUT_MS);
+    const emitWithAck = timed.emitWithAck.bind(timed) as (e: string, p: unknown) => Promise<ExtraAck<E>>;
+    try {
+      return await emitWithAck(event, payload);
+    } catch {
+      return { ok: false, error: "internal", message: i18n.t("room:signaling.noAnswer") } as ExtraAck<E>;
+    }
+  }, []);
+
   const retry = useCallback(() => {
     const socket = socketRef.current;
     if (!socket || TERMINAL.includes(stateRef.current.status)) return;
@@ -752,5 +798,6 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
     search,
     subscribe,
     send,
+    request,
   };
 }

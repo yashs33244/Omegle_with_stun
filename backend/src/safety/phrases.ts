@@ -255,3 +255,6 @@ export const NAME_SLURS = [
   "गांडू",
   "हरामी",
 ] as const;
+
+/** Slurs that are also substrings of ordinary words; matched as whole words only. */
+export const WORD_ONLY_SLURS = ["rapist", "chamar"] as const;

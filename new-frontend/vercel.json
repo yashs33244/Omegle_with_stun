@@ -11,9 +11,9 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; script-src 'self' https://challenges.cloudflare.com 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; font-src 'self' data:; connect-src 'self' https://chizzy-api.onrender.com wss://chizzy-api.onrender.com https://challenges.cloudflare.com https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://*.ingest.de.sentry.io https://us.i.posthog.com https://eu.i.posthog.com; frame-src https://challenges.cloudflare.com; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+          "value": "default-src 'self'; script-src 'self' https://challenges.cloudflare.com https://checkout.razorpay.com 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob: mediastream:; font-src 'self' data:; connect-src 'self' https://chizzy-api.onrender.com wss://chizzy-api.onrender.com https://challenges.cloudflare.com https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://*.ingest.de.sentry.io https://us.i.posthog.com https://eu.i.posthog.com https://api.razorpay.com https://checkout.razorpay.com https://lumberjack.razorpay.com; frame-src https://challenges.cloudflare.com https://api.razorpay.com https://checkout.razorpay.com; worker-src 'self' blob:; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
         },
-        { "key": "Permissions-Policy", "value": "camera=(self), microphone=(self), display-capture=(), geolocation=(), payment=(), usb=()" },
+        { "key": "Permissions-Policy", "value": "camera=(self), microphone=(self), display-capture=(), geolocation=(), payment=(self \"https://api.razorpay.com\" \"https://checkout.razorpay.com\"), usb=()" },
         { "key": "X-Content-Type-Options", "value": "nosniff" },
         { "key": "X-Frame-Options", "value": "DENY" },
         { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },

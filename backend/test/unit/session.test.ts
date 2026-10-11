@@ -3,18 +3,14 @@ import { randomUUID } from "node:crypto";
 import Redis from "ioredis";
 import { describeStaffedHours } from "../../src/flags/flags";
 import { ageInYears } from "../../src/session/age";
+import { DEVICE_LOCKOUT_MS, FINGERPRINT_LOCKOUT_MS, SITEVERIFY_URL } from "../../src/session/constants";
 import { ipBuckets, isCountryBlocked, requestCountry, requestIp } from "../../src/session/geo";
-import { MemoryKv, RedisKv, type SessionKv } from "../../src/session/kv";
-import {
-  DEVICE_LOCKOUT_MS,
-  FINGERPRINT_LOCKOUT_MS,
-  Lockout,
-  MatchCaps,
-  SessionRateLimiter,
-  deriveSalt,
-} from "../../src/session/limits";
+import { Lockout, MatchCaps, SessionRateLimiter, deriveSalt } from "../../src/session/limits";
+import { MemoryKv } from "../../src/session/MemoryKv";
+import { RedisKv } from "../../src/session/RedisKv";
+import type { SessionKv } from "../../src/session/SessionKv";
 import { TokenSigner } from "../../src/session/tokens";
-import { SITEVERIFY_URL, verifyTurnstile, type FetchLike } from "../../src/session/turnstile";
+import { verifyTurnstile, type FetchLike } from "../../src/session/turnstile";
 import { FLAG_DEFAULTS, TOS_VERSION } from "../../src/protocol";
 import pino from "pino";
 import { FlagsReader, MemoryFlagsStore } from "../../src/flags/flags";

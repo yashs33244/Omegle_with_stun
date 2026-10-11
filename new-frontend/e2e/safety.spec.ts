@@ -124,7 +124,7 @@ test("after a call ends the post-call screen reports the right person with evide
   await openChat(lea.page);
   await chat(lea, kai, "you will regret this");
 
-  await lea.page.getByTestId("skip-button").click();
+  await lea.page.getByTestId("next-button").click();
   await expectWaiting(kai.page, "partner-skipped");
 
   const card = kai.page.getByTestId("post-call-report");

@@ -11,7 +11,9 @@ import type { Logger } from "../logger";
 import { EnforcementService } from "./EnforcementService";
 import { createS3EvidenceStore, FsEvidenceStore, type EvidenceStore } from "./evidence";
 import type { FrameClassifier } from "./policy";
-import { MemoryEnforcementStore, RedisEnforcementStore, type EnforcementStore } from "./store";
+import type { EnforcementStore } from "./EnforcementStore";
+import { MemoryEnforcementStore } from "./MemoryEnforcementStore";
+import { RedisEnforcementStore } from "./RedisEnforcementStore";
 import { createTurnstileVerifier, type TurnstileVerifier } from "./turnstile";
 
 export { EnforcementService } from "./EnforcementService";

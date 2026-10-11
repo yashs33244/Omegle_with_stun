@@ -27,8 +27,8 @@ export default tseslint.config(
     },
   },
   {
-    // Vendored shadcn/ui components are kept as generated upstream.
-    files: ["src/components/ui/**/*.{ts,tsx}"],
+    // Vendored shadcn/ui components are kept as generated upstream; our own ui primitives are linted like the rest.
+    files: ["src/components/ui/alert-dialog.tsx"],
     rules: {
       "@typescript-eslint/no-empty-object-type": "off",
       "react-refresh/only-export-components": "off",

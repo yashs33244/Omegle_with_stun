@@ -10,11 +10,14 @@ import type { Config } from "../config";
 import type { Logger } from "../logger";
 import type { Metrics } from "../metrics";
 import type { Emitter, MatchService } from "../match/MatchService";
+import type { CaptionRelay } from "../captions/CaptionRelay";
+import type { SparkService } from "../spark/SparkService";
 import { captureError } from "../observability/sentry";
 import {
   PROTOCOL_VERSION,
   callFailedSchema,
   callTelemetrySchema,
+  captionSegmentSchema,
   chatSendSchema,
   chatTypingSchema,
   helloSchema,
@@ -23,6 +26,7 @@ import {
   callSkipSchema,
   roomRefSchema,
   rtcSignalSchema,
+  sparkRequestSchema,
   updatePreferencesSchema,
   type ClientToServerEvents,
   type ErrorCode,
@@ -79,6 +83,8 @@ interface AttachDeps {
   config: Config;
   service: MatchService;
   logger: Logger;
+  spark: SparkService;
+  captions: CaptionRelay;
   metrics: Metrics;
   /** Injectable for tests. */
   newRateLimiter?: () => SocketRateLimiter;
@@ -96,7 +102,7 @@ export interface Handlers {
 }
 
 export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
-  const { config, service, logger, metrics } = deps;
+  const { config, service, logger, metrics, spark, captions } = deps;
   const newRateLimiter = deps.newRateLimiter ?? (() => new SocketRateLimiter());
   const perIp = new Map<string, number>();
   const connectRate = new Map<string, TokenBucket>();
@@ -236,9 +242,13 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
     on("call:failed", "telemetry", callFailedSchema, (p) => service.callFailed(socket.id, p));
     on("call:telemetry", "telemetry", callTelemetrySchema, (p) => service.telemetry(socket.id, p));
     on("moderation:signal", "telemetry", moderationSignalSchema, (p) => service.moderationSignal(socket.id, p));
+    on("spark:request", "control", sparkRequestSchema, (p, reply) => spark.request(socket.id, p.roomId, reply));
+    // "signal" is the outer bucket; CaptionRelay applies the CAPTIONS.maxPerSec cap itself.
+    on("caption:segment", "signal", captionSegmentSchema, (p) => captions.segment(socket.id, p));
 
     socket.on("disconnect", (reason) => {
       metrics.connectedSockets.dec();
+      captions.forget(socket.id);
       log.debug({ reason }, "disconnected");
       track(
         service.disconnect(socket.id).catch((err: unknown) => {

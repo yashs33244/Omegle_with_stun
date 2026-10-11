@@ -29,7 +29,7 @@ describe("hello and matching", () => {
     c.on("queue:waiting", () => order.push("queue:waiting"));
     const ack = await sendHello(c, hello());
     order.push("ack");
-    expect(ack).toEqual({ ok: true, coins: 100, iceServers: [{ urls: ts.config.stunUrls }], mode: "preview" });
+    expect(ack).toEqual({ ok: true, coins: 100, iceServers: [{ urls: ts.config.stunUrls }], mode: "preview", genderFilter: "all" });
     await next(c, "queue:waiting").catch(() => undefined);
     expect(order[0]).toBe("ack");
   });
@@ -119,6 +119,7 @@ describe("hello and matching", () => {
 
   test("gender filters are mutual", async () => {
     ts = await startServer();
+    await ts.server.flags.set({ premium_filters_enabled: false }); // gender filters cost coins by default
     const a = await ts.connect();
     const b = await ts.connect();
     const c = await ts.connect();
@@ -133,11 +134,15 @@ describe("hello and matching", () => {
 
   test("unspecified gender only meets partners whose filter is all", async () => {
     ts = await startServer();
+    await ts.server.flags.set({ premium_filters_enabled: false });
     const a = await ts.connect();
     const b = await ts.connect();
     const found = arrives(a, "match:found", 400);
-    await sendHello(a, hello({ profile: profile({ gender: "unspecified" }) }));
-    await sendHello(b, hello({ profile: profile({ gender: "female" }), preferences: prefs({ genderFilter: "male" }) }));
+    expect(await sendHello(a, hello({ profile: profile({ gender: "unspecified" }) }))).toMatchObject({ ok: true });
+    expect(await sendHello(b, hello({ profile: profile({ gender: "female" }), preferences: prefs({ genderFilter: "male" }) }))).toMatchObject({
+      ok: true,
+      genderFilter: "male",
+    });
     expect(await found).toBe(false);
   });
 
@@ -157,6 +162,7 @@ describe("hello and matching", () => {
 
   test("session:preferences takes effect on the next match pass", async () => {
     ts = await startServer();
+    await ts.server.flags.set({ premium_filters_enabled: false });
     const a = await ts.connect();
     const b = await ts.connect();
     await sendHello(a, hello({ profile: profile({ gender: "male" }), preferences: prefs({ genderFilter: "female" }) }));
@@ -419,6 +425,7 @@ describe("ending a match", () => {
 
   test("queue order is FIFO", async () => {
     ts = await startServer();
+    await ts.server.flags.set({ premium_filters_enabled: false });
     const first = await ts.connect();
     const second = await ts.connect();
     await sendHello(first, hello({ profile: profile({ topics: ["art"], name: "First" }) }));

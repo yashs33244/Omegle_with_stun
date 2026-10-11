@@ -14,7 +14,7 @@ import type { SessionService } from "../session/SessionService";
 
 export function apiCors(
   allowed: Config["corsOrigins"],
-  preflight: { methods: string; headers: string } = { methods: "GET, POST, OPTIONS", headers: "Content-Type" },
+  preflight: { methods: string; headers: string } = { methods: "GET, POST, OPTIONS", headers: "Authorization, Content-Type" },
 ): RequestHandler {
   return (req, res, next) => {
     const origin = req.get("origin");

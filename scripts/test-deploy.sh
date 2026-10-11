@@ -237,6 +237,15 @@ test_evidence_bucket_needs_region() {
     pass "$name"
 }
 
+test_razorpay_keys_need_webhook_secret() {
+  local name="Razorpay keys without the key secret and webhook secret fail before any file is replaced" dir
+  dir=$(new_project)
+  if run_deploy "$dir" RAZORPAY_KEY_ID=rzp_live_x; then expect "$name" "$dir" false; return; fi
+  expect "$name" "$dir" grep -q "missing or too short: RAZORPAY_KEY_SECRET RAZORPAY_WEBHOOK_SECRET" "$dir/out" &&
+    expect "$name" "$dir" file_is "$dir/docker-compose.yml" "old" &&
+    pass "$name"
+}
+
 test_turnstile_disabled_needs_no_keys() {
   local name="TURNSTILE_DISABLED=true deploys without Turnstile keys, with a warning" dir
   dir=$(new_project)
@@ -295,6 +304,7 @@ test_manual_run_checks_env_file
 test_invalid_env_changes_nothing
 test_missing_secret_fails_before_install
 test_evidence_bucket_needs_region
+test_razorpay_keys_need_webhook_secret
 test_turnstile_disabled_needs_no_keys
 test_secrets_written_but_not_printed
 test_pseudonym_salt_warning

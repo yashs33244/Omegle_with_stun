@@ -11,6 +11,7 @@
  */
 import type Redis from "ioredis";
 import type { IceServer } from "../protocol";
+import { PRUNE_EVERY_WRITES, TURN_KEY_PREFIX } from "./constants";
 
 export interface TurnStore {
   getCached(deviceId: string): Promise<IceServer[] | null>;
@@ -45,7 +46,7 @@ class ExpiringMap<T> {
 
   set(key: string, value: T, ttlMs: number): void {
     this.map.set(key, { value, expiresAt: this.clock() + ttlMs });
-    if (++this.writes % 1000 === 0) {
+    if (++this.writes % PRUNE_EVERY_WRITES === 0) {
       const now = this.clock();
       for (const [k, e] of this.map) if (e.expiresAt <= now) this.map.delete(k);
     }
@@ -92,7 +93,7 @@ export class MemoryTurnStore implements TurnStore {
 export class RedisTurnStore implements TurnStore {
   constructor(
     private readonly redis: Redis,
-    private readonly prefix = "chizzy:turn:",
+    private readonly prefix = TURN_KEY_PREFIX,
   ) {}
 
   async getCached(deviceId: string): Promise<IceServer[] | null> {

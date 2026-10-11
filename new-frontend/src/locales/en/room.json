@@ -1,13 +1,11 @@
 {
   "header": {
-    "home": "Chizzy home",
     "coins": "Coins: {{coins}}",
     "coinsLoading": "Coins: loading",
     "friends": "Friends",
     "reconnecting": "Reconnecting...",
     "connected": "Connected: {{time}}",
     "settings": "Settings",
-    "skip": "Skip",
     "homeButton": "Home"
   },
   "notice": {
@@ -18,9 +16,7 @@
   },
   "mic": {
     "mute": "Mute microphone",
-    "unmute": "Unmute microphone",
-    "on": "Mic on",
-    "off": "Mic off"
+    "unmute": "Unmute microphone"
   },
   "connecting": {
     "withPartner": "Connecting you with {{name}}...",
@@ -84,7 +80,8 @@
     "placeholder": "Type a message...",
     "inputLabel": "Message",
     "send": "Send message",
-    "friendsSystem": "🎉 You are now friends! You've been chatting for 5 minutes."
+    "friendsSystem": "🎉 You are now friends! You've been chatting for 5 minutes.",
+    "openFrom": "New message from {{name}}. Open chat"
   },
   "callFailed": {
     "title": "Couldn't connect the video",
@@ -148,7 +145,19 @@
     "looking": "Looking for someone...",
     "matchingTopics": "Matching with users interested in: {{topics}}",
     "idleBody": "The match was dropped. Search again when you're ready.",
-    "searchAgain": "Search again"
+    "searchAgain": "Search again",
+    "cancel": "Stop searching",
+    "relaxLanguage": "Widening the search to anyone who speaks your language...",
+    "relaxAnyone": "Widening the search to everyone online...",
+    "online_one": "{{count}} person online",
+    "online_other": "{{count}} people online"
+  },
+  "actions": {
+    "stop": "Stop"
+  },
+  "shortcuts": {
+    "hint": "Tip: Esc or the right arrow means Next",
+    "dismiss": "Dismiss tip"
   },
   "signaling": {
     "cannotReach": "Cannot reach the server. Retrying...",
@@ -182,6 +191,7 @@
     "title": "Chat Settings",
     "close": "Close settings",
     "genderLabel": "Who do you want to meet?",
+    "genderLocked": "Unlock",
     "gender": {
       "all": "Everyone",
       "male": "Male",
@@ -214,7 +224,7 @@
       "generic": "Something went wrong. Please try again."
     },
     "safety": "Safety",
-    "safetyHint": "To report someone, tap the flag on their video. After a call ends you can still report it for 60 seconds.",
+    "safetyHint": "To report someone, tap the flag in the call controls. After a call ends you can still report it for 60 seconds.",
     "footer": "Changes apply from your next match."
   }
 }

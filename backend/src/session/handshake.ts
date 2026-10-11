@@ -8,6 +8,7 @@
 import type { Socket } from "socket.io";
 import type { FlagsReader } from "../flags/flags";
 import type { Logger } from "../logger";
+import type { HANDSHAKE_REJECT_CODES } from "./constants";
 import { isCountryBlocked, requestCountry, requestIp } from "./geo";
 import type { MatchCaps } from "./limits";
 import type { TokenSigner } from "./tokens";
@@ -23,7 +24,7 @@ export function handshakeSession(socket: Pick<Socket, "data">): HandshakeSession
   return data?.session;
 }
 
-type RejectCode = "session_required" | "region_blocked";
+export type RejectCode = (typeof HANDSHAKE_REJECT_CODES)[number];
 
 function reject(code: RejectCode): Error & { data: { code: RejectCode } } {
   return Object.assign(new Error(code), { data: { code } });

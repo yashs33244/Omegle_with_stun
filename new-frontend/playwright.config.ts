@@ -1,5 +1,6 @@
 import { defineConfig } from "@playwright/test";
 import type { E2EOptions } from "./e2e/fixtures";
+import { E2E_ADMIN_TOKEN } from "./e2e/adminToken";
 
 /**
  * Two modes:
@@ -66,6 +67,10 @@ const backendEnv = (port: number, acceptTimeoutMs: number) => ({
   TURNSTILE_SECRET: "1x0000000000000000000000000000000AA",
   // Lets a test pick its country with the CF-IPCountry header (e2e only).
   TRUST_CLOUDFLARE: "true",
+  // Fake payment gateway (no HTTP, fixed signature) so premium.spec.ts can buy coins offline.
+  RAZORPAY_FAKE: "true",
+  // Lets specs flip operator flags (premium.spec.ts) through /admin/api.
+  ADMIN_TOKEN: E2E_ADMIN_TOKEN,
 });
 
 /** Production build pointed at one backend, served by `vite preview` with the production security headers. */
