@@ -112,7 +112,40 @@ skip (two users who just skipped each other wait for someone new).
   during deploys and reconnect storms, not just steady state.
 - Nothing here measures the gateway, Redis (the `lock:match` global lock),
   the session gate (Turnstile siteverify and token signing), or several
-  replicas.
+  replicas. The 2026-10-11 run below does.
+
+## Results: 2026-10-11, compose stack (Redis, 2 replicas, gateway), local machine
+
+**Setup.** Same Apple M3 Pro, Docker Desktop. `docker compose` with Redis
+7.4.11, `BACKEND_REPLICAS=2`, the nginx gateway (`least_conn`), the session
+gate ON with Cloudflare's always-pass Turnstile test keys (every session does
+a real siteverify round trip, ~40 ms), `MAX_CONNECTIONS_PER_IP=100000` and
+the session/match buckets raised. Generator: `scripts/loadtest/loadtest.ts`
+via the gateway, instant mode, 5 s calls, on the same machine (Docker Desktop
+VM accounting inflates CPU somewhat).
+
+| Run | Users | Ramp | Connect | Calls | p50 / p95 match ms | p95 / p99 found->call:start ms | CPU per replica | Redis CPU |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 200 | 20 s | 79/200 (`connect:rate_limited`: the per-IP connect bucket, now `CONNECT_BURST_PER_IP` / `CONNECT_RATE_PER_IP_PER_SEC`) | - | - | - | - | - |
+| 2 | 200 | 100 s + 60 s steady | 200/200, 0 errors | 2,170 (13.5/s) | 9 / 385 | 68 / 1,111 (max 2,945) | ~16% | 5% |
+| 3 | 500 | - | 500/500 | ~27/s | ~10 / - | p99 1.1-2.7 s, max 5.3 s | 84-92% | 36% |
+
+Other latencies at 200 users (p50/p95 ms): session 44/60, hello ack 4/14,
+offer->answer 2/8, signal RTT 2/8, chat ack 1/3; backend RSS ~80 MB per
+replica. Replica loss mid-call (SIGKILL): the partner got
+`partner-unavailable` after 12.7 s and 16.8 s in two runs (instance TTL 15 s
++ heartbeat/reap cadence) and was re-matched 0.2-0.5 s later; graceful
+SIGTERM: 46-377 ms. The replica rejoined and took matches 12 s after
+`compose up`.
+
+**What it means.** The Redis store costs roughly an order of magnitude more
+CPU per call than the single-process memory store above (the global
+`lock:match`, ~220 Redis commands per call, pub/sub fan-out): 500 sockets at
+27 calls/s nearly saturate a core per replica, where run C above did 1,000
+sockets at 68 calls/s on ~15% of one core. Matching p50 is unchanged (~10 ms);
+the `found->call:start` tail grows under churn because `startCall`
+re-acquires the global lock after the sweeper pass. Plan on the lock, not the
+socket count, as the ceiling; see docs/LIMITS.md.
 
 ## Still to do before launch (LB-12 exit criterion)
 
