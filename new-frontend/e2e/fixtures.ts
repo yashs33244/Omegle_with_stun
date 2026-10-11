@@ -37,6 +37,8 @@ declare global {
     /** Every stream getUserMedia handed to the app, oldest first. */
     __e2eStreams: MediaStream[];
     __e2eReportCsp: (text: string) => void;
+    /** Test seam of src/premium/razorpayCheckout.ts: stands in for Razorpay Checkout. */
+    __chizzyFakeCheckout?: (order: { orderId: string }) => Promise<{ status: "paid"; paymentId: string; signature: string }>;
   }
 }
 

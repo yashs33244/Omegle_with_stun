@@ -245,6 +245,7 @@ export type ErrorCode =
   | "matching_closed" // kill switch or outside staffed hours
   | "session_required" // missing, invalid or expired session token (handshake)
   | "region_blocked"
+  | "premium_required" // genderFilter other than "all" needs an active gender_filter unlock (see /api/billing)
   | "internal";
 
 /* ------------------------------------------------------------------ */
@@ -376,6 +377,8 @@ export interface ServerToClientEvents {
   "matching:status": (p: { open: boolean; reopensAt: number | null; message: string | null }) => void;
   /** A restriction was applied to this device. Any room is ended first. */
   "session:restricted": (p: { restriction: Restriction }) => void;
+  /** Coins and premium unlocks, sent after session:hello and after every purchase, unlock or admin adjustment. */
+  "wallet:update": (p: WalletView) => void;
 }
 
 export interface ClientToServerEvents {
@@ -504,6 +507,94 @@ export type TakedownRequest = z.infer<typeof takedownRequestSchema>;
 export type TakedownResponse = { ok: true; ticketId: string } | { ok: false; error: "invalid" | "turnstile_failed" | "rate_limited" };
 
 /* ------------------------------------------------------------------ */
+/* Billing (/api/billing/*, coins and premium unlocks)                 */
+/* ------------------------------------------------------------------ */
+
+/** Features a device can unlock for a period by spending coins. */
+export const PREMIUM_FEATURES = ["gender_filter"] as const;
+export type PremiumFeature = (typeof PREMIUM_FEATURES)[number];
+
+/** Unlock periods offered to users, in days. The price is `gender_filter_coins_per_day` x days. */
+export const UNLOCK_DAYS = [1, 7, 30] as const;
+export type UnlockDays = (typeof UNLOCK_DAYS)[number];
+
+/** One purchasable coin pack (flag `coin_packs`). `inr` is the price in whole rupees. */
+export const coinPackSchema = z.object({
+  id: z.string().regex(/^[a-z0-9_-]{1,32}$/),
+  coins: z.number().int().min(1).max(1_000_000),
+  inr: z.number().int().min(1).max(100_000),
+});
+export const coinPacksSchema = z.array(coinPackSchema).min(1).max(10);
+export type CoinPack = z.infer<typeof coinPackSchema>;
+
+export interface PremiumUnlock {
+  feature: PremiumFeature;
+  /** Epoch ms. */
+  expiresAt: number;
+}
+
+/** GET /api/billing/wallet and the wallet:update event. Only unlocks that are still active. */
+export interface WalletView {
+  coins: number;
+  unlocks: PremiumUnlock[];
+}
+
+/** GET /api/billing/packs: public, safe to cache for 30 s. */
+export interface BillingPacksResponse {
+  /** Razorpay is configured; orders can be created. */
+  enabled: boolean;
+  /** Flag premium_filters_enabled: false makes the gender filter free. */
+  premiumFiltersEnabled: boolean;
+  /** Razorpay key id for Checkout, null when billing is disabled. */
+  keyId: string | null;
+  /** Coins charged per day of gender_filter. */
+  costPerDay: number;
+  packs: CoinPack[];
+  unlockDays: readonly UnlockDays[];
+}
+
+export const billingOrderRequestSchema = z.object({ packId: coinPackSchema.shape.id });
+export type BillingOrderRequest = z.infer<typeof billingOrderRequestSchema>;
+
+/** POST /api/billing/orders: what Razorpay Checkout needs. `amount` is in paise. */
+export interface BillingOrder {
+  orderId: string;
+  amount: number;
+  currency: "INR";
+  keyId: string;
+  packId: string;
+  coins: number;
+}
+
+/** POST /api/billing/verify: the Checkout success handler's payload. */
+export const billingVerifyRequestSchema = z.object({
+  orderId: z.string().min(1).max(64),
+  paymentId: z.string().min(1).max(64),
+  signature: z.string().min(1).max(256),
+});
+export type BillingVerifyRequest = z.infer<typeof billingVerifyRequestSchema>;
+
+export const billingUnlockRequestSchema = z.object({
+  feature: z.enum(PREMIUM_FEATURES),
+  days: z.union([z.literal(1), z.literal(7), z.literal(30)]),
+});
+export type BillingUnlockRequest = z.infer<typeof billingUnlockRequestSchema>;
+
+export type BillingError =
+  | "billing_disabled" // no Razorpay keys on the server
+  | "session_required" // missing, invalid or expired session token (Authorization: Bearer)
+  | "invalid"
+  | "rate_limited"
+  | "unknown_pack"
+  | "order_not_found"
+  | "bad_signature"
+  | "payment_mismatch" // the payment does not match the order (amount, currency or device)
+  | "insufficient_coins"
+  | "upstream"; // Razorpay did not answer
+
+export type BillingResponse<T> = ({ ok: true } & T) | { ok: false; error: BillingError };
+
+/* ------------------------------------------------------------------ */
 /* Admin API (/admin/api/*, Authorization: Bearer ADMIN_TOKEN)         */
 /* ------------------------------------------------------------------ */
 
@@ -524,6 +615,11 @@ export const FLAG_DEFAULTS = {
   default_mode: "instant" as MatchMode,
   /** Show the real online count only when at least this many people are online. */
   online_count_threshold: 50,
+  /** Owner decision 2026-10-11: the gender filter costs coins. false makes it free again. */
+  premium_filters_enabled: true,
+  gender_filter_coins_per_day: 100,
+  /** JSON array of coin packs (coinPacksSchema). Sized so 99 INR is about a week and 299 INR about a month. */
+  coin_packs: '[{"id":"week","coins":700,"inr":99},{"id":"month","coins":3000,"inr":299}]',
 } as const;
 
 export const flagsSchema = z.object({
@@ -539,6 +635,18 @@ export const flagsSchema = z.object({
   staffed_hours: z.string().regex(/^(\d{2}:\d{2}-\d{2}:\d{2} [A-Za-z_]+\/[A-Za-z_]+)?$/),
   default_mode: z.enum(MATCH_MODES),
   online_count_threshold: z.number().int().min(0).max(1_000_000),
+  premium_filters_enabled: z.boolean(),
+  gender_filter_coins_per_day: z.number().int().min(1).max(100_000),
+  coin_packs: z
+    .string()
+    .max(2_000)
+    .refine((s) => {
+      try {
+        return coinPacksSchema.safeParse(JSON.parse(s)).success;
+      } catch {
+        return false;
+      }
+    }, "must be a JSON array of {id, coins, inr}"),
 });
 export type Flags = z.infer<typeof flagsSchema>;
 
@@ -613,6 +721,43 @@ export interface AdminAuditEntry {
   target: string;
   note: string | null;
   ip: string | null;
+}
+
+/** Coin movements, newest first. `ref` is the room, payment id or admin note. */
+export interface WalletLedgerEntry {
+  id: string;
+  deviceId: string;
+  delta: number;
+  reason: "earned" | "purchase" | "unlock" | "admin";
+  ref: string | null;
+  at: number;
+}
+
+/** GET /admin/api/wallets/:deviceId */
+export interface AdminWalletView extends WalletView {
+  deviceId: string;
+  ledger: WalletLedgerEntry[];
+}
+
+export const adminWalletAdjustSchema = z.object({
+  delta: z.number().int().min(-1_000_000).max(1_000_000).refine((d) => d !== 0, "must not be 0"),
+  note: z.string().trim().min(1).max(500),
+});
+export type AdminWalletAdjust = z.infer<typeof adminWalletAdjustSchema>;
+
+/** A Razorpay order this server created (GET /admin/api/billing/orders, newest first). */
+export interface BillingOrderRecord {
+  orderId: string;
+  deviceId: string;
+  packId: string;
+  coins: number;
+  /** Paise. */
+  amount: number;
+  currency: "INR";
+  status: "created" | "paid";
+  paymentId: string | null;
+  createdAt: number;
+  paidAt: number | null;
 }
 
 /** Packet for NCMEC CyberTipline / India NCRP filing, built without opening the image. */

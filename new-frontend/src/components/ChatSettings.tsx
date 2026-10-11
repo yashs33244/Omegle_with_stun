@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Settings, Shield, Globe, Languages, Users, X } from 'lucide-react';
+import { Settings, Shield, Globe, Languages, Lock, Users, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { LanguageSwitcher } from '@/components/LanguageSwitcher';
 import { Button } from './retroui/Button';
@@ -7,6 +7,7 @@ import { Card, CardContent } from './retroui/Card';
 import { Select, SelectItem } from './retroui/Select';
 import { useDialogFocus } from '../hooks/useDialogFocus';
 import { GENDER_OPTIONS, LANGUAGE_OPTIONS } from '../lib/utils';
+import { useGenderFilterGate } from '@/premium';
 import {
   GENDER_FILTERS,
   type ErrorCode,
@@ -25,12 +26,13 @@ interface ChatSettingsProps {
 
 type Feedback = { tone: 'ok' | 'error'; text: string } | null;
 
-type SettingsErrorKey = `settings.errors.${'rateLimited' | 'invalidPayload' | 'banned'}`;
+type SettingsErrorKey = `settings.errors.${'rateLimited' | 'invalidPayload' | 'banned'}` | 'premium:premiumRequired';
 
 const ERROR_KEYS: Partial<Record<ErrorCode, SettingsErrorKey>> = {
   rate_limited: 'settings.errors.rateLimited',
   invalid_payload: 'settings.errors.invalidPayload',
   banned: 'settings.errors.banned',
+  premium_required: 'premium:premiumRequired',
 };
 
 const isGenderFilter = (v: string): v is GenderFilter =>
@@ -42,7 +44,8 @@ export const ChatSettings: React.FC<ChatSettingsProps> = ({
   preferences,
   onUpdatePreferences,
 }) => {
-  const { t } = useTranslation('room');
+  const { t } = useTranslation(['room', 'premium']);
+  const gate = useGenderFilterGate();
   const [prefsSaving, setPrefsSaving] = useState(false);
   const [prefsFeedback, setPrefsFeedback] = useState<Feedback>(null);
   const settingsRef = useRef<HTMLDivElement>(null);
@@ -56,15 +59,19 @@ export const ChatSettings: React.FC<ChatSettingsProps> = ({
     if (res.ok === true) {
       setPrefsFeedback({ tone: 'ok', text: t('settings.saved') });
     } else {
+      if (res.error === 'premium_required') gate.openUnlockSheet();
       const key = ERROR_KEYS[res.error];
       setPrefsFeedback({ tone: 'error', text: key ? t(key) : (res.message ?? t('settings.errors.generic')) });
     }
   };
 
   const handleGenderChange = (value: string) => {
-    if (isGenderFilter(value) && value !== preferences.genderFilter) {
-      void savePreferences({ ...preferences, genderFilter: value });
+    if (!isGenderFilter(value) || value === preferences.genderFilter) return;
+    if (value !== 'all' && gate.enabled && !gate.unlocked) {
+      gate.openUnlockSheet();
+      return;
     }
+    void savePreferences({ ...preferences, genderFilter: value });
   };
 
   const handleLanguageChange = (value: string) => {
@@ -127,6 +134,15 @@ export const ChatSettings: React.FC<ChatSettingsProps> = ({
                   <label id="settings-gender-label" htmlFor="settings-gender" className="text-sm font-medium text-white">
                     {t('settings.genderLabel')}
                   </label>
+                  {gate.enabled && !gate.unlocked && (
+                    <span
+                      data-testid="gender-lock"
+                      className="ml-auto inline-flex items-center gap-1 rounded-md border border-yellow-500 bg-yellow-400/10 px-1.5 py-0.5 text-[11px] font-semibold text-yellow-400"
+                    >
+                      <Lock className="h-3 w-3" aria-hidden="true" />
+                      {t('premium:lockBadge')}
+                    </span>
+                  )}
                 </div>
                 <Select
                   id="settings-gender"

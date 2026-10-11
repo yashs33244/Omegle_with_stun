@@ -136,7 +136,7 @@ describe("relaxation ladder", () => {
 describe("online count", () => {
   test("queue:waiting carries the real count only at or above the threshold", async () => {
     ts = await startServer({ heartbeatIntervalMs: 30 });
-    await ts.server.flags.set({ online_count_threshold: 2 });
+    await ts.server.flags.set({ online_count_threshold: 2, premium_filters_enabled: false });
     const a = await ts.connect();
     const b = await ts.connect();
     // Incompatible on a hard rule, so both keep waiting.

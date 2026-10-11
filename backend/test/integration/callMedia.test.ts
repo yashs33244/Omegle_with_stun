@@ -133,6 +133,7 @@ describe("call:failed", () => {
 
   test("non-members and pending rooms cannot end a call", async () => {
     ts = await startServer({ matchAcceptTimeoutMs: 5000 });
+    await ts.server.flags.set({ premium_filters_enabled: false });
     const pending = await matchedPair(ts);
     pending.ca.emit("call:failed", { roomId: pending.roomId, reason: "ice-failed" });
     expect(await arrives(pending.cb, "match:ended", 200)).toBe(false);
