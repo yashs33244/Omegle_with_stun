@@ -1,0 +1,20 @@
+# Review requests on every PR. Paths are listed explicitly so ownership stays
+# visible when more owners are added; the last matching line wins.
+*                       @yashs33244
+
+# Backend (Bun/Node, protocol source of truth)
+/backend/               @yashs33244
+/backend/src/protocol.ts @yashs33244
+
+# Frontend (Vite SPA, Vercel and Cloudflare Pages config)
+/new-frontend/          @yashs33244
+
+# Deploy, CI and operations
+/.github/               @yashs33244
+/deploy/                @yashs33244
+/scripts/               @yashs33244
+/docker-compose.yml     @yashs33244
+/render.yaml            @yashs33244
+/DEPLOYMENT.md          @yashs33244
+/SECURITY.md            @yashs33244
+/docs/runbooks/         @yashs33244
