@@ -36,7 +36,19 @@ import { randomUUID } from "node:crypto";
 import Redis, { type ChainableCommander, type RedisOptions } from "ioredis";
 import type { Logger } from "../logger";
 import {
+  LOCK_BACKOFF_MAX_MS,
+  LOCK_BACKOFF_START_MS,
+  LOCK_TTL_MS,
+  LOCK_WAIT_MS,
+  MATCH_KEY_PREFIX,
+  PENDING_ROOM_GRACE_MS,
+  REDIS_COMMAND_TIMEOUT_MS,
+  REDIS_CONNECT_TIMEOUT_MS,
+  REDIS_MAX_RETRIES_PER_REQUEST,
+  REPORTS_AGAINST_TTL_MS,
   REPORT_LOG_MAX,
+} from "./constants";
+import {
   pairKey,
   type MatchStore,
   type PairBlock,
@@ -47,7 +59,7 @@ import {
 } from "./MatchStore";
 
 export interface RedisStoreOptions {
-  /** Key prefix. Default `chizzy:`; tests use a unique prefix per store. */
+  /** Key prefix. Default MATCH_KEY_PREFIX; tests use a unique prefix per store. */
   prefix?: string;
   logger?: Logger;
   /** Lock lease. A critical section running longer than this is logged as an error. */
@@ -63,18 +75,9 @@ export interface RedisStoreOptions {
 /** Client options shared by the store and the Socket.IO adapter clients. */
 export const REDIS_CLIENT_OPTIONS: RedisOptions = {
   lazyConnect: true,
-  connectTimeout: 5_000,
-  // Fail commands during an outage instead of queueing them for minutes.
-  maxRetriesPerRequest: 2,
+  connectTimeout: REDIS_CONNECT_TIMEOUT_MS,
+  maxRetriesPerRequest: REDIS_MAX_RETRIES_PER_REQUEST,
 };
-
-/**
- * Safety net for pending rooms, which the sweeper always ends. Active rooms
- * have no TTL: a call may run for days, and they are deleted when they end.
- */
-const PENDING_ROOM_GRACE_MS = 60 * 60_000;
-/** How long the reporters index for a device lives after its last report. */
-const REPORTS_AGAINST_TTL_MS = 30 * 24 * 60 * 60_000;
 
 const COMPARE_AND_DELETE = `
 if redis.call("GET", KEYS[1]) == ARGV[1] then
@@ -124,10 +127,10 @@ export class RedisStore implements MatchStore {
     private readonly redis: Redis,
     opts: RedisStoreOptions,
   ) {
-    this.prefix = opts.prefix ?? "chizzy:";
+    this.prefix = opts.prefix ?? MATCH_KEY_PREFIX;
     this.log = opts.logger;
-    this.lockTtlMs = opts.lockTtlMs ?? 3_000;
-    this.lockWaitMs = opts.lockWaitMs ?? 10_000;
+    this.lockTtlMs = opts.lockTtlMs ?? LOCK_TTL_MS;
+    this.lockWaitMs = opts.lockWaitMs ?? LOCK_WAIT_MS;
     redis.on("close", () => this.markOutage());
     redis.on("ready", () => {
       const beat = this.lastBeat;
@@ -140,9 +143,11 @@ export class RedisStore implements MatchStore {
 
   /** Connects and resolves once Redis answers; rejects (and gives up) if it cannot connect. */
   static async connect(url: string, opts: RedisStoreOptions = {}): Promise<RedisStore> {
-    // commandTimeout: a hung connection fails the operation instead of
-    // stalling every queued withLock() caller forever.
-    const redis = new Redis(url, { ...REDIS_CLIENT_OPTIONS, enableAutoPipelining: true, commandTimeout: 5_000 });
+    const redis = new Redis(url, {
+      ...REDIS_CLIENT_OPTIONS,
+      enableAutoPipelining: true,
+      commandTimeout: REDIS_COMMAND_TIMEOUT_MS,
+    });
     redis.on("error", (err) => opts.logger?.warn({ err }, "redis store connection error"));
     try {
       await redis.connect();
@@ -193,16 +198,16 @@ export class RedisStore implements MatchStore {
 
   private async acquire(token: string, deadline: number): Promise<void> {
     const lockKey = this.key("lock", "match");
-    let backoff = 4;
+    let backoff = LOCK_BACKOFF_START_MS;
     for (;;) {
       if ((await this.redis.set(lockKey, token, "PX", this.lockTtlMs, "NX")) === "OK") return;
       // ioredis re-sends a command whose reply was lost in a reconnect, and
       // the re-sent SET NX answers null when the first one already took the lock.
       if ((await this.redis.get(lockKey)) === token) return;
       if (Date.now() >= deadline) throw new Error(LOCK_TIMEOUT);
-      // Equal jitter: wait between backoff/2 and backoff ms, growing to 50 ms.
+      // Equal jitter: wait between backoff/2 and backoff ms, growing to the cap.
       await sleep(backoff / 2 + Math.random() * (backoff / 2));
-      backoff = Math.min(backoff * 2, 50);
+      backoff = Math.min(backoff * 2, LOCK_BACKOFF_MAX_MS);
     }
   }
 
