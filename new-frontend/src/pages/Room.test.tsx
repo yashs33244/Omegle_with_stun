@@ -28,6 +28,7 @@ vi.mock("@/hooks/useSignaling", async (importOriginal) => {
       reportConnected,
       subscribeSignals: vi.fn(() => () => {}),
       retry: vi.fn(),
+      search: vi.fn(),
       subscribe: vi.fn(() => () => {}),
       send: vi.fn(),
     }),

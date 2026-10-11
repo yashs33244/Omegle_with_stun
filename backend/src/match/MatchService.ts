@@ -659,9 +659,11 @@ export class MatchService implements RestrictionSink {
           const room = await this.store.getRoom(roomId);
           if (!room || room.state !== "pending") continue;
           await this.blockPairLocked(room, this.config.declineBlockMs, false);
+          // Whoever accepted waited on the other and searches again; whoever
+          // never pressed Accept goes idle and is told so.
           await this.endRoomLocked(room, "timeout", {
-            [room.members[0]]: "timeout",
-            [room.members[1]]: "timeout",
+            [room.members[0]]: room.accepted[0] ? "timeout" : "accept-timeout",
+            [room.members[1]]: room.accepted[1] ? "timeout" : "accept-timeout",
           });
         }
         // A block that kept a pair apart has lapsed: try those sessions again.
@@ -924,8 +926,9 @@ export class MatchService implements RestrictionSink {
 
   /**
    * Deletes a room and tells each member why. Members with a reason are
-   * re-queued (unless banned); members mapped to null are leaving and are
-   * neither notified nor re-queued.
+   * re-queued (unless banned, or the reason is accept-timeout, which leaves
+   * them idle); members mapped to null are leaving and are neither notified
+   * nor re-queued.
    */
   private async endRoomLocked(
     room: Room,
@@ -944,8 +947,9 @@ export class MatchService implements RestrictionSink {
       this.emitter.emit(socketId, "match:ended", { roomId: room.id, reason });
       const s = sessions[i];
       if (!s || s.roomId !== room.id) continue;
-      const capped = await this.gate?.requeue(s.deviceId);
-      if (capped || (await this.store.getBan(s.deviceId))) {
+      const idle = reason === "accept-timeout";
+      const capped = idle ? undefined : await this.gate?.requeue(s.deviceId);
+      if (idle || capped || (await this.store.getBan(s.deviceId))) {
         s.state = "idle";
         s.roomId = undefined;
         s.waitingSince = undefined;

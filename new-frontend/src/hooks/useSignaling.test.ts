@@ -112,6 +112,14 @@ describe("signalingReducer", () => {
     expect(s.coins).toBe(100);
   });
 
+  it("letting the accept window expire leaves us idle until the next hello", () => {
+    const s = run([hello, found, { type: "match-ended", roomId: ROOM, reason: "accept-timeout" }]);
+    expect(s.status).toBe("idle");
+    expect(s.lastEndReason).toBe("accept-timeout");
+    expect(s.roomId).toBeNull();
+    expect(run([hello], s).status).toBe("waiting");
+  });
+
   it("a new match clears the previous end reason", () => {
     const ended = run([hello, found, { type: "match-ended", roomId: ROOM, reason: "timeout" }]);
     expect(ended.lastEndReason).toBe("timeout");

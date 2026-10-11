@@ -587,6 +587,7 @@ const RoomSession: React.FC<RoomProps> = ({
                 photo={profile.photo}
                 topics={profile.topics}
                 onRetry={signaling.retry}
+                onSearch={signaling.search}
                 onHome={onBackToHome}
               />
             )}

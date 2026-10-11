@@ -1,5 +1,5 @@
 import React from "react";
-import { Loader, ShieldAlert, MonitorSmartphone, WifiOff } from "lucide-react";
+import { Loader, ShieldAlert, MonitorSmartphone, WifiOff, Hourglass } from "lucide-react";
 import { formatTopics } from "@/lib/utils";
 import type { MatchEndReason } from "@/lib/protocol";
 import type { SignalingStatus } from "@/hooks/useSignaling";
@@ -12,13 +12,16 @@ interface WaitingPanelProps {
   photo?: string;
   topics: readonly string[];
   onRetry: () => void;
+  /** Join the queue again after the server left us idle. */
+  onSearch: () => void;
   onHome: () => void;
 }
 
 const END_REASON_TEXT: Record<MatchEndReason, string> = {
   declined: "You passed. Looking for someone else...",
   "partner-declined": "The other user declined the match. Looking for someone else...",
-  timeout: "The match timed out. Looking for someone else...",
+  timeout: "The other user didn't accept in time. Looking for someone else...",
+  "accept-timeout": "You didn't accept in time",
   skipped: "You skipped. Looking for someone new...",
   "partner-skipped": "Your chat partner skipped. Looking for someone new...",
   "partner-left": "Your chat partner has disconnected",
@@ -52,6 +55,7 @@ export const WaitingPanel: React.FC<WaitingPanelProps> = ({
   photo,
   topics,
   onRetry,
+  onSearch,
   onHome,
 }) => {
   if (status === "banned") {
@@ -89,6 +93,19 @@ export const WaitingPanel: React.FC<WaitingPanelProps> = ({
           {error && <p className="text-sm text-gray-300">{error}</p>}
         </div>
         <ActionButton onClick={onRetry}>Try Again</ActionButton>
+      </Shell>
+    );
+  }
+
+  if (status === "idle") {
+    return (
+      <Shell testId="status-idle">
+        <Hourglass className="w-16 h-16 text-yellow-400 mx-auto" />
+        <div className="text-white space-y-2">
+          <p className="text-xl font-medium">{END_REASON_TEXT["accept-timeout"]}</p>
+          <p className="text-sm text-gray-300">The match was dropped. Search again when you're ready.</p>
+        </div>
+        <ActionButton onClick={onSearch}>Search again</ActionButton>
       </Shell>
     );
   }

@@ -35,6 +35,7 @@ export type AppSocket = Socket<ServerToClientEvents, ClientToServerEvents>;
 export type SignalingStatus =
   | "connecting" // socket not connected yet, or hello not acknowledged yet
   | "waiting" // in the queue
+  | "idle" // out of the queue (you let the accept window expire); search() joins again
   | "match-found" // accept / pass prompt
   | "starting-call" // you accepted, waiting for the partner
   | "in-call"
@@ -178,7 +179,7 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
       return { ...state, error: "Cannot reach the server. Retrying..." };
 
     case "hello-ok": {
-      const busy = state.status !== "connecting" && state.status !== "error";
+      const busy = state.status !== "connecting" && state.status !== "error" && state.status !== "idle";
       return {
         ...state,
         status: busy ? state.status : "waiting",
@@ -235,6 +236,8 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
 
     case "match-ended":
       if (event.roomId !== state.roomId) return state;
+      // You never pressed Accept: the server leaves you out of the queue until you search again.
+      if (event.reason === "accept-timeout") return { ...clearRoom(state), status: "idle", lastEndReason: event.reason };
       return { ...clearRoom(state), status: "waiting", lastEndReason: event.reason };
 
     case "chat-received":
@@ -361,6 +364,8 @@ export interface Signaling {
   subscribeSignals: (roomId: string, listener: SignalListener) => () => void;
   /** Drop the socket and connect again (after an error). */
   retry: () => void;
+  /** Join the queue again after the server left us idle (a fresh hello on the live socket). */
+  search: () => void;
   /**
    * Listen to any server event (also across reconnects) without editing this hook.
    * Returns an unsubscribe function. Handlers run after this hook's own reducer handling.
@@ -384,6 +389,8 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
   const extraListeners = useRef(new Map<string, Set<(...args: unknown[]) => void>>());
 
   const socketRef = useRef<AppSocket | null>(null);
+  /** Sends session:hello on the live socket; set by the socket effect. */
+  const helloRef = useRef<(() => void) | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
 
@@ -424,7 +431,7 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
       socket.disconnect();
     };
 
-    socket.on("connect", () => {
+    const sayHello = () => {
       const seq = ++connectionSeq;
       const payload = {
         protocolVersion: PROTOCOL_VERSION,
@@ -450,7 +457,9 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
           if (res.error === "banned") stop();
         }
       });
-    });
+    };
+    helloRef.current = sayHello;
+    socket.on("connect", sayHello);
 
     socket.on("disconnect", (reason) => {
       pendingSignals.current = [];
@@ -531,6 +540,7 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
       socket.removeAllListeners();
       socket.disconnect();
       socketRef.current = null;
+      helloRef.current = null;
       if (typingIdleTimer.current) clearTimeout(typingIdleTimer.current);
     };
   }, []);
@@ -718,6 +728,12 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
     socket.connect();
   }, []);
 
+  const search = useCallback(() => {
+    if (stateRef.current.status !== "idle") return;
+    if (connectedSocket()) helloRef.current?.();
+    else retry();
+  }, [retry]);
+
   return {
     state,
     accept,
@@ -731,6 +747,7 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
     reportConnected,
     subscribeSignals,
     retry,
+    search,
     subscribe,
     send,
   };

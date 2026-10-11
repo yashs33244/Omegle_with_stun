@@ -300,7 +300,8 @@ export type SimpleAck = Ack;
 export type MatchEndReason =
   | "declined" // you pressed Pass
   | "partner-declined"
-  | "timeout" // nobody accepted within the accept window
+  | "timeout" // the partner never accepted within the accept window; you are searching again
+  | "accept-timeout" // you never accepted within the accept window; you are idle, not re-queued
   | "skipped" // you skipped
   | "partner-skipped"
   | "partner-left" // partner disconnected or closed the tab
@@ -332,7 +333,7 @@ export interface ServerToClientEvents {
     partner: PublicProfile;
     /** The two devices became friends in an earlier call. */
     isFriend: boolean;
-    /** Epoch ms after which the server auto-skips if both have not accepted. */
+    /** Epoch ms after which the server ends the match if both have not accepted (accepters are re-queued; the rest go idle). */
     expiresAt: number;
     /** Server clock at emit time, so clients can correct clock skew. */
     serverNow: number;
