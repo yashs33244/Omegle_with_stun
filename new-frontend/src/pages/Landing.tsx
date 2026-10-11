@@ -15,10 +15,9 @@ import { countries, getCountryByCode, getLanguageByCode, languages } from "../li
 import { FLAG_DEFAULTS, LIMITS, TOPICS, type Gender, type MatchMode, type Preferences, type Topic } from "../lib/protocol";
 import { MatchModeToggle } from "@/components/MatchModeToggle";
 import { HideIpToggle } from "@/components/room/HideIpToggle";
-import { InAppBrowserNotice } from "@/components/room/InAppBrowserNotice";
 import { PreflightCheck } from "@/components/room/PreflightCheck";
 import { useStartOptions } from "@/hooks/useStartOptions";
-import { detectInAppBrowser, runningOnMobile } from "@/lib/mobile";
+import { runningOnMobile } from "@/lib/mobile";
 import { preloadModels } from "@/moderation/modelClient";
 import { PhotoCaptureError, captureVideoFrame, type PhotoErrorReason } from "../lib/photo";
 import { GENDER_CHOICES, TOPIC_EMOJI, hasErrors, toProfile, validateProfileForm, type ProfileForm } from "../lib/profileForm";
@@ -80,16 +79,7 @@ export interface LandingProps {
   privateModeEnabled?: boolean;
 }
 
-/** In-app browsers (Instagram, WhatsApp...) get the "open in your browser" notice first. */
-export const Landing: React.FC<LandingProps> = (props) => {
-  const [inAppApp, setInAppApp] = useState(() =>
-    typeof navigator === "undefined" ? null : detectInAppBrowser(navigator.userAgent),
-  );
-  if (inAppApp) return <InAppBrowserNotice app={inAppApp} onContinue={() => setInAppApp(null)} />;
-  return <LandingScreen {...props} />;
-};
-
-const LandingScreen: React.FC<LandingProps> = ({
+export const Landing: React.FC<LandingProps> = ({
   defaultMode = FLAG_DEFAULTS.default_mode,
   privateModeEnabled = FLAG_DEFAULTS.private_mode_enabled,
 }) => {

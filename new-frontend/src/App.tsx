@@ -1,8 +1,10 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { InAppBrowserNotice } from "./components/room/InAppBrowserNotice";
+import { detectInAppBrowser } from "./lib/mobile";
 import { RouteMeta } from "./lib/seo";
 import NotFound from "./pages/NotFound";
 import { Landing } from "./pages/Landing";
@@ -26,20 +28,26 @@ const AdminFallback = () => {
 // The moderation console is its own chunk, never part of the main bundle.
 const AdminPage = lazy(() => import("./pages/admin/AdminPage"));
 
+/** In-app browsers (Instagram, WhatsApp...) get the "open in your browser" notice before the gate. */
+const Home = () => {
+  const [inAppApp, setInAppApp] = useState(() =>
+    typeof navigator === "undefined" ? null : detectInAppBrowser(navigator.userAgent),
+  );
+  if (inAppApp) return <InAppBrowserNotice app={inAppApp} onContinue={() => setInAppApp(null)} />;
+  return (
+    <Gate>
+      <Landing />
+    </Gate>
+  );
+};
+
 const App = () => (
   <ErrorBoundary>
     <BrowserRouter>
       <RouteMeta />
       <Suspense fallback={<PageFallback />}>
         <Routes>
-          <Route
-            path="/"
-            element={
-              <Gate>
-                <Landing />
-              </Gate>
-            }
-          />
+          <Route path="/" element={<Home />} />
           <Route
             path="/admin/*"
             element={
