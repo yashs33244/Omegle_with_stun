@@ -254,9 +254,12 @@ export class MatchService implements RestrictionSink {
       await this.turn.rememberIp(deviceId, ip).catch((err: unknown) => this.log.warn({ err }, "remember ip failed"));
     }
     await this.enforcement?.noteDeviceSeen(deviceId);
-    if (payload.preferences.genderFilter !== "all" && !(await this.billing.mayUseGenderFilter(deviceId))) {
-      return reply({ ok: false, error: "premium_required", message: "unlock the gender filter to use it" });
-    }
+    // An expired unlock (or an old bundle) must not strand the client: the
+    // filter is downgraded to "all" and the ack says so. Only session:preferences refuses.
+    const preferences =
+      payload.preferences.genderFilter !== "all" && !(await this.billing.mayUseGenderFilter(deviceId))
+        ? { ...payload.preferences, genderFilter: "all" as const }
+        : payload.preferences;
 
     await this.store.withLock(async () => {
       // The socket may have disconnected while we waited for the lock.
@@ -287,7 +290,7 @@ export class MatchService implements RestrictionSink {
           deviceId,
           instanceId: this.config.instanceId,
           profile,
-          preferences: payload.preferences,
+          preferences,
           mode: payload.mode,
           state: "idle",
           connectedAt: now,
@@ -295,7 +298,7 @@ export class MatchService implements RestrictionSink {
         await this.store.setDeviceSocket(deviceId, socketId);
       } else {
         session.profile = profile;
-        session.preferences = payload.preferences;
+        session.preferences = preferences;
         session.mode = payload.mode;
       }
       await this.store.putSession(session);
@@ -303,7 +306,7 @@ export class MatchService implements RestrictionSink {
       this.local.set(socketId, this.local.get(socketId) ?? { deviceId });
 
       const coins = await this.billing.balance(deviceId);
-      reply({ ok: true, coins, iceServers: this.turn.stunServers(), mode: this.effectiveMode(payload.mode) });
+      reply({ ok: true, coins, iceServers: this.turn.stunServers(), mode: this.effectiveMode(payload.mode), genderFilter: preferences.genderFilter });
       this.emitter.emit(socketId, "wallet:update", await this.billing.walletView(deviceId));
 
       if (session.state === "idle" || session.state === "waiting") {
@@ -888,7 +891,17 @@ export class MatchService implements RestrictionSink {
     return { room, index: index as 0 | 1 };
   }
 
+  /**
+   * Puts a session in the queue. The gender filter is re-checked here, on
+   * every (re)queue, so an unlock that lapsed mid-session stops applying at
+   * the next call rather than living as long as the socket.
+   */
   private async enqueueLocked(session: Session, since?: number): Promise<void> {
+    if (session.preferences.genderFilter !== "all" && !(await this.billing.mayUseGenderFilter(session.deviceId))) {
+      session.preferences = { ...session.preferences, genderFilter: "all" };
+      this.emitter.emit(session.socketId, "server:error", { code: "premium_required", message: "the gender filter unlock has expired" });
+      this.emitter.emit(session.socketId, "wallet:update", await this.billing.walletView(session.deviceId));
+    }
     session.state = "waiting";
     session.roomId = undefined;
     session.waitingSince = since ?? this.now();

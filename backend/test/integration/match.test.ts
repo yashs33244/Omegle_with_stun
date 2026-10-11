@@ -29,7 +29,7 @@ describe("hello and matching", () => {
     c.on("queue:waiting", () => order.push("queue:waiting"));
     const ack = await sendHello(c, hello());
     order.push("ack");
-    expect(ack).toEqual({ ok: true, coins: 100, iceServers: [{ urls: ts.config.stunUrls }], mode: "preview" });
+    expect(ack).toEqual({ ok: true, coins: 100, iceServers: [{ urls: ts.config.stunUrls }], mode: "preview", genderFilter: "all" });
     await next(c, "queue:waiting").catch(() => undefined);
     expect(order[0]).toBe("ack");
   });
@@ -134,11 +134,15 @@ describe("hello and matching", () => {
 
   test("unspecified gender only meets partners whose filter is all", async () => {
     ts = await startServer();
+    await ts.server.flags.set({ premium_filters_enabled: false });
     const a = await ts.connect();
     const b = await ts.connect();
     const found = arrives(a, "match:found", 400);
-    await sendHello(a, hello({ profile: profile({ gender: "unspecified" }) }));
-    await sendHello(b, hello({ profile: profile({ gender: "female" }), preferences: prefs({ genderFilter: "male" }) }));
+    expect(await sendHello(a, hello({ profile: profile({ gender: "unspecified" }) }))).toMatchObject({ ok: true });
+    expect(await sendHello(b, hello({ profile: profile({ gender: "female" }), preferences: prefs({ genderFilter: "male" }) }))).toMatchObject({
+      ok: true,
+      genderFilter: "male",
+    });
     expect(await found).toBe(false);
   });
 

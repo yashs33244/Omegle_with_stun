@@ -5,9 +5,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { FAKE_SIGNATURE } from "../../src/billing";
 import { webhookSignature } from "../../src/billing/razorpay";
+import { MemoryWalletStore } from "../../src/billing/WalletStore";
 import type { Config } from "../../src/config";
 import type { BillingOrder, BillingResponse, WalletView } from "../../src/protocol";
-import { connectWithSession, hello, next, prefs, profile, sendHello, startServer, type TestServer } from "../helpers";
+import { MemoryStore } from "../../src/store/MemoryStore";
+import { connectWithSession, hello, next, prefs, profile, record, sendHello, startServer, type TestServer } from "../helpers";
 
 const ADMIN = "x".repeat(24);
 const WEBHOOK_SECRET = "whsec_test";
@@ -63,14 +65,12 @@ async function buyWeek(token: string): Promise<BillingOrder> {
 }
 
 describe("premium gender filter", () => {
-  test("hello and session:preferences with a gender filter need an unlock; admin credit + unlock makes them pass", async () => {
+  test("hello downgrades a locked gender filter; session:preferences refuses it; admin credit + unlock makes them pass", async () => {
     ts = await boot();
     const { client, deviceId, sessionToken } = await connectWithSession(ts);
     const female = hello({ deviceId, profile: profile({ gender: "male" }), preferences: prefs({ genderFilter: "female" }) });
-    expect(await sendHello(client, female)).toMatchObject({ ok: false, error: "premium_required" });
-
     const wallet = next(client, "wallet:update");
-    expect(await sendHello(client, { ...female, preferences: prefs() })).toMatchObject({ ok: true, coins: 100 });
+    expect(await sendHello(client, female)).toMatchObject({ ok: true, coins: 100, genderFilter: "all" });
     expect(await wallet).toEqual({ coins: 100, unlocks: [] });
     const refused = await client.timeout(1000).emitWithAck("session:preferences", { preferences: prefs({ genderFilter: "female" }) });
     expect(refused).toMatchObject({ ok: false, error: "premium_required" });
@@ -91,21 +91,40 @@ describe("premium gender filter", () => {
 
     const saved = await client.timeout(1000).emitWithAck("session:preferences", { preferences: prefs({ genderFilter: "female" }) });
     expect(saved).toEqual({ ok: true });
-    expect(await sendHello(client, female)).toMatchObject({ ok: true, coins: 0 });
+    expect(await sendHello(client, female)).toMatchObject({ ok: true, coins: 0, genderFilter: "female" });
 
     const view = await admin(`/wallets/${deviceId}`);
     expect(view.body).toMatchObject({ coins: 0, unlocks: [{ feature: "gender_filter" }] });
     expect((view.body.ledger as unknown[]).length).toBe(2);
   });
 
-  test("premium_filters_enabled=false makes the filter free", async () => {
-    ts = await boot();
-    await ts.server.flags.set({ premium_filters_enabled: false });
-    const { client, deviceId } = await connectWithSession(ts);
-    const ack = await sendHello(client, hello({ deviceId, preferences: prefs({ genderFilter: "female" }) }));
-    expect(ack).toMatchObject({ ok: true });
-    const packs = await api<Record<string, unknown>>("/packs");
-    expect(packs.body).toMatchObject({ premiumFiltersEnabled: false, enabled: true });
+  test("an unlock that lapses mid-session stops applying at the next queue entry", async () => {
+    const walletStore = new MemoryWalletStore(new MemoryStore());
+    ts = await startServer({ requireSession: true, razorpayFake: true, razorpayWebhookSecret: WEBHOOK_SECRET, adminToken: ADMIN }, undefined, {
+      billing: { walletStore },
+    });
+    const a = await connectWithSession(ts);
+    const b = await connectWithSession(ts);
+    await walletStore.setUnlock(a.deviceId, "gender_filter", Date.now() + 60_000);
+    const female = hello({ deviceId: a.deviceId, profile: profile({ gender: "male" }), preferences: prefs({ genderFilter: "female" }) });
+    expect(await sendHello(a.client, female)).toMatchObject({ ok: true, genderFilter: "female" });
+    const errors = record(a.client, "server:error");
+    const found = next(a.client, "match:found", 3000);
+    expect(await sendHello(b.client, hello({ deviceId: b.deviceId, profile: profile({ gender: "female" }) }))).toMatchObject({ ok: true });
+    const { roomId } = await found;
+    await next(b.client, "match:found");
+    expect(errors).toEqual([]);
+
+    // The unlock runs out while the two are in the match prompt.
+    await walletStore.setUnlock(a.deviceId, "gender_filter", Date.now() - 1);
+    const wallet = next(a.client, "wallet:update");
+    const requeued = next(a.client, "queue:waiting");
+    a.client.emit("match:decline", { roomId });
+    await requeued;
+    expect(await wallet).toEqual({ coins: 100, unlocks: [] });
+    expect(errors).toEqual([{ code: "premium_required", message: expect.any(String) }]);
+    const socketId = await ts.store.getDeviceSocket(a.deviceId);
+    expect((await ts.store.getSession(socketId!))?.preferences.genderFilter).toBe("all");
   });
 });
 

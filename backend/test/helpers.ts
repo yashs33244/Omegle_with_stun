@@ -84,7 +84,7 @@ export interface TestServer {
 export async function startServer(
   overrides: Partial<Config> = {},
   store?: MatchStore,
-  deps: Pick<ServerDeps, "configureIo" | "fetch" | "restrictions" | "redis" | "flags" | "enforcement"> = {},
+  deps: Pick<ServerDeps, "configureIo" | "fetch" | "restrictions" | "redis" | "flags" | "enforcement" | "billing"> = {},
 ): Promise<TestServer> {
   // Each server gets its own evidence directory, removed on close.
   const evidenceDir = mkdtempSync(join(tmpdir(), "chizzy-evidence-"));
