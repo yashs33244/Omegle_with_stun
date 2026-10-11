@@ -1,6 +1,6 @@
 # Chizzy
 
-[![CI](https://github.com/yashs33244/Omegle_with_stun/actions/workflows/ci.yml/badge.svg?branch=new-v)](https://github.com/yashs33244/Omegle_with_stun/actions/workflows/ci.yml)
+[![CI](https://github.com/yashs33244/Omegle_with_stun/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/yashs33244/Omegle_with_stun/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/yashs33244/Omegle_with_stun?sort=semver)](https://github.com/yashs33244/Omegle_with_stun/releases)
 [![Licence: proprietary](https://img.shields.io/badge/licence-proprietary-lightgrey)](#licence)
 
@@ -328,7 +328,7 @@ https://chizzy-chat.vercel.app and https://chizzy-api.onrender.com.
   variables). Deploy with `cd new-frontend && vercel deploy --prod`.
 - **Cloudflare Pages is the production path** (free plan, commercial use
   allowed, no bandwidth cap). `.github/workflows/pages.yml` builds and
-  uploads `dist/` on every push to `new-v` once the `PAGES_ENABLED`
+  uploads `dist/` on every push to `main` once the `PAGES_ENABLED`
   variable and the `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` secrets
   are set; `npm run build` writes `dist/_headers` (from
   `new-frontend/_headers.template`, CSP `connect-src` from `VITE_API_URL`)
@@ -518,11 +518,11 @@ Honest list; the risk assessment ([docs/risk-assessment.md](docs/risk-assessment
 
 ## Releases
 
-Versions are SemVer tags `vX.Y.Z` on `new-v`, listed on the
+Versions are SemVer tags `vX.Y.Z` on `main`, listed on the
 [Releases](https://github.com/yashs33244/Omegle_with_stun/releases) page with
 the matching section of [CHANGELOG.md](CHANGELOG.md), the generated PR notes
 and the built frontend as a tarball. A release is cut with
-`scripts/release.sh <patch|minor|major|X.Y.Z>` from a green `new-v`; the tag
+`scripts/release.sh <patch|minor|major|X.Y.Z>` from a green `main`; the tag
 runs `release.yml`, which repeats CI and pushes the images as
 `yashs3324/omegle-backend:X.Y.Z` and `yashs3324/omegle-frontend:X.Y.Z` when
 Docker Hub credentials are configured. Steps and rollback: [CONTRIBUTING.md](CONTRIBUTING.md#releases).

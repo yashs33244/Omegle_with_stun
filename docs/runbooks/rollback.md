@@ -3,7 +3,7 @@
 Use when a deploy broke production and reverting the code would take longer
 than putting the previous build back. Rolling back does not undo the commit:
 once the site is healthy, open a revert PR (or fix forward) so the next merge
-to `new-v` does not redeploy the bad version.
+to `main` does not redeploy the bad version.
 
 Pick the part that broke. Frontend and backend deploy independently; roll
 back only the one that changed. The protocol version (`backend/src/protocol.ts`,
@@ -25,7 +25,7 @@ deployment -> "..." -> "Instant Rollback" (or "Promote to Production" on any
 older deployment). Both complete in seconds; a rollback is served from the
 old build's static files, no edge cache purge needed.
 
-Because Vercel auto-deploys every push to `new-v`, the next merge replaces
+Because Vercel auto-deploys every push to `main`, the next merge replaces
 the rolled-back build. Revert first, then merge.
 
 ## Backend on Render
@@ -57,7 +57,7 @@ curl -sS -X POST -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: ap
 ```
 
 Auto-deploy stays on (`autoDeployTrigger: commit`), so the next push to
-`new-v` deploys again. To freeze while you investigate: Settings -> Build &
+`main` deploys again. To freeze while you investigate: Settings -> Build &
 Deploy -> Auto-Deploy "No", or `render services update srv-db5nnass728c738ek0o0 --auto-deploy=false`.
 
 ## Frontend on Cloudflare Pages
@@ -77,8 +77,8 @@ it as a new production deployment:
 ```sh
 git checkout <previous-commit-sha> -- new-frontend
 cd new-frontend && npm ci && VITE_API_URL=https://chizzy-api.onrender.com VITE_SITE_URL=https://chizzy.pages.dev npm run build
-npx wrangler@4 pages deploy dist --project-name chizzy --branch new-v
-git checkout new-v -- new-frontend
+npx wrangler@4 pages deploy dist --project-name chizzy --branch main
+git checkout main -- new-frontend
 ```
 
 ## Compose on a host (EC2 path, paused)
@@ -108,7 +108,7 @@ curl -sS -o /dev/null -w "%{http_code}\n" https://chizzy-api.onrender.com/health
 curl -sS https://chizzy-api.onrender.com/api/config                                 # matchingOpen true, expected tosVersion
 curl -sS -o /dev/null -w "%{http_code}\n" https://chizzy-chat.vercel.app/            # 200
 CANARY_URL=https://chizzy-api.onrender.com node scripts/loadtest/canary.ts          # two clients reach call:start (needs backend/node_modules)
-gh workflow run canary.yml --ref new-v && gh run watch                               # same, from GitHub
+gh workflow run canary.yml --ref main && gh run watch                               # same, from GitHub
 ```
 
 Optionally the browser test against production (the canary already covers

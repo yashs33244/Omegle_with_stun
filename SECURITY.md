@@ -5,7 +5,7 @@
 Please do not open a public issue. Use GitHub's private vulnerability
 reporting (Security tab -> "Report a vulnerability") on this repository, with
 steps to reproduce and the impact you see. You should get a reply within a few
-days. Only the latest deployed version (the `new-v` branch) is supported.
+days. Only the latest deployed version (the `main` branch) is supported.
 
 Safety reports about content or users (not software bugs) go through the
 in-app report button or the takedown form, not here.

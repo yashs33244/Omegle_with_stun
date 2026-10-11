@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cuts a release from new-v: bumps the version, moves the CHANGELOG
+# Cuts a release from main: bumps the version, moves the CHANGELOG
 # "Unreleased" section under the new version, commits "Release vX.Y.Z", tags
 # it and pushes branch + tag. The tag push runs .github/workflows/release.yml
 # (CI, Docker Hub images, GitHub Release). See CONTRIBUTING.md "Releases".
@@ -9,8 +9,8 @@
 # Environment:
 #   RELEASE_REMOTE  git remote to push to (default: origin)
 #
-# Refuses to run unless: branch is new-v, tree is clean, HEAD equals the
-# remote new-v, the latest CI run for HEAD succeeded (gh run list --commit)
+# Refuses to run unless: branch is main, tree is clean, HEAD equals the
+# remote main, the latest CI run for HEAD succeeded (gh run list --commit)
 # and the tag does not exist yet. Needs git, gh (logged in), node, awk.
 set -euo pipefail
 
@@ -34,7 +34,7 @@ done
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 remote=${RELEASE_REMOTE:-origin}
-branch=new-v
+branch=main
 backend_pkg=backend/package.json
 frontend_pkg=new-frontend/package.json
 frontend_lock=new-frontend/package-lock.json
@@ -73,7 +73,7 @@ head=$(git rev-parse HEAD)
 
 ci=$(gh run list --commit "$head" --workflow ci.yml --limit 1 --json status,conclusion \
   --jq '.[0] | "\(.status) \(.conclusion)"' 2> /dev/null || true)
-# new-v pushes run CI through deploy.yml (workflow_call), not as a ci.yml run.
+# main pushes run CI through deploy.yml (workflow_call), not as a ci.yml run.
 if [ -z "$ci" ] || [ "$ci" = "null null" ]; then
   ci=$(gh run list --commit "$head" --workflow deploy.yml --limit 1 --json status,conclusion \
     --jq '.[0] | "\(.status) \(.conclusion)"' 2> /dev/null || true)

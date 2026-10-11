@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
-    url: https://github.com/yashs33244/Omegle_with_stun/blob/new-v/SECURITY.md
+    url: https://github.com/yashs33244/Omegle_with_stun/blob/main/SECURITY.md
     about: Do not open a public issue. SECURITY.md explains how to report privately.
   - name: Abuse, takedown or law-enforcement request
-    url: https://github.com/yashs33244/Omegle_with_stun/blob/new-v/docs/runbooks
+    url: https://github.com/yashs33244/Omegle_with_stun/blob/main/docs/runbooks
     about: Use the contact routes on the site (/takedown, /grievance, /law-enforcement), not the issue tracker.

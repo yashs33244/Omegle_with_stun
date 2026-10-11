@@ -1,6 +1,6 @@
 # Render Blueprint: the backend on a Free web service (frontend is on Vercel,
 # see new-frontend/vercel.json). Apply from the Render dashboard with
-# New -> Blueprint, or let an existing instance sync on every push to new-v.
+# New -> Blueprint, or let an existing instance sync on every push to main.
 #
 # Free tier facts this file works around (render.com/docs/free):
 # - spins down after 15 min without inbound traffic, ~1 min to come back:
@@ -21,7 +21,7 @@ services:
     runtime: docker
     plan: free
     region: singapore
-    branch: new-v
+    branch: main
     rootDir: backend
     dockerfilePath: ./Dockerfile
     dockerContext: .

@@ -69,11 +69,11 @@ What each outside party does:
 | Razorpay | Coin packs (INR). Orders created server side, credited once per payment id from either the Checkout verify call or the `payment.captured` webhook | `backend/src/billing/BillingService.ts:1-15` |
 | Sentry | Error reporting only, backend and frontend; no tracing, all data collection flags off, events scrubbed | `backend/src/observability/sentry.ts`, `new-frontend/src/lib/observability.ts` |
 | PostHog | Seven funnel events from the frontend, memory persistence, no autocapture or session recording | `new-frontend/src/lib/observability.ts` |
-| GitHub Actions | CI on every PR; build and deploy on push to `new-v`; keep-alive and canary crons; optional Cloudflare Pages deploy | `.github/workflows/*.yml` |
+| GitHub Actions | CI on every PR; build and deploy on push to `main`; keep-alive and canary crons; optional Cloudflare Pages deploy | `.github/workflows/*.yml` |
 
 ### 1.1 Topology A: full stack on one host (production)
 
-One EC2 host runs Docker Compose; a push to `new-v` runs CI, pushes images to Docker Hub, then `deploy/deploy.sh` over SSH pulls and does `docker compose up --wait` with health checks and rollback (`DEPLOYMENT.md:3-14`, `.github/workflows/deploy.yml`).
+One EC2 host runs Docker Compose; a push to `main` runs CI, pushes images to Docker Hub, then `deploy/deploy.sh` over SSH pulls and does `docker compose up --wait` with health checks and rollback (`DEPLOYMENT.md:3-14`, `.github/workflows/deploy.yml`).
 
 ```mermaid
 flowchart TB
