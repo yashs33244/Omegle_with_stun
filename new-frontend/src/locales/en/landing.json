@@ -1,1 +1,115 @@
-{}
+{
+  "profile": {
+    "editAria": "Edit profile photo and details",
+    "guest": "Guest User",
+    "speaks": "I speak: {{language}}",
+    "topicsHeading": "My topics:",
+    "more_one": "+{{count}} more",
+    "more_other": "+{{count}} more",
+    "edit": "Edit profile"
+  },
+  "camera": {
+    "ready": "Camera ready",
+    "starting": "Starting camera...",
+    "off": "Camera off",
+    "startingYours": "Starting your camera...",
+    "required": "Camera access required",
+    "enable": "Enable Camera",
+    "tryAgain": "Try again",
+    "allowToContinue": "Please allow camera access to continue"
+  },
+  "settings": {
+    "language": "Language",
+    "country": "Country"
+  },
+  "start": "Start",
+  "rules": {
+    "reminder": "Reminder: 18+ only. No nudity, harassment, hate or spam. Rule breaks can get you removed. Read the <guidelines>Community Guidelines</guidelines>."
+  },
+  "setup": {
+    "captureTitle": "Capture Your Photo",
+    "captureDescription": "Take a real-time photo for your profile",
+    "detailsTitle": "Complete Profile",
+    "detailsDescription": "Enter your details and select topics",
+    "previewAria": "Camera preview",
+    "previewReady": "● Ready",
+    "previewLoading": "● Loading...",
+    "positionFace": "Position your face in the frame and click capture",
+    "capture": "Capture Photo",
+    "skip": "Continue without a photo",
+    "photoAlt": "Your profile photo",
+    "retake": "Retake Photo",
+    "take": "Take a Photo"
+  },
+  "form": {
+    "nameLabel": "Your Name",
+    "namePlaceholder": "Enter your name",
+    "genderLabel": "Gender",
+    "gender": {
+      "male": "Male",
+      "female": "Female",
+      "other": "Other",
+      "unspecified": "Prefer not to say"
+    },
+    "genderHint": "Only used for matching filters. It is never shown to anyone.",
+    "topicsLegend": "Select Topics (Choose at least one)",
+    "errors": {
+      "nameRequired": "Enter your name.",
+      "topicsRequired": "Choose at least one topic."
+    },
+    "cameraNotReady": "Your camera is not ready yet. Close this window and allow camera access.",
+    "submit": "Start Chatting"
+  },
+  "photo": {
+    "not-ready": "The camera is not showing a picture yet. Wait a moment and try again.",
+    "encode-failed": "This browser could not create the photo.",
+    "too-large": "The photo came out too large. Try again in different lighting.",
+    "unknown": "Could not take the photo. Please try again."
+  },
+  "topics": {
+    "general": "General Chat",
+    "gaming": "Gaming",
+    "music": "Music",
+    "movies": "Movies",
+    "sports": "Sports",
+    "technology": "Technology",
+    "art": "Art & Design",
+    "travel": "Travel",
+    "food": "Food",
+    "books": "Books"
+  },
+  "languages": {
+    "en": "English",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "it": "Italian",
+    "pt": "Portuguese",
+    "ru": "Russian",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "zh": "Chinese",
+    "ar": "Arabic",
+    "hi": "Hindi"
+  },
+  "countries": {
+    "US": "United States",
+    "GB": "United Kingdom",
+    "CA": "Canada",
+    "AU": "Australia",
+    "DE": "Germany",
+    "FR": "France",
+    "ES": "Spain",
+    "IT": "Italy",
+    "PT": "Portugal",
+    "BR": "Brazil",
+    "MX": "Mexico",
+    "JP": "Japan",
+    "KR": "South Korea",
+    "CN": "China",
+    "IN": "India",
+    "RU": "Russia",
+    "SA": "Saudi Arabia",
+    "AE": "UAE"
+  }
+}

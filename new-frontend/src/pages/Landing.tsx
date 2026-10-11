@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, Camera, Languages, Loader, User } from "lucide-react";
 import { Link } from "react-router-dom";
+import { Trans, useTranslation } from "react-i18next";
 import { useMediaStream, type MediaAccessError } from "../hooks/useMediaStream";
 import { Room } from "./Room";
 import { Footer } from "@/components/Footer";
@@ -19,15 +20,8 @@ import { PreflightCheck } from "@/components/room/PreflightCheck";
 import { useStartOptions } from "@/hooks/useStartOptions";
 import { detectInAppBrowser, runningOnMobile } from "@/lib/mobile";
 import { preloadModels } from "@/moderation/modelClient";
-import { PhotoCaptureError, captureVideoFrame } from "../lib/photo";
-import {
-  GENDER_CHOICES,
-  TOPIC_LABELS,
-  hasErrors,
-  toProfile,
-  validateProfileForm,
-  type ProfileForm,
-} from "../lib/profileForm";
+import { PhotoCaptureError, captureVideoFrame, type PhotoErrorReason } from "../lib/photo";
+import { GENDER_CHOICES, TOPIC_EMOJI, hasErrors, toProfile, validateProfileForm, type ProfileForm } from "../lib/profileForm";
 
 const isGender = (v: string): v is Gender => GENDER_CHOICES.some((g) => g.value === v);
 
@@ -61,16 +55,23 @@ const CameraProblem: React.FC<{ error: MediaAccessError; onRetry: () => void; to
   error,
   onRetry,
   tone,
-}) => (
-  <div role="alert" className="text-center space-y-3 px-4" data-testid="camera-error">
-    <AlertTriangle className={`w-12 h-12 mx-auto ${tone === "dark" ? "text-yellow-400" : "text-red-500"}`} />
-    <p className={`text-xl font-bold ${tone === "dark" ? "text-white" : "text-black"}`}>{error.title}</p>
-    <p className={`text-sm ${tone === "dark" ? "text-gray-300" : "text-gray-600"}`}>{error.message}</p>
-    <Button onClick={onRetry} className="mx-auto bg-yellow-500 text-black hover:bg-yellow-400">
-      Try again
-    </Button>
-  </div>
-);
+}) => {
+  const { t } = useTranslation(["landing", "room"]);
+  return (
+    <div role="alert" className="text-center space-y-3 px-4" data-testid="camera-error">
+      <AlertTriangle className={`w-12 h-12 mx-auto ${tone === "dark" ? "text-yellow-400" : "text-red-500"}`} />
+      <p className={`text-xl font-bold ${tone === "dark" ? "text-white" : "text-black"}`}>
+        {t(`room:camera.${error.kind}.title`)}
+      </p>
+      <p className={`text-sm ${tone === "dark" ? "text-gray-300" : "text-gray-600"}`}>
+        {t(`room:camera.${error.kind}.message`)}
+      </p>
+      <Button onClick={onRetry} className="mx-auto bg-yellow-500 text-black hover:bg-yellow-400">
+        {t("landing:camera.tryAgain")}
+      </Button>
+    </div>
+  );
+};
 
 export interface LandingProps {
   /** Server default for the match mode (GET /api/config defaultMode). */
@@ -92,6 +93,7 @@ const LandingScreen: React.FC<LandingProps> = ({
   defaultMode = FLAG_DEFAULTS.default_mode,
   privateModeEnabled = FLAG_DEFAULTS.private_mode_enabled,
 }) => {
+  const { t } = useTranslation("landing");
   const [step, setStep] = useState<"home" | "chat">("home");
   const startOptions = useStartOptions(defaultMode);
   const [isPhone] = useState(runningOnMobile);
@@ -114,7 +116,7 @@ const LandingScreen: React.FC<LandingProps> = ({
     genderFilter: "all",
     languageFilter: "any",
   });
-  const [captureError, setCaptureError] = useState<string | null>(null);
+  const [captureError, setCaptureError] = useState<PhotoErrorReason | "unknown" | null>(null);
   const [previewReady, setPreviewReady] = useState(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const captureButtonRef = useRef<HTMLButtonElement>(null);
@@ -173,9 +175,7 @@ const LandingScreen: React.FC<LandingProps> = ({
       setCaptureError(null);
       setSetupStep("details");
     } catch (err) {
-      setCaptureError(
-        err instanceof PhotoCaptureError ? err.message : "Could not take the photo. Please try again.",
-      );
+      setCaptureError(err instanceof PhotoCaptureError ? err.reason : "unknown");
     }
   };
 
@@ -260,7 +260,7 @@ const LandingScreen: React.FC<LandingProps> = ({
         <div className="w-full md:w-80 bg-black bg-opacity-60 backdrop-blur-sm p-6 flex flex-col justify-between gap-6 text-white">
           <div className="space-y-6">
             <div className="text-center">
-              <h1 className="text-3xl font-bold text-yellow-400">Chizzy</h1>
+              <h1 className="text-3xl font-bold text-yellow-400">{t("appName", { ns: "common" })}</h1>
             </div>
 
             {/* Profile summary */}
@@ -269,7 +269,7 @@ const LandingScreen: React.FC<LandingProps> = ({
                 <button
                   type="button"
                   onClick={openSetup}
-                  aria-label="Edit profile photo and details"
+                  aria-label={t("profile.editAria")}
                   className="w-12 h-12 shrink-0 rounded-full bg-yellow-500 flex items-center justify-center overflow-hidden hover:bg-yellow-400 transition-colors cursor-pointer"
                 >
                   {form.photo ? (
@@ -279,37 +279,41 @@ const LandingScreen: React.FC<LandingProps> = ({
                   )}
                 </button>
                 <div className="min-w-0">
-                  <p className="font-medium truncate">{form.name.trim() || "Guest User"}</p>
+                  <p className="font-medium truncate">{form.name.trim() || t("profile.guest")}</p>
                   <div className="flex items-center gap-2 text-sm text-gray-300">
                     <span aria-hidden="true">{countryData?.flag}</span>
-                    <span>{countryData?.name}</span>
+                    <span>{countryData && t(`countries.${countryData.code}`)}</span>
                   </div>
                 </div>
               </div>
 
               <div className="flex items-center gap-2 text-sm">
                 <Languages className="w-4 h-4" aria-hidden="true" />
-                <span>I speak: {languageData?.name}</span>
+                <span>
+                  {languageData && t("profile.speaks", { language: t(`languages.${languageData.code}`) })}
+                </span>
               </div>
 
               <div className="space-y-2">
-                <h2 className="font-medium text-sm">My topics:</h2>
+                <h2 className="font-medium text-sm">{t("profile.topicsHeading")}</h2>
                 <div className="flex flex-wrap gap-2">
                   {form.topics.slice(0, 3).map((topic) => (
                     <div
                       key={topic}
                       className="px-2 py-1 bg-white bg-opacity-20 rounded-full text-xs flex items-center gap-1"
                     >
-                      <span aria-hidden="true">{TOPIC_LABELS[topic].emoji}</span>
-                      <span>{TOPIC_LABELS[topic].name}</span>
+                      <span aria-hidden="true">{TOPIC_EMOJI[topic]}</span>
+                      <span>{t(`topics.${topic}`)}</span>
                     </div>
                   ))}
                   {form.topics.length > 3 && (
-                    <span className="px-2 py-1 text-xs text-gray-300">+{form.topics.length - 3} more</span>
+                    <span className="px-2 py-1 text-xs text-gray-300">
+                      {t("profile.more", { count: form.topics.length - 3 })}
+                    </span>
                   )}
                 </div>
                 <button type="button" onClick={openSetup} className="text-yellow-400 text-xs hover:underline">
-                  Edit profile
+                  {t("profile.edit")}
                 </button>
               </div>
 
@@ -318,7 +322,7 @@ const LandingScreen: React.FC<LandingProps> = ({
                   aria-hidden="true"
                   className={`w-2 h-2 rounded-full ${stream ? "bg-green-400" : "bg-red-400"}`}
                 />
-                <span>{stream ? "Camera ready" : isLoading ? "Starting camera..." : "Camera off"}</span>
+                <span>{stream ? t("camera.ready") : isLoading ? t("camera.starting") : t("camera.off")}</span>
               </div>
 
               {stream && <PreflightCheck stream={stream} />}
@@ -329,18 +333,18 @@ const LandingScreen: React.FC<LandingProps> = ({
           <div className="space-y-3">
             <div className="space-y-2">
               <label id="home-language-label" htmlFor="home-language" className="text-xs text-gray-300 block">
-                Language
+                {t("settings.language")}
               </label>
               <Select
                 id="home-language"
                 labelId="home-language-label"
-                aria-label="Language"
+                aria-label={t("settings.language")}
                 value={form.language}
                 onValueChange={(language) => setForm((prev) => ({ ...prev, language }))}
               >
                 {languages.map((lang) => (
                   <SelectItem key={lang.code} value={lang.code}>
-                    {lang.name}
+                    {t(`languages.${lang.code}`)}
                   </SelectItem>
                 ))}
               </Select>
@@ -348,18 +352,18 @@ const LandingScreen: React.FC<LandingProps> = ({
 
             <div className="space-y-2">
               <label id="home-country-label" htmlFor="home-country" className="text-xs text-gray-300 block">
-                Country
+                {t("settings.country")}
               </label>
               <Select
                 id="home-country"
                 labelId="home-country-label"
-                aria-label="Country"
+                aria-label={t("settings.country")}
                 value={form.country}
                 onValueChange={(country) => setForm((prev) => ({ ...prev, country }))}
               >
                 {countries.map((country) => (
                   <SelectItem key={country.code} value={country.code}>
-                    {country.flag} {country.name}
+                    {country.flag} {t(`countries.${country.code}`)}
                   </SelectItem>
                 ))}
               </Select>
@@ -374,16 +378,16 @@ const LandingScreen: React.FC<LandingProps> = ({
               (isLoading ? (
                 <div className="text-center text-white space-y-4" role="status">
                   <Loader className="w-12 h-12 animate-spin mx-auto" aria-hidden="true" />
-                  <p>Starting your camera...</p>
+                  <p>{t("camera.startingYours")}</p>
                 </div>
               ) : error ? (
                 <CameraProblem error={error} onRetry={retryCamera} tone="dark" />
               ) : (
                 <div className="text-center text-white space-y-4">
                   <Camera className="w-16 h-16 mx-auto text-gray-400" aria-hidden="true" />
-                  <p className="text-xl">Camera access required</p>
+                  <p className="text-xl">{t("camera.required")}</p>
                   <Button onClick={retryCamera} className="mx-auto bg-yellow-500 text-black hover:bg-yellow-400">
-                    Enable Camera
+                    {t("camera.enable")}
                   </Button>
                 </div>
               ))}
@@ -402,15 +406,15 @@ const LandingScreen: React.FC<LandingProps> = ({
               data-testid="start-chat"
               className="px-16 py-4 text-xl font-bold bg-yellow-500 text-black hover:bg-yellow-400 disabled:opacity-50 disabled:cursor-not-allowed border-2 border-black shadow-lg"
             >
-              Start
+              {t("start")}
             </Button>
-            {!hasPermission && <p className="text-white text-sm">Please allow camera access to continue</p>}
+            {!hasPermission && <p className="text-white text-sm">{t("camera.allowToContinue")}</p>}
             <p className="text-white text-xs max-w-sm mx-auto" data-testid="rules-reminder">
-              Reminder: 18+ only. No nudity, harassment, hate or spam. Rule breaks can get you removed. Read the{" "}
-              <Link to="/guidelines" className="underline text-yellow-300">
-                Community Guidelines
-              </Link>
-              .
+              <Trans
+                t={t}
+                i18nKey="rules.reminder"
+                components={{ guidelines: <Link to="/guidelines" className="underline text-yellow-300" /> }}
+              />
             </p>
           </div>
           <Footer />
@@ -430,12 +434,10 @@ const LandingScreen: React.FC<LandingProps> = ({
           <div className="space-y-6">
             <div className="text-center">
               <DialogTitle className="text-xl font-bold text-black">
-                {setupStep === "capture" ? "Capture Your Photo" : "Complete Profile"}
+                {setupStep === "capture" ? t("setup.captureTitle") : t("setup.detailsTitle")}
               </DialogTitle>
               <DialogDescription className="text-gray-600 mt-2">
-                {setupStep === "capture"
-                  ? "Take a real-time photo for your profile"
-                  : "Enter your details and select topics"}
+                {setupStep === "capture" ? t("setup.captureDescription") : t("setup.detailsDescription")}
               </DialogDescription>
             </div>
 
@@ -447,7 +449,7 @@ const LandingScreen: React.FC<LandingProps> = ({
                     autoPlay
                     playsInline
                     muted
-                    aria-label="Camera preview"
+                    aria-label={t("setup.previewAria")}
                     onLoadedData={() => setPreviewReady(true)}
                     className="w-full aspect-video rounded-lg object-cover bg-gray-900"
                     style={{ transform: "scaleX(-1)" }}
@@ -455,9 +457,9 @@ const LandingScreen: React.FC<LandingProps> = ({
                   <div className="absolute inset-0 border-2 border-yellow-500 rounded-lg pointer-events-none" />
                   <div className="absolute top-2 right-2 bg-black bg-opacity-70 text-white px-2 py-1 rounded text-xs">
                     {previewReady ? (
-                      <span className="text-green-400">● Ready</span>
+                      <span className="text-green-400">{t("setup.previewReady")}</span>
                     ) : (
-                      <span className="text-red-400">● Loading...</span>
+                      <span className="text-red-400">{t("setup.previewLoading")}</span>
                     )}
                   </div>
                 </div>
@@ -466,7 +468,7 @@ const LandingScreen: React.FC<LandingProps> = ({
                   <CameraProblem error={error} onRetry={retryCamera} tone="light" />
                 ) : (
                   <div className="text-center space-y-4">
-                    <p className="text-sm text-gray-600">Position your face in the frame and click capture</p>
+                    <p className="text-sm text-gray-600">{t("setup.positionFace")}</p>
                     <Button
                       ref={captureButtonRef}
                       onClick={capturePhoto}
@@ -474,11 +476,11 @@ const LandingScreen: React.FC<LandingProps> = ({
                       data-testid="capture-photo"
                       className="w-full justify-center bg-yellow-500 text-black hover:bg-yellow-400 disabled:opacity-50"
                     >
-                      Capture Photo
+                      {t("setup.capture")}
                     </Button>
                     {captureError && (
                       <p role="alert" className="text-sm text-red-600">
-                        {captureError}
+                        {t(`photo.${captureError}`)}
                       </p>
                     )}
                   </div>
@@ -490,7 +492,7 @@ const LandingScreen: React.FC<LandingProps> = ({
                   data-testid="skip-photo"
                   className="w-full text-sm text-gray-600 underline hover:text-black"
                 >
-                  Continue without a photo
+                  {t("setup.skip")}
                 </button>
               </div>
             ) : (
@@ -499,7 +501,7 @@ const LandingScreen: React.FC<LandingProps> = ({
                   {form.photo ? (
                     <img
                       src={form.photo}
-                      alt="Your profile photo"
+                      alt={t("setup.photoAlt")}
                       className="w-20 h-20 rounded-full object-cover border-2 border-yellow-500"
                     />
                   ) : (
@@ -513,19 +515,19 @@ const LandingScreen: React.FC<LandingProps> = ({
                     size="sm"
                     className="text-xs border-gray-400 text-gray-600 hover:bg-gray-50"
                   >
-                    {form.photo ? "Retake Photo" : "Take a Photo"}
+                    {form.photo ? t("setup.retake") : t("setup.take")}
                   </Button>
                 </div>
 
                 <div className="space-y-2">
                   <label htmlFor="profile-name" className="text-sm font-medium text-black block">
-                    Your Name
+                    {t("form.nameLabel")}
                   </label>
                   <Input
                     ref={nameInputRef}
                     id="profile-name"
                     type="text"
-                    placeholder="Enter your name"
+                    placeholder={t("form.namePlaceholder")}
                     autoComplete="nickname"
                     data-testid="name-input"
                     value={form.name}
@@ -545,18 +547,18 @@ const LandingScreen: React.FC<LandingProps> = ({
                   {/* Always rendered with a reserved line, so showing the error on blur does not
                       move the controls below while a click on one of them is in progress. */}
                   <p id="profile-name-error" className="min-h-4 text-xs text-red-600">
-                    {showNameError ? errors.name : null}
+                    {showNameError ? t(showNameError) : null}
                   </p>
                 </div>
 
                 <div className="space-y-2">
                   <label id="profile-gender-label" htmlFor="profile-gender" className="text-sm font-medium text-black block">
-                    Gender
+                    {t("form.genderLabel")}
                   </label>
                   <Select
                     id="profile-gender"
                     labelId="profile-gender-label"
-                    aria-label="Gender"
+                    aria-label={t("form.genderLabel")}
                     data-testid="gender-select"
                     value={form.gender}
                     onValueChange={(gender) => {
@@ -565,15 +567,15 @@ const LandingScreen: React.FC<LandingProps> = ({
                   >
                     {GENDER_CHOICES.map((g) => (
                       <SelectItem key={g.value} value={g.value}>
-                        {g.label}
+                        {t(g.label)}
                       </SelectItem>
                     ))}
                   </Select>
-                  <p className="text-xs text-gray-500">Only used for matching filters. It is never shown to anyone.</p>
+                  <p className="text-xs text-gray-500">{t("form.genderHint")}</p>
                 </div>
 
                 <fieldset className="space-y-2" aria-describedby={errors.topics ? "profile-topics-error" : undefined}>
-                  <legend className="text-sm font-medium text-black">Select Topics (Choose at least one)</legend>
+                  <legend className="text-sm font-medium text-black">{t("form.topicsLegend")}</legend>
                   <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
                     {TOPICS.map((topic) => {
                       const selected = form.topics.includes(topic);
@@ -589,23 +591,23 @@ const LandingScreen: React.FC<LandingProps> = ({
                           }`}
                         >
                           <span className="mr-2" aria-hidden="true">
-                            {TOPIC_LABELS[topic].emoji}
+                            {TOPIC_EMOJI[topic]}
                           </span>
-                          {TOPIC_LABELS[topic].name}
+                          {t(`topics.${topic}`)}
                         </button>
                       );
                     })}
                   </div>
                   {errors.topics && (
                     <p id="profile-topics-error" className="text-xs text-red-600">
-                      {errors.topics}
+                      {t(errors.topics)}
                     </p>
                   )}
                 </fieldset>
 
                 {!hasPermission && (
                   <p role="alert" className="text-xs text-red-600">
-                    Your camera is not ready yet. Close this window and allow camera access.
+                    {t("form.cameraNotReady")}
                   </p>
                 )}
 
@@ -615,7 +617,7 @@ const LandingScreen: React.FC<LandingProps> = ({
                   data-testid="begin-chat"
                   className="w-full justify-center bg-yellow-500 text-black hover:bg-yellow-400 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  Start Chatting
+                  {t("form.submit")}
                 </Button>
               </div>
             )}

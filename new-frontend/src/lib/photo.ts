@@ -6,11 +6,12 @@ export const PHOTO_QUALITY = 0.8;
 
 export type PhotoErrorReason = "not-ready" | "encode-failed" | "too-large";
 
+/** `reason` maps to the landing-namespace key `photo.<reason>`; the message is the reason itself. */
 export class PhotoCaptureError extends Error {
   readonly reason: PhotoErrorReason;
 
-  constructor(reason: PhotoErrorReason, message: string) {
-    super(message);
+  constructor(reason: PhotoErrorReason) {
+    super(reason);
     this.name = "PhotoCaptureError";
     this.reason = reason;
   }
@@ -57,7 +58,7 @@ export function captureVideoFrame(
 ): string {
   const { videoWidth, videoHeight } = video;
   if (!videoWidth || !videoHeight) {
-    throw new PhotoCaptureError("not-ready", "The camera is not showing a picture yet. Wait a moment and try again.");
+    throw new PhotoCaptureError("not-ready");
   }
 
   const crop = squareCrop(videoWidth, videoHeight);
@@ -65,16 +66,16 @@ export function captureVideoFrame(
   canvas.height = crop.size;
   const ctx = canvas.getContext("2d");
   if (!ctx) {
-    throw new PhotoCaptureError("encode-failed", "This browser could not create the photo.");
+    throw new PhotoCaptureError("encode-failed");
   }
   ctx.drawImage(video, crop.sx, crop.sy, crop.sSize, crop.sSize, 0, 0, crop.size, crop.size);
 
   const dataUrl = canvas.toDataURL("image/jpeg", PHOTO_QUALITY);
   if (!dataUrl.startsWith("data:image/jpeg;base64,")) {
-    throw new PhotoCaptureError("encode-failed", "This browser could not create the photo.");
+    throw new PhotoCaptureError("encode-failed");
   }
   if (dataUrl.length > LIMITS.photoMaxChars) {
-    throw new PhotoCaptureError("too-large", "The photo came out too large. Try again in different lighting.");
+    throw new PhotoCaptureError("too-large");
   }
   return dataUrl;
 }
