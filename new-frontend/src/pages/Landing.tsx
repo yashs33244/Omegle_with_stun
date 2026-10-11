@@ -14,6 +14,7 @@ import { getCountryByCode, getLanguageByCode } from "../lib/data";
 import { FLAG_DEFAULTS, type MatchMode, type Preferences } from "../lib/protocol";
 import { MatchModeToggle } from "@/components/MatchModeToggle";
 import { PreflightCheck } from "@/components/room/PreflightCheck";
+import { useMediaQuery } from "@/hooks/useMediaQuery";
 import { useStartOptions } from "@/hooks/useStartOptions";
 import { useStreamVideo } from "@/hooks/useStreamVideo";
 import { runningOnMobile } from "@/lib/mobile";
@@ -47,6 +48,8 @@ export const Landing: React.FC<LandingProps> = ({
   const [step, setStep] = useState<"home" | "chat">("home");
   const startOptions = useStartOptions(defaultMode);
   const [isPhone] = useState(runningOnMobile);
+  // Two columns from Tailwind `md`: Start then lives under the mode toggle instead of in a sticky bar.
+  const twoColumns = useMediaQuery("(min-width: 768px)");
 
   // Fetch the call screen now and download/compile the moderation models once
   // the start screen is idle, so neither competes with its first paint.
@@ -149,6 +152,34 @@ export const Landing: React.FC<LandingProps> = ({
     .filter(Boolean)
     .join(" · ");
 
+  const startBlock = (
+    <div className="mx-auto w-full max-w-5xl md:max-w-none">
+      <Button
+        onClick={openSetup}
+        disabled={!hasPermission}
+        size="lg"
+        data-testid="start-chat"
+        className="w-full min-h-14 justify-center text-xl font-bold bg-yellow-400 text-black hover:bg-yellow-300 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {t("start")}
+      </Button>
+      <p className="mt-1 text-xs text-gray-300 text-center" data-testid="rules-reminder">
+        {!hasPermission && <span className="block">{t("camera.allowToContinue")}</span>}
+        <Trans
+          t={t}
+          i18nKey="rules.reminder"
+          components={{
+            guidelines: (
+              <Link
+                to="/guidelines"
+                className="inline-flex min-h-tap min-w-tap items-center justify-center px-1 underline text-yellow-300"
+              />
+            ),
+          }}
+        />
+      </p>
+    </div>
+  );
   return (
     <div className="bg-gray-900 text-white">
       {/* Everything above the footer fills the first screen, so the footer starts below the fold. */}
@@ -167,9 +198,9 @@ export const Landing: React.FC<LandingProps> = ({
         </header>
 
         <main className="flex-1 w-full max-w-5xl mx-auto px-4 pt-3 pb-3 flex flex-col gap-3 md:flex-row md:items-start md:gap-8 md:pt-8">
-          {/* Camera tile with the permission state inside it */}
-          <section aria-label={t("camera.preview")} className="md:flex-1 md:order-2 space-y-2">
-            <div className="relative aspect-video w-full overflow-hidden rounded-xl border-2 border-black bg-black shadow-md">
+          {/* Camera tile with the permission state inside it. Phones: it takes whatever height the controls leave. */}
+          <section aria-label={t("camera.preview")} className="flex min-h-0 flex-1 flex-col gap-2 md:order-2">
+            <div className="relative w-full min-h-[12rem] flex-1 overflow-hidden rounded-xl border-2 border-black bg-black shadow-md md:aspect-video md:flex-none">
               {stream && (
                 <video
                   ref={tileVideoRef}
@@ -177,7 +208,7 @@ export const Landing: React.FC<LandingProps> = ({
                   playsInline
                   muted
                   aria-hidden="true"
-                  className="w-full h-full object-cover"
+                  className="absolute inset-0 h-full w-full object-cover"
                   style={{ transform: "scaleX(-1)" }}
                 />
               )}
@@ -250,38 +281,17 @@ export const Landing: React.FC<LandingProps> = ({
                 {t("profile.meeting", { gender: t(`room:settings.gender.${preferences.genderFilter}`) })}
               </p>
             )}
+
+            {twoColumns && <div className="pt-2">{startBlock}</div>}
           </div>
         </main>
 
-        {/* Phones: pinned above the home indicator. Desktop: a plain row under the two columns. */}
-        <StickyBar aria-label={t("start")} className="md:static md:border-0 md:bg-transparent md:pb-8" data-testid="start-bar">
-          <div className="mx-auto w-full max-w-5xl md:max-w-sm">
-            <Button
-              onClick={openSetup}
-              disabled={!hasPermission}
-              size="lg"
-              data-testid="start-chat"
-              className="w-full min-h-14 justify-center text-xl font-bold bg-yellow-400 text-black hover:bg-yellow-300 disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              {t("start")}
-            </Button>
-            <p className="mt-1 text-xs text-gray-300 text-center" data-testid="rules-reminder">
-              {!hasPermission && <span className="block">{t("camera.allowToContinue")}</span>}
-              <Trans
-                t={t}
-                i18nKey="rules.reminder"
-                components={{
-                  guidelines: (
-                    <Link
-                      to="/guidelines"
-                      className="inline-flex min-h-tap min-w-tap items-center justify-center px-1 underline text-yellow-300"
-                    />
-                  ),
-                }}
-              />
-            </p>
-          </div>
-        </StickyBar>
+{/* Phones: pinned above the home indicator. */}
+        {!twoColumns && (
+          <StickyBar aria-label={t("start")} data-testid="start-bar">
+            {startBlock}
+          </StickyBar>
+        )}
       </div>
 
       <Footer />

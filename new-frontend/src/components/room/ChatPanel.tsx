@@ -30,9 +30,9 @@ const TypingDots: React.FC<{ size: "sm" | "md" }> = ({ size }) => {
   const dot = size === "sm" ? "w-1 h-1" : "w-2 h-2";
   return (
     <div className="flex space-x-1" aria-hidden="true">
-      <div className={`${dot} bg-yellow-400 rounded-full animate-bounce`}></div>
-      <div className={`${dot} bg-yellow-400 rounded-full animate-bounce`} style={{ animationDelay: "0.1s" }}></div>
-      <div className={`${dot} bg-yellow-400 rounded-full animate-bounce`} style={{ animationDelay: "0.2s" }}></div>
+      <div className={`${dot} bg-yellow-400 rounded-full animate-bounce motion-reduce:animate-none`}></div>
+      <div className={`${dot} bg-yellow-400 rounded-full animate-bounce motion-reduce:animate-none`} style={{ animationDelay: "0.1s" }}></div>
+      <div className={`${dot} bg-yellow-400 rounded-full animate-bounce motion-reduce:animate-none`} style={{ animationDelay: "0.2s" }}></div>
     </div>
   );
 };

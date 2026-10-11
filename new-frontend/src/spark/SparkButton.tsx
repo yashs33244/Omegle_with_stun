@@ -40,7 +40,7 @@ export const SparkButton: React.FC<SparkButtonProps> = ({ spark, className }) =>
       data-testid="spark-button"
       data-cooldown={cooling ? "1" : undefined}
       className={cn(
-        "relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full border-2 border-black text-black shadow-[0_3px_0_#000] transition-colors",
+        "relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full border-2 border-black text-black shadow-[0_3px_0_#000] transition-colors max-[379px]:h-12 max-[379px]:w-12",
         "focus:outline-none focus-visible:ring-2 focus-visible:ring-yellow-400",
         cooling || spark.pending ? "bg-gray-700 text-gray-300" : "bg-yellow-400 hover:bg-yellow-300",
         !spark.ready && !cooling && "opacity-60",

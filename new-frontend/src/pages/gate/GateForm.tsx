@@ -31,8 +31,9 @@ export interface GateFormProps {
 const fieldClass =
   "w-full min-h-tap rounded-lg border-2 border-black bg-white px-3 py-2 text-black text-base text-center tabular-nums focus:outline-none focus:ring-2 focus:ring-yellow-500";
 
-const checkboxRowClass = "flex min-h-tap items-center gap-3 cursor-pointer rounded-lg px-1 -mx-1 hover:bg-gray-50";
-const checkboxClass = "h-5 w-5 shrink-0 accent-yellow-500";
+// The box sits on the first line of its label (the Terms label wraps to three lines on phones).
+const checkboxRowClass = "flex min-h-tap items-start gap-3 cursor-pointer rounded-lg px-1 py-2 -mx-1 hover:bg-gray-50";
+const checkboxClass = "mt-0.5 h-5 w-5 shrink-0 accent-yellow-500";
 
 /** Opens in a new tab so the half-filled gate is kept. */
 const DocLink: React.FC<{ to: string; children?: React.ReactNode }> = ({

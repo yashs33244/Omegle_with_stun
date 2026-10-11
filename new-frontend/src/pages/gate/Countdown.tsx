@@ -22,7 +22,7 @@ export const Countdown: React.FC<{ until: number; onDone?: () => void; testId?: 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [left <= 0]);
   return (
-    <span data-testid={testId} className="font-mono tabular-nums">
+    <span data-testid={testId} className="tabular-nums">
       {formatDuration(left)}
     </span>
   );

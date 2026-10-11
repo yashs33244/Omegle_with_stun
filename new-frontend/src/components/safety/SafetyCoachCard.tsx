@@ -24,7 +24,7 @@ export const SafetyCoachCard: React.FC<SafetyCoachCardProps> = ({ onContinue, on
         aria-modal="true"
         aria-labelledby="safety-coach-title"
         data-testid="safety-coach"
-        className="w-full max-w-lg rounded-lg border-2 border-yellow-400 bg-gray-800 p-6 text-white shadow-xl"
+        className="w-full max-w-lg rounded-xl border-2 border-black bg-gray-800 p-6 text-white shadow-[0_6px_0_#000]"
       >
         <div className="mb-4 flex items-center gap-2">
           <ShieldCheck className="h-6 w-6 text-yellow-400" aria-hidden="true" />
@@ -49,7 +49,7 @@ export const SafetyCoachCard: React.FC<SafetyCoachCardProps> = ({ onContinue, on
           <button
             type="button"
             onClick={onBack}
-            className="flex-1 rounded-lg border border-gray-600 bg-gray-700 px-4 py-2 font-medium hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-yellow-400"
+            className="flex min-h-tap flex-1 items-center justify-center rounded-lg border-2 border-black bg-gray-800 px-4 font-bold text-white shadow-[0_3px_0_#000] hover:bg-gray-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-yellow-400"
           >
             {t("coach.back")}
           </button>
@@ -59,7 +59,7 @@ export const SafetyCoachCard: React.FC<SafetyCoachCardProps> = ({ onContinue, on
             // Focus the main action rather than the first helpline link.
             autoFocus
             data-testid="safety-coach-continue"
-            className="retro-button flex-1"
+            className="flex min-h-tap flex-1 items-center justify-center rounded-lg border-2 border-black bg-yellow-400 px-4 font-bold text-black shadow-[0_3px_0_#000] hover:bg-yellow-300 focus:outline-none focus-visible:ring-2 focus-visible:ring-white"
           >
             {t("coach.continue")}
           </button>

@@ -36,7 +36,7 @@ export const CaptionsToggle: React.FC<CaptionsToggleProps> = ({ captions, classN
         data-testid="captions-toggle"
         data-listening={listening ? "1" : undefined}
         className={cn(
-          "relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full border-2 border-black shadow-[0_3px_0_#000] transition-colors",
+          "relative flex h-14 w-14 shrink-0 items-center justify-center rounded-full border-2 border-black shadow-[0_3px_0_#000] transition-colors max-[379px]:h-12 max-[379px]:w-12",
           "focus:outline-none focus-visible:ring-2 focus-visible:ring-yellow-400 disabled:cursor-not-allowed disabled:opacity-50",
           enabled ? "bg-yellow-400 text-black hover:bg-yellow-300" : "bg-black/60 text-white hover:bg-gray-800",
         )}
@@ -47,11 +47,12 @@ export const CaptionsToggle: React.FC<CaptionsToggleProps> = ({ captions, classN
         )}
       </button>
       {noticeOpen && (
+        // Hangs from the button's right edge (the button sits near the screen edge); on landscape phones it opens to the left of the rail.
         <div
           id="captions-notice"
           role="note"
           data-testid="captions-notice"
-          className="absolute bottom-full left-1/2 z-[30] mb-2 w-64 -translate-x-1/2 rounded-lg border-2 border-black bg-gray-900 p-3 text-sm text-white shadow-[3px_3px_0_0_#000]"
+          className="absolute bottom-full right-0 z-[30] mb-2 w-[min(16rem,calc(100vw-1.5rem))] rounded-xl border-2 border-black bg-gray-900 p-3 text-sm text-white shadow-[3px_3px_0_0_#000] max-lg:landscape:bottom-auto max-lg:landscape:right-full max-lg:landscape:top-1/2 max-lg:landscape:mb-0 max-lg:landscape:mr-2 max-lg:landscape:-translate-y-1/2"
         >
           <p>{t("captions.privacy")}</p>
           <button
