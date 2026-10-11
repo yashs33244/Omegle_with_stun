@@ -7,6 +7,7 @@
 import { describeStaffedHours, type FlagsReader } from "../flags/flags";
 import type { Logger } from "../logger";
 import type { MatchStore } from "../store/MatchStore";
+import { CAP_MESSAGE, CLOSED_MESSAGE, FULL_MESSAGE } from "./constants";
 import type { MatchCaps } from "./limits";
 
 export interface QueueRefusal {
@@ -23,9 +24,6 @@ export interface QueueGate {
   recordMatch(deviceId: string): Promise<void>;
 }
 
-export const CAP_MESSAGE = "You have had a lot of matches this hour. Take a break and try again later.";
-export const FULL_MESSAGE = "A lot of people are waiting right now. Try again in a few minutes.";
-
 export class SessionQueueGate implements QueueGate {
   constructor(
     private readonly flags: FlagsReader,
@@ -40,7 +38,7 @@ export class SessionQueueGate implements QueueGate {
     if (!status.open) {
       const hours = describeStaffedHours(this.flags.current().staffed_hours);
       const message =
-        status.message ?? (hours ? `Matching is open ${hours}. See you then.` : "Matching is closed right now.");
+        status.message ?? (hours ? `Matching is open ${hours}. See you then.` : CLOSED_MESSAGE);
       return { error: "matching_closed", message };
     }
     const { waiting } = await this.store.stats();

@@ -7,24 +7,20 @@
  * secret rotation; writes use the current one.
  */
 import { createHmac } from "node:crypto";
+import {
+  DEVICE_LOCKOUT_MS,
+  FINGERPRINT_LOCKOUT_MS,
+  KEY,
+  MATCH_CAP_IP_BINDING_TTL_MS,
+  MATCH_CAP_WINDOW_MS,
+  SALT_DOMAIN,
+  SESSION_RATE_WINDOW_MS,
+} from "./constants";
 import { ipBuckets } from "./geo";
-import type { SessionKv } from "./kv";
-
-const DAY_MS = 24 * 60 * 60_000;
-const HOUR_MS = 60 * 60_000;
-const MINUTE_MS = 60_000;
-
-/** A device that proved it is under 18 stays locked out for a year. */
-export const DEVICE_LOCKOUT_MS = 365 * DAY_MS;
-/**
- * The fingerprint is coarse (many phones of one model share it), so it is only
- * used together with the network block, and for a shorter time, to keep
- * strangers on the same carrier from being locked out with the child.
- */
-export const FINGERPRINT_LOCKOUT_MS = 30 * DAY_MS;
+import type { SessionKv } from "./SessionKv";
 
 export function deriveSalt(secret: string, purpose: string): Uint8Array {
-  return new Uint8Array(createHmac("sha256", secret).update(`chizzy:salt:${purpose}`).digest());
+  return new Uint8Array(createHmac("sha256", secret).update(`${SALT_DOMAIN}${purpose}`).digest());
 }
 
 /** Salted SHA-256 HMAC, hex. */
@@ -46,8 +42,8 @@ export class Lockout {
 
   private keys(salt: Uint8Array, deviceId: string, fingerprint: string, ip: string): [string, string] {
     return [
-      `lock:d:${saltedHash(salt, `device:${deviceId}`)}`,
-      `lock:f:${saltedHash(salt, `fingerprint:${fingerprint}:${ipBuckets(ip).network}`)}`,
+      KEY.deviceLockout(saltedHash(salt, `device:${deviceId}`)),
+      KEY.fingerprintLockout(saltedHash(salt, `fingerprint:${fingerprint}:${ipBuckets(ip).network}`)),
     ];
   }
 
@@ -80,10 +76,10 @@ export class SessionRateLimiter {
 
   async allow(rawIp: string): Promise<boolean> {
     const { ip, network } = ipBuckets(rawIp);
-    const window = Math.floor(this.clock() / MINUTE_MS);
+    const window = Math.floor(this.clock() / SESSION_RATE_WINDOW_MS);
     const [perIp, perNet] = await Promise.all([
-      this.kv.incr(`rl:ip:${saltedHash(this.salt, ip)}:${window}`, MINUTE_MS),
-      this.kv.incr(`rl:net:${saltedHash(this.salt, network)}:${window}`, MINUTE_MS),
+      this.kv.incr(KEY.ipRate(saltedHash(this.salt, ip), window), SESSION_RATE_WINDOW_MS),
+      this.kv.incr(KEY.networkRate(saltedHash(this.salt, network), window), SESSION_RATE_WINDOW_MS),
     ]);
     return perIp <= this.limits.perIpPerMinute && perNet <= this.limits.perNetworkPerMinute;
   }
@@ -108,26 +104,26 @@ export class MatchCaps {
   ) {}
 
   private hour(): number {
-    return Math.floor(this.clock() / HOUR_MS);
+    return Math.floor(this.clock() / MATCH_CAP_WINDOW_MS);
   }
 
   async bindIp(deviceId: string, rawIp: string): Promise<void> {
-    await this.kv.set(`cap:ipof:${deviceId}`, saltedHash(this.salt, ipBuckets(rawIp).ip), DAY_MS);
+    await this.kv.set(KEY.capIpOf(deviceId), saltedHash(this.salt, ipBuckets(rawIp).ip), MATCH_CAP_IP_BINDING_TTL_MS);
   }
 
   async overCap(deviceId: string): Promise<boolean> {
     const hour = this.hour();
-    const ipHash = await this.kv.get(`cap:ipof:${deviceId}`);
-    const keys = [`cap:d:${deviceId}:${hour}`];
-    if (ipHash) keys.push(`cap:i:${ipHash}:${hour}`);
+    const ipHash = await this.kv.get(KEY.capIpOf(deviceId));
+    const keys = [KEY.capDevice(deviceId, hour)];
+    if (ipHash) keys.push(KEY.capIp(ipHash, hour));
     const [byDevice, byIp] = await this.kv.mget(keys);
     return Number(byDevice ?? 0) >= this.limits.perDevicePerHour || Number(byIp ?? 0) >= this.limits.perIpPerHour;
   }
 
   async recordMatch(deviceId: string): Promise<void> {
     const hour = this.hour();
-    const ipHash = await this.kv.get(`cap:ipof:${deviceId}`);
-    await this.kv.incr(`cap:d:${deviceId}:${hour}`, HOUR_MS);
-    if (ipHash) await this.kv.incr(`cap:i:${ipHash}:${hour}`, HOUR_MS);
+    const ipHash = await this.kv.get(KEY.capIpOf(deviceId));
+    await this.kv.incr(KEY.capDevice(deviceId, hour), MATCH_CAP_WINDOW_MS);
+    if (ipHash) await this.kv.incr(KEY.capIp(ipHash, hour), MATCH_CAP_WINDOW_MS);
   }
 }
