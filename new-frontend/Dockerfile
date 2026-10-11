@@ -3,7 +3,7 @@
 # Build:  docker build --build-arg VITE_API_URL=https://api.example.com -t chizzy-frontend ./new-frontend
 # Image tags are literal (not ARGs) so dependabot can bump them.
 
-FROM node:22.23.3-alpine3.24 AS build
+FROM node:26.10.0-alpine3.24 AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --no-audit --no-fund
