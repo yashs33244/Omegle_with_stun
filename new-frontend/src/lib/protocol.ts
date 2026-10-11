@@ -64,6 +64,26 @@ export const LIMITS = {
   takedownDescriptionMax: 2_000,
 } as const;
 
+/** Spark icebreakers: one shared prompt shown to both sides at the same moment. */
+export const SPARK = {
+  /** Minimum gap between two prompts in one room; both sides share the cooldown. */
+  cooldownMs: 10_000,
+  /** How long a client keeps the prompt card on screen. */
+  cardMs: 12_000,
+  /** The server does not repeat any of the last N prompt ids of a room. */
+  historySize: 20,
+} as const;
+
+/** Live captions: the sender's browser transcribes its own speech; the server only relays. */
+export const CAPTIONS = {
+  /** UTF-8 bytes of one segment's text. */
+  maxBytes: 1_024,
+  /** Segments per second per socket; the rest are dropped. */
+  maxPerSec: 10,
+  /** Interim segments are sent at most this often; finals go out at once. */
+  interimEveryMs: 250,
+} as const;
+
 /* ------------------------------------------------------------------ */
 /* Shared value schemas                                                */
 /* ------------------------------------------------------------------ */
@@ -220,6 +240,29 @@ export const moderationSignalSchema = z.object({
   kind: z.enum(["nsfw-blur", "no-face", "virtual-camera", "model-unavailable"]),
 });
 
+export const sparkRequestSchema = roomRefSchema;
+
+/** Byte length as the wire sees it, so a 1 KB cap means 1 KB in any script. */
+const utf8Bytes = (text: string): number => new TextEncoder().encode(text).length;
+
+/**
+ * One piece of the sender's own transcript. Relayed to the partner only,
+ * never stored or logged. Later segments with the same id replace earlier
+ * (interim) ones until `final`.
+ */
+export const captionSegmentSchema = z.object({
+  roomId,
+  id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+  text: z
+    .string()
+    .trim()
+    .min(1)
+    .refine((text) => utf8Bytes(text) <= CAPTIONS.maxBytes, { message: `text must be at most ${CAPTIONS.maxBytes} bytes` }),
+  final: z.boolean(),
+  /** Language the sender's recogniser ran in; the receiver translates from it. */
+  lang: languageCode,
+});
+
 export type HelloPayload = z.infer<typeof helloSchema>;
 export type UpdatePreferencesPayload = z.infer<typeof updatePreferencesSchema>;
 export type RoomRef = z.infer<typeof roomRefSchema>;
@@ -230,6 +273,7 @@ export type ReportPayload = z.infer<typeof reportSchema>;
 export type CallFailedPayload = z.infer<typeof callFailedSchema>;
 export type CallTelemetryPayload = z.infer<typeof callTelemetrySchema>;
 export type ModerationSignalPayload = z.infer<typeof moderationSignalSchema>;
+export type CaptionSegmentPayload = z.infer<typeof captionSegmentSchema>;
 
 /* ------------------------------------------------------------------ */
 /* Acks                                                                */
@@ -292,6 +336,7 @@ export type HelloAck = Ack<{
 }>;
 export type ChatAck = Ack<{ id: string; ts: number; redacted: boolean }>;
 export type ReportAck = Ack<{ reportId: string }>;
+export type SparkAck = Ack<{ promptId: string }>;
 export type SimpleAck = Ack;
 
 /* ------------------------------------------------------------------ */
@@ -379,6 +424,14 @@ export interface ServerToClientEvents {
   "session:restricted": (p: { restriction: Restriction }) => void;
   /** Coins and premium unlocks, sent after session:hello and after every purchase, unlock or admin adjustment. */
   "wallet:update": (p: WalletView) => void;
+  /**
+   * An icebreaker for both members, sent at the same moment. `from` says whose
+   * tap it was. The id maps to text in each client's own language
+   * (new-frontend/public/spark/prompts.<lang>.json, generated from backend/src/spark/catalog.ts).
+   */
+  "spark:show": (p: { roomId: string; promptId: string; from: "you" | "partner"; at: number }) => void;
+  /** The partner's live caption, as their own browser transcribed it. */
+  "caption:segment": (p: CaptionSegmentPayload) => void;
 }
 
 export interface ClientToServerEvents {
@@ -401,6 +454,10 @@ export interface ClientToServerEvents {
   "call:failed": (p: CallFailedPayload) => void;
   "call:telemetry": (p: CallTelemetryPayload) => void;
   "moderation:signal": (p: ModerationSignalPayload) => void;
+  /** Ask for a Spark prompt; both sides get spark:show. rate_limited while the room cooldown runs. */
+  "spark:request": (p: RoomRef, ack: (res: SparkAck) => void) => void;
+  /** A piece of my own transcript for the partner. Dropped over CAPTIONS.maxPerSec. */
+  "caption:segment": (p: CaptionSegmentPayload) => void;
 }
 
 /* ------------------------------------------------------------------ */

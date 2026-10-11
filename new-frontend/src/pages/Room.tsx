@@ -33,6 +33,8 @@ import { isBlurred } from "@/moderation/blurGate";
 import { useFaceGate } from "@/moderation/useFaceGate";
 import { useRemoteBlur } from "@/moderation/useRemoteBlur";
 import { activeCameraLabel, isVirtualCameraLabel } from "@/moderation/virtualCamera";
+import { CaptionsOverlay, CaptionsToggle, useCaptions } from "@/captions";
+import { SparkButton, SparkCard, useSpark } from "@/spark";
 
 export interface RoomProps {
   profile: Profile;
@@ -187,6 +189,15 @@ const RoomSession: React.FC<RoomProps> = ({
   const inCall = state.status === "in-call";
   const matchPhase = state.status === "match-found" || state.status === "starting-call";
   const callRoomId = inCall ? state.roomId : null;
+  const spark = useSpark({ signaling, roomId: callRoomId });
+  const captions = useCaptions({
+    signaling,
+    roomId: callRoomId,
+    localStream,
+    micEnabled,
+    partnerLanguage: state.partner?.language ?? null,
+    viewerLanguage: profile.language,
+  });
 
   const [showChat, setShowChat] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
@@ -525,7 +536,7 @@ const RoomSession: React.FC<RoomProps> = ({
                     <NameBadge name={state.partner.name} country={state.partner.country} />
                   </div>
                 )}
-                <div className="absolute top-4 left-4" style={{ zIndex: 5 }}>
+                <div className="absolute top-4 left-4 flex items-center gap-2" style={{ zIndex: 5 }}>
                   <Button
                     onClick={enterTextOnly}
                     variant="outline"
@@ -536,7 +547,10 @@ const RoomSession: React.FC<RoomProps> = ({
                     <MessageCircle className="w-4 h-4 mr-2" />
                     {t("textOnly.toggle")}
                   </Button>
+                  <SparkButton spark={spark} />
+                  <CaptionsToggle captions={captions} />
                 </div>
+                <CaptionsOverlay captions={captions} />
               </>
             )}
 
@@ -651,6 +665,7 @@ const RoomSession: React.FC<RoomProps> = ({
         />
       )}
       {roomGate.overlay}
+      <SparkCard spark={spark} />
     </div>
   );
 };

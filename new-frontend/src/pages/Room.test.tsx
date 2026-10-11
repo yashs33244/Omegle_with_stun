@@ -31,6 +31,7 @@ vi.mock("@/hooks/useSignaling", async (importOriginal) => {
       search: vi.fn(),
       subscribe: vi.fn(() => () => {}),
       send: vi.fn(),
+      request: vi.fn(async () => ({ ok: false as const, error: "internal" as const })),
     }),
   };
 });
