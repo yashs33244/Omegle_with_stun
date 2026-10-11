@@ -89,8 +89,8 @@ describe("ChatSettings", () => {
 
   it("keeps the gender and language preferences and points reporting to the flag", () => {
     renderSettings();
-    expect(screen.getByRole("button", { name: "Who do you want to meet?" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Preferred Language" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: labelled("Who do you want to meet?") })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: labelled("Preferred Language") })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Report/ })).not.toBeInTheDocument();
     expect(screen.getByText(/tap the flag on their video/)).toBeInTheDocument();
   });
