@@ -39,7 +39,7 @@ const DocLink: React.FC<{ to: string; children?: React.ReactNode }> = ({
   to,
   children,
 }) => (
-  <a href={to} target="_blank" rel="noopener" className="underline font-medium inline-block py-3 -my-3">
+  <a href={to} target="_blank" rel="noopener" className="underline font-medium inline-block py-3 -my-3 px-1 -mx-1">
     {children}
   </a>
 );
