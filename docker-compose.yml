@@ -149,7 +149,7 @@ services:
     logging: *logging
 
   gateway:
-    image: nginxinc/nginx-unprivileged:1.28.2-alpine3.23
+    image: nginxinc/nginx-unprivileged:1.31.2-alpine3.23
     volumes:
       # nginx.conf (worker limits) includes /etc/nginx/chizzy/gateway.conf.
       - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
