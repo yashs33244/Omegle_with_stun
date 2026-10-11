@@ -1,7 +1,7 @@
 {
   "profile": {
-    "editAria": "प्रोफ़ाइल फ़ोटो और विवरण संपादित करें",
-    "guest": "अतिथि उपयोगकर्ता",
+    "editAria": "प्रोफ़ाइल फ़ोटो और डिटेल्स बदलें",
+    "guest": "गेस्ट यूज़र",
     "topicsCount_one": "{{count}} विषय",
     "topicsCount_other": "{{count}} विषय",
     "meeting": "मिलना है: {{gender}}",
@@ -23,24 +23,24 @@
     "title": "सेटिंग्स",
     "matchHeading": "किससे मिलना है",
     "profileHeading": "आपके बारे में",
-    "privacyHeading": "निजता",
-    "language": "मैं बोलता/बोलती हूँ",
+    "privacyHeading": "प्राइवेसी",
+    "language": "मेरी भाषा",
     "country": "देश",
     "done": "हो गया"
   },
   "start": "शुरू करें",
   "rules": {
-    "reminder": "केवल 18+ के लिए। नग्नता, नफ़रत या स्पैम नहीं। <guidelines>नियम</guidelines>"
+    "reminder": "सिर्फ़ 18+ के लिए। नग्नता, नफ़रत या स्पैम नहीं। <guidelines>नियम</guidelines>"
   },
   "setup": {
     "captureTitle": "अपनी फ़ोटो लें",
     "captureDescription": "अपनी प्रोफ़ाइल के लिए अभी एक फ़ोटो लें",
     "detailsTitle": "प्रोफ़ाइल पूरी करें",
-    "detailsDescription": "अपना विवरण भरें और विषय चुनें",
-    "previewAria": "कैमरा पूर्वावलोकन",
+    "detailsDescription": "अपनी डिटेल्स भरें और विषय चुनें",
+    "previewAria": "कैमरा प्रीव्यू",
     "previewReady": "● तैयार",
     "previewLoading": "● लोड हो रहा है...",
-    "positionFace": "अपना चेहरा फ़्रेम में रखें और कैप्चर पर क्लिक करें",
+    "positionFace": "अपना चेहरा फ़्रेम में रखें और कैप्चर पर टैप करें",
     "capture": "फ़ोटो लें",
     "skip": "बिना फ़ोटो के जारी रखें",
     "photoAlt": "आपकी प्रोफ़ाइल फ़ोटो",
@@ -50,15 +50,15 @@
   "form": {
     "nameLabel": "आपका नाम",
     "namePlaceholder": "अपना नाम लिखें",
-    "genderLabel": "लिंग",
+    "genderLabel": "जेंडर",
     "gender": {
       "male": "पुरुष",
       "female": "महिला",
       "other": "अन्य",
-      "unspecified": "बताना नहीं चाहते"
+      "unspecified": "नहीं बताना चाहते"
     },
-    "genderHint": "केवल मैचिंग फ़िल्टर के लिए उपयोग होता है। यह किसी को कभी नहीं दिखाया जाता।",
-    "topicsLegend": "विषय चुनें (कम से कम एक चुनें)",
+    "genderHint": "सिर्फ़ मैचिंग फ़िल्टर के लिए इस्तेमाल होता है। यह किसी को कभी नहीं दिखाया जाता।",
+    "topicsLegend": "विषय चुनें (कम से कम एक)",
     "errors": {
       "nameRequired": "अपना नाम लिखें।",
       "topicsRequired": "कम से कम एक विषय चुनें।"
