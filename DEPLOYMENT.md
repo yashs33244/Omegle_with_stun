@@ -101,6 +101,9 @@ Repository **variable** (not a secret) and the canary secret:
 |---|---|---|
 | `CANARY_URL` | variable | API origin the canary tests every 15 minutes; unset disables the canary |
 | `CANARY_TURNSTILE_BYPASS` | secret, optional | token the canary sends instead of Cloudflare's dummy test token (see "Synthetic canary") |
+| `PAGES_ENABLED` | variable | `true` turns on `pages.yml`, the Cloudflare Pages deploy of the SPA (see "Cloudflare Pages") |
+| `PAGES_API_URL`, `PAGES_SITE_URL` | variables, optional | `VITE_API_URL` and `VITE_SITE_URL` for the Pages build; default `https://chizzy-api.onrender.com` and `https://chizzy.pages.dev` |
+| `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | secrets | API token with the "Cloudflare Pages: Edit" permission and the account id, used by `pages.yml` |
 
 Secrets nothing reads any more and that can be deleted: `JWT_SECRET`,
 `FRONTEND_URL`, `DB_URL`, `REDIS_URL` (Redis is part of the stack),
@@ -186,6 +189,86 @@ Also on Cloudflare: Turnstile (the site key and secret above), Realtime TURN
 front of `chizzyapi.itsyash.space/admin/api/*` and `chizzy.itsyash.space/admin`
 (free for small teams), so the admin console is not on the open internet even
 though it also needs `ADMIN_TOKEN`.
+
+## Cloudflare Pages (free, commercial use allowed)
+
+Vercel's Hobby plan is for non-commercial use only, so once coin packs are on
+sale the static SPA moves to [Cloudflare Pages](https://developers.cloudflare.com/pages/),
+whose free plan allows commercial sites (unlimited bandwidth and requests,
+500 builds a month, which direct upload does not consume). The API stays
+where it is (Render on the free tier, the EC2 stack in production).
+Everything is committed; only the account and two secrets are missing:
+
+- `.github/workflows/pages.yml` builds `new-frontend` on every push to `new-v`
+  (and on `workflow_dispatch`) with `VITE_API_URL` and `VITE_SITE_URL` from
+  the repository variables, re-runs the frontend checks, and uploads `dist/`
+  with `wrangler pages deploy --project-name chizzy --branch <branch>`. The
+  job is skipped until the `PAGES_ENABLED` variable is `true`.
+- `new-frontend/_headers.template` is rendered into `dist/_headers` by
+  `scripts/write-headers.mjs` at the end of `npm run build`: the same
+  security headers as `vercel.json` and the nginx image, with the CSP
+  `connect-src` derived from `VITE_API_URL`. `scripts/check-frontend-headers.sh`
+  (CI) fails when the three drift. The script also writes `dist/<route>.html`
+  next to each prerendered `dist/<route>/index.html`, because Pages answers
+  `/terms` with a 308 to `/terms/` when only the directory exists; with both,
+  `/terms` and `/terms/` are 200 with the route's own title.
+- `new-frontend/wrangler.jsonc` names the project and the output directory;
+  there are no Pages Functions, so the free Functions quota is not used.
+- Pages has no `404.html` here, so (as documented under "Serving Pages") every
+  unknown path gets `index.html` with a 200, the same SPA fallback nginx and
+  Vercel do. One difference from nginx: a missing file under `/models/` or
+  `/assets/` is also answered with the shell (200, immutable); nginx returns
+  a 404 there. Never overwrite a model file, always publish a new path.
+- Pages sends `Access-Control-Allow-Origin: *` on every asset and
+  `Cache-Control: public, max-age=0, must-revalidate` on what `_headers` does
+  not override (equivalent to nginx's `no-cache`). The 25 MiB per-file limit
+  is fine: the largest model file is 11.8 MiB.
+
+### One-time setup
+
+1. Create a Cloudflare account (the one that already holds Turnstile and the
+   TURN key is fine) and note the account id (Workers & Pages overview, right
+   column).
+2. Create the project by uploading once from a laptop (direct upload; no git
+   integration, so Cloudflare never needs repository access):
+   ```sh
+   cd new-frontend
+   VITE_API_URL=https://chizzy-api.onrender.com VITE_SITE_URL=https://chizzy.pages.dev npm run build
+   npx wrangler login
+   npx wrangler pages project create chizzy --production-branch new-v
+   npx wrangler pages deploy dist --project-name chizzy --branch new-v
+   ```
+   `npx wrangler pages dev dist --port 8788` serves the build locally with
+   the `_headers` rules applied, for checking a change before it is pushed.
+3. Create an API token (My Profile -> API Tokens -> Create Token -> "Edit
+   Cloudflare Workers" template, or a custom token with Account ->
+   "Cloudflare Pages: Edit" only) and add it to the repository as the
+   `CLOUDFLARE_API_TOKEN` secret, with the account id as
+   `CLOUDFLARE_ACCOUNT_ID`.
+4. Set the repository variables: `PAGES_ENABLED=true`; `PAGES_SITE_URL` to
+   the public origin (`https://chizzy.pages.dev` until the custom domain is
+   attached, then the custom origin so canonical links, `sitemap.xml` and
+   `robots.txt` point at it); `PAGES_API_URL` only if the API is not
+   `https://chizzy-api.onrender.com`.
+5. Add the site origin to the backend's `CORS_ORIGINS` (Render environment or
+   the GitHub secret) and register the hostname in the Turnstile widget.
+6. Custom domain: Workers & Pages -> chizzy -> Custom domains -> add
+   `chizzy.<domain>`. For a domain on Cloudflare DNS the CNAME is created
+   automatically; otherwise add `CNAME chizzy.<domain> -> chizzy.pages.dev`
+   where the domain is hosted. The `*.pages.dev` URL keeps working; set
+   `PAGES_SITE_URL` to the custom origin and redeploy so the canonical links
+   change.
+7. Vercel: keep the project as a preview-only mirror (Vercel project ->
+   Settings -> Git: point the production branch at a branch that never
+   moves, so pushes to `new-v` only create preview deployments) or delete the
+   project. Nothing in the repository depends on it; `vercel.json` stays so
+   `scripts/check-frontend-headers.sh` keeps the three header sets in step.
+   The Hobby plan must not serve the paid product, so do this before the
+   first coin pack is sold.
+
+Rollback: Workers & Pages -> chizzy -> Deployments -> "Rollback to this
+deployment" on the previous production deployment, or re-run `pages.yml` on
+the previous commit via `workflow_dispatch`.
 
 ## First-time setup
 

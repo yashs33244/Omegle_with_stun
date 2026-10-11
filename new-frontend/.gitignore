@@ -25,3 +25,6 @@ dist-e2e
 *.sw?
 .env.local
 .vercel
+
+# wrangler pages dev state
+.wrangler

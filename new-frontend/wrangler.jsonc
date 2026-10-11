@@ -1,0 +1,9 @@
+// Cloudflare Pages project for the SPA (direct upload, no Pages Functions).
+// `npx wrangler pages deploy` (pages.yml) and `npx wrangler pages dev` read
+// this file; response headers come from dist/_headers (written by
+// scripts/write-headers.mjs). See DEPLOYMENT.md "Cloudflare Pages".
+{
+  "name": "chizzy",
+  "pages_build_output_dir": "./dist",
+  "compatibility_date": "2026-10-01"
+}
