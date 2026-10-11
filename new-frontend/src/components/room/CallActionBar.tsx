@@ -1,5 +1,5 @@
 import React from "react";
-import { Flag, MessageCircle, MessageSquareText, Mic, MicOff, SkipForward, Square, SwitchCamera } from "lucide-react";
+import { Flag, MessageCircle, Mic, MicOff, SkipForward, Square, SwitchCamera, Video, VideoOff } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { CaptionsToggle, type CaptionsHandle } from "@/captions";
 import { SparkButton, type SparkHandle } from "@/spark";
@@ -95,7 +95,7 @@ export const CallActionBar = React.forwardRef<HTMLDivElement, CallActionBarProps
               tone={textOnly ? "active" : "dark"}
               onClick={onToggleTextOnly}
             >
-              <MessageSquareText className="h-6 w-6" aria-hidden="true" />
+              {textOnly ? <Video className="h-6 w-6" aria-hidden="true" /> : <VideoOff className="h-6 w-6" aria-hidden="true" />}
             </RoundButton>
             {onFlipCamera && !textOnly && (
               <RoundButton
