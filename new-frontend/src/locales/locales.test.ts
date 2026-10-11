@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resources } from "@/lib/i18n";
+import { lazyNamespaces, resources as bundled, type Lang } from "@/lib/i18n";
 
 type Tree = { [key: string]: string | Tree };
 
@@ -16,7 +16,15 @@ function flatten(tree: Tree, prefix = ""): Record<string, string> {
 const PLACEHOLDER = /\{\{\s*([\w.]+)\s*\}\}/g;
 const placeholders = (text: string) => [...text.matchAll(PLACEHOLDER)].map((m) => m[1]).sort();
 
-const hiNamespaces = Object.keys(resources.hi) as (keyof typeof resources.hi)[];
+/** Bundled and lazily loaded namespaces together, per language. */
+const resources: Record<Lang, Record<string, Tree>> = { en: { ...bundled.en }, hi: { ...bundled.hi } };
+for (const [ns, loaders] of Object.entries(lazyNamespaces)) {
+  for (const [lang, loader] of Object.entries(loaders)) {
+    resources[lang as Lang][ns] = (await loader()).default as Tree;
+  }
+}
+
+const hiNamespaces = Object.keys(resources.hi);
 
 describe("locales", () => {
   it("the console is the only English-only namespace", () => {

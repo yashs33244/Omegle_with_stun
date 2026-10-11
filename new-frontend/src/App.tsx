@@ -1,9 +1,10 @@
-import { lazy, Suspense, useState } from "react";
+import { lazy, Suspense, useState, type ComponentType } from "react";
 import { useTranslation } from "react-i18next";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { InAppBrowserNotice } from "./components/room/InAppBrowserNotice";
+import { loadNamespace, type LazyNamespace } from "./lib/i18n";
 import { detectInAppBrowser } from "./lib/mobile";
 import { RouteMeta } from "./lib/seo";
 import NotFound from "./pages/NotFound";
@@ -11,13 +12,18 @@ import { Landing } from "./pages/Landing";
 import { Gate } from "./pages/gate/Gate";
 import { PremiumProvider } from "./premium";
 
-const Terms = lazy(() => import("./pages/legal/Terms"));
-const Privacy = lazy(() => import("./pages/legal/Privacy"));
-const Guidelines = lazy(() => import("./pages/legal/Guidelines"));
-const Safety = lazy(() => import("./pages/legal/Safety"));
-const Grievance = lazy(() => import("./pages/legal/Grievance"));
-const LawEnforcement = lazy(() => import("./pages/legal/LawEnforcement"));
-const Takedown = lazy(() => import("./pages/legal/Takedown"));
+/** A route chunk together with the i18n namespace only its pages read, so neither is in the main bundle. */
+function lazyWithNamespace<P extends object>(ns: LazyNamespace, load: () => Promise<{ default: ComponentType<P> }>) {
+  return lazy(() => Promise.all([load(), loadNamespace(ns)]).then(([page]) => page));
+}
+
+const Terms = lazyWithNamespace("legal", () => import("./pages/legal/Terms"));
+const Privacy = lazyWithNamespace("legal", () => import("./pages/legal/Privacy"));
+const Guidelines = lazyWithNamespace("legal", () => import("./pages/legal/Guidelines"));
+const Safety = lazyWithNamespace("legal", () => import("./pages/legal/Safety"));
+const Grievance = lazyWithNamespace("legal", () => import("./pages/legal/Grievance"));
+const LawEnforcement = lazyWithNamespace("legal", () => import("./pages/legal/LawEnforcement"));
+const Takedown = lazyWithNamespace("legal", () => import("./pages/legal/Takedown"));
 
 const PageFallback = () => <div className="min-h-screen bg-gray-100" aria-busy="true" />;
 
@@ -27,7 +33,7 @@ const AdminFallback = () => {
 };
 
 // The moderation console is its own chunk, never part of the main bundle.
-const AdminPage = lazy(() => import("./pages/admin/AdminPage"));
+const AdminPage = lazyWithNamespace("admin", () => import("./pages/admin/AdminPage"));
 
 /** In-app browsers (Instagram, WhatsApp...) get the "open in your browser" notice before the gate. */
 const Home = () => {
