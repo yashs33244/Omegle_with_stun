@@ -1,10 +1,10 @@
-# Weekly, grouped minor+patch updates. Majors are not opened as PRs: the
-# `ignore` rules below cover runtime images whose major is pinned on purpose
-# (Node, nginx, Redis; ci.yml and scripts/check-pins.sh track them) and
-# libraries whose major needs a migration (zod 4, ioredis 6, react-router 7,
-# eslint 10, pino 10, jsdom 30). A major is upgraded
-# deliberately: open an issue, do the migration on a branch, bump the pin and
-# the ignore rule in the same PR. See CONTRIBUTING.md "Dependencies".
+# Weekly, grouped minor+patch updates. Majors are not opened as PRs: npm and
+# bun ignore every semver-major (the first config with a per-library list let
+# typescript 7 and @eslint/js 10 through within the hour), and the runtime
+# images (Node, nginx, Redis) are pinned on purpose; ci.yml and
+# scripts/check-pins.sh track them. A major is upgraded deliberately: open an
+# issue, do the migration on a branch, bump the pin in that PR. See
+# CONTRIBUTING.md "Dependencies".
 version: 2
 updates:
   - package-ecosystem: npm
@@ -19,15 +19,7 @@ updates:
       frontend-minor-and-patch:
         update-types: [minor, patch]
     ignore:
-      - dependency-name: zod
-        update-types: [version-update:semver-major]
-      - dependency-name: react-router-dom
-        update-types: [version-update:semver-major]
-      - dependency-name: eslint
-        update-types: [version-update:semver-major]
-      - dependency-name: eslint-plugin-react-hooks
-        update-types: [version-update:semver-major]
-      - dependency-name: jsdom
+      - dependency-name: "*"
         update-types: [version-update:semver-major]
       # Pinned exactly: vite.config.ts fails the build unless the version
       # matches src/moderation/modelAssets.ts. Bump both by hand.
@@ -45,13 +37,7 @@ updates:
       backend-minor-and-patch:
         update-types: [minor, patch]
     ignore:
-      - dependency-name: zod
-        update-types: [version-update:semver-major]
-      - dependency-name: ioredis
-        update-types: [version-update:semver-major]
-      - dependency-name: eslint
-        update-types: [version-update:semver-major]
-      - dependency-name: pino
+      - dependency-name: "*"
         update-types: [version-update:semver-major]
 
   - package-ecosystem: github-actions
