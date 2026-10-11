@@ -333,6 +333,8 @@ export type HelloAck = Ack<{
   iceServers: IceServer[];
   /** The mode the server will use (a flag can force preview). */
   mode: MatchMode;
+  /** The gender filter in effect: "all" when the one sent needs an unlock the device does not have. */
+  genderFilter: GenderFilter;
 }>;
 export type ChatAck = Ack<{ id: string; ts: number; redacted: boolean }>;
 export type ReportAck = Ack<{ reportId: string }>;
@@ -643,9 +645,10 @@ export type BillingError =
   | "invalid"
   | "rate_limited"
   | "unknown_pack"
-  | "order_not_found"
+  | "order_unknown" // this server never created (or has lost) the order; nothing is credited
   | "bad_signature"
-  | "payment_mismatch" // the payment does not match the order (amount, currency or device)
+  | "payment_mismatch" // the payment does not match the order (amount, currency, device or status)
+  | "payment_pending" // Razorpay has authorized but not yet captured the payment; retry, or wait for the webhook
   | "insufficient_coins"
   | "upstream"; // Razorpay did not answer
 

@@ -1,5 +1,6 @@
 import { createHmac } from "node:crypto";
 import { describe, expect, test } from "bun:test";
+import { createBilling, type BillingFeatureDeps } from "../../src/billing";
 import { BillingService } from "../../src/billing/BillingService";
 import {
   FakeRazorpay,
@@ -10,6 +11,7 @@ import {
   webhookSignature,
 } from "../../src/billing/razorpay";
 import { MemoryWalletStore } from "../../src/billing/WalletStore";
+import { loadConfig } from "../../src/config";
 import { FlagsReader, MemoryFlagsStore } from "../../src/flags/flags";
 import { createLogger } from "../../src/logger";
 import { MemoryStore } from "../../src/store/MemoryStore";
@@ -22,7 +24,7 @@ async function setup(opts: { gateway?: FakeRazorpay | null; webhookSecret?: stri
   const flags = new FlagsReader(new MemoryFlagsStore());
   await flags.refresh();
   const matchStore = new MemoryStore();
-  const store = new MemoryWalletStore(matchStore, opts.now);
+  const store = new MemoryWalletStore(matchStore);
   const pushed: WalletView[] = [];
   const billing = new BillingService({
     store,
@@ -87,7 +89,17 @@ describe("razorpay signatures", () => {
     const denied = new RazorpayClient("k", "s", async () => new Response("{}", { status: 401 }));
     await expect(denied.createOrder({ amount: 1, currency: "INR", receipt: "r", notes: {} })).rejects.toThrow(/401/);
     const missing = new RazorpayClient("k", "s", async () => new Response("{}", { status: 404 }));
-    expect(await missing.fetchOrder("order_nope")).toBeNull();
+    expect(await missing.fetchPayment("pay_nope")).toBeNull();
+  });
+
+  test("RazorpayClient fetches payments by id", async () => {
+    const calls: string[] = [];
+    const client = new RazorpayClient("k", "s", async (input, init) => {
+      calls.push(`${init?.method} ${input}`);
+      return new Response(JSON.stringify({ id: "pay_1", order_id: "order_1", amount: 9900, currency: "INR", status: "captured" }));
+    });
+    expect(await client.fetchPayment("pay_1")).toMatchObject({ id: "pay_1", status: "captured" });
+    expect(calls).toEqual(["GET https://api.razorpay.com/v1/payments/pay_1"]);
   });
 });
 
@@ -162,20 +174,93 @@ describe("BillingService", () => {
     expect(await billing.handleWebhook(ignored, webhookSignature("whsec", ignored))).toBe("ignored");
   });
 
-  test("a webhook for an order this instance lost is rebuilt from the notes", async () => {
+  test("a webhook for an order this instance never stored is refused, never rebuilt", async () => {
     const { billing } = await setup();
     const body = Buffer.from(
       JSON.stringify({
         event: "payment.captured",
-        payload: { payment: { entity: { id: "pay_lost", order_id: "order_lost", amount: 29900, currency: "INR", notes: { deviceId: DEVICE, packId: "month" } } } },
+        payload: { payment: { entity: { id: "pay_lost", order_id: "order_lost", amount: 29900, currency: "INR", notes: { device: "abc", packId: "month" } } } },
+      }),
+    );
+    expect(await billing.handleWebhook(body, webhookSignature("whsec", body))).toBe("order_unknown");
+    expect(await billing.balance(DEVICE)).toBe(100);
+    expect(await billing.verifyCheckout(DEVICE, "order_lost", "pay_lost", "fake-signature")).toEqual({ ok: false, error: "order_unknown" });
+  });
+
+  test("verify credits once: a replay, even 31 days later, only returns the balance", async () => {
+    let now = 1_700_000_000_000;
+    const { billing, pushed } = await setup({ now: () => now });
+    const order = await billing.createOrder(DEVICE, "week");
+    if (!order.ok) throw new Error(order.error);
+    expect(await billing.verifyCheckout(DEVICE, order.orderId, "pay_once", "fake-signature")).toEqual({ ok: true, coins: 800 });
+    expect(await billing.verifyCheckout(DEVICE, order.orderId, "pay_once", "fake-signature")).toEqual({ ok: true, coins: 800 });
+    now += 31 * DAY;
+    expect(await billing.verifyCheckout(DEVICE, order.orderId, "pay_once", "fake-signature")).toEqual({ ok: true, coins: 800 });
+    // A different payment id against the same (paid) order is not credited either.
+    expect(await billing.verifyCheckout(DEVICE, order.orderId, "pay_other", "fake-signature")).toEqual({ ok: true, coins: 800 });
+    expect(await billing.balance(DEVICE)).toBe(800);
+    expect(await billing.ledger(DEVICE)).toHaveLength(1);
+    expect(pushed).toHaveLength(1);
+  });
+
+  test("verify needs a captured payment: authorized answers payment_pending until the webhook credits", async () => {
+    const gateway = new FakeRazorpay();
+    const { billing } = await setup({ gateway });
+    const order = await billing.createOrder(DEVICE, "week");
+    if (!order.ok) throw new Error(order.error);
+    gateway.capture(order.orderId, "pay_slow", "authorized");
+    expect(await billing.verifyCheckout(DEVICE, order.orderId, "pay_slow", "fake-signature")).toEqual({ ok: false, error: "payment_pending" });
+    expect(await billing.balance(DEVICE)).toBe(100);
+    // Razorpay's lookup can also disagree with the signature: wrong order, wrong amount, failed.
+    const other = await billing.createOrder(DEVICE, "month");
+    if (!other.ok) throw new Error(other.error);
+    gateway.capture(other.orderId, "pay_elsewhere");
+    expect(await billing.verifyCheckout(DEVICE, order.orderId, "pay_elsewhere", "fake-signature")).toEqual({ ok: false, error: "payment_mismatch" });
+    gateway.capture(order.orderId, "pay_failed", "failed");
+    expect(await billing.verifyCheckout(DEVICE, order.orderId, "pay_failed", "fake-signature")).toEqual({ ok: false, error: "payment_mismatch" });
+
+    const body = Buffer.from(
+      JSON.stringify({
+        event: "payment.captured",
+        payload: { payment: { entity: { id: "pay_slow", order_id: order.orderId, amount: 9900, currency: "INR" } } },
       }),
     );
     expect(await billing.handleWebhook(body, webhookSignature("whsec", body))).toBe("credited");
-    expect(await billing.balance(DEVICE)).toBe(3100);
-    const unknown = Buffer.from(
-      JSON.stringify({ event: "payment.captured", payload: { payment: { entity: { id: "pay_x", order_id: "order_x", amount: 1, currency: "INR" } } } }),
-    );
-    expect(await billing.handleWebhook(unknown, webhookSignature("whsec", unknown))).toBe("order_not_found");
+    expect(await billing.balance(DEVICE)).toBe(800);
+    // The client's retry after capture is a replay now.
+    gateway.capture(order.orderId, "pay_slow");
+    expect(await billing.verifyCheckout(DEVICE, order.orderId, "pay_slow", "fake-signature")).toEqual({ ok: true, coins: 800 });
+    expect(await billing.handleWebhook(body, webhookSignature("whsec", body))).toBe("ignored");
+    expect(await billing.balance(DEVICE)).toBe(800);
+  });
+
+  test("a credit that fails after the claim gives the claim back, so the retry credits exactly once", async () => {
+    const { billing, store } = await setup();
+    const order = await billing.createOrder(DEVICE, "week");
+    if (!order.ok) throw new Error(order.error);
+    const addBalance = store.addBalance.bind(store);
+    let failures = 1;
+    store.addBalance = async (deviceId, delta, initial) => {
+      if (failures-- > 0) throw new Error("redis gone");
+      return addBalance(deviceId, delta, initial);
+    };
+    await expect(billing.verifyCheckout(DEVICE, order.orderId, "pay_retry", "fake-signature")).rejects.toThrow("redis gone");
+    expect(await billing.balance(DEVICE)).toBe(100);
+    expect(await billing.verifyCheckout(DEVICE, order.orderId, "pay_retry", "fake-signature")).toEqual({ ok: true, coins: 800 });
+    expect(await billing.verifyCheckout(DEVICE, order.orderId, "pay_retry", "fake-signature")).toEqual({ ok: true, coins: 800 });
+    expect(await billing.ledger(DEVICE)).toHaveLength(1);
+  });
+
+  test("the gateway lookup failing answers upstream without crediting", async () => {
+    const gateway = new FakeRazorpay();
+    gateway.fetchPayment = async () => {
+      throw new Error("timeout");
+    };
+    const { billing } = await setup({ gateway });
+    const order = await billing.createOrder(DEVICE, "week");
+    if (!order.ok) throw new Error(order.error);
+    expect(await billing.verifyCheckout(DEVICE, order.orderId, "pay_x", "fake-signature")).toEqual({ ok: false, error: "upstream" });
+    expect(await billing.balance(DEVICE)).toBe(100);
   });
 
   test("unlock debits cost per day x days, extends an active unlock and expires", async () => {
@@ -224,5 +309,45 @@ describe("BillingService", () => {
   test("an unknown pack is refused", async () => {
     const { billing } = await setup();
     expect(await billing.createOrder(DEVICE, "gold")).toEqual({ ok: false, error: "unknown_pack" });
+  });
+});
+
+describe("createBilling", () => {
+  const prod = {
+    NODE_ENV: "production",
+    CORS_ORIGINS: "https://a.com",
+    SESSION_SECRET: "s".repeat(32),
+    TURNSTILE_DISABLED: "true",
+    ADMIN_TOKEN: "a".repeat(24),
+    RAZORPAY_KEY_ID: "rzp_live_x",
+    RAZORPAY_KEY_SECRET: "secret",
+    RAZORPAY_WEBHOOK_SECRET: "whsec",
+  };
+
+  async function build(env: Record<string, string>, extra: Partial<BillingFeatureDeps> = {}) {
+    const flags = new FlagsReader(new MemoryFlagsStore());
+    await flags.refresh();
+    const errors: string[] = [];
+    const logger = createLogger("silent");
+    logger.error = ((msg: unknown) => void errors.push(String(msg))) as typeof logger.error;
+    const billing = createBilling({ config: loadConfig(env), flags, store: new MemoryStore(), logger, ...extra });
+    return { billing, errors };
+  }
+
+  test("production with Razorpay keys but no durable store disables real payments", async () => {
+    const { billing, errors } = await build(prod);
+    expect(billing.enabled).toBe(false);
+    expect(billing.catalogue()).toMatchObject({ enabled: false, keyId: null });
+    expect(errors).toEqual(["BILLING DISABLED: real payments need a durable store (REDIS_URL)"]);
+  });
+
+  test("a durable wallet store (or development) keeps the real gateway", async () => {
+    const matchStore = new MemoryStore();
+    const durable = await build(prod, { walletStore: new MemoryWalletStore(matchStore) });
+    expect(durable.billing.enabled).toBe(true);
+    expect(durable.billing.catalogue().keyId).toBe("rzp_live_x");
+    expect(durable.errors).toEqual([]);
+    const dev = await build({ RAZORPAY_KEY_ID: "rzp_test_x", RAZORPAY_KEY_SECRET: "secret" });
+    expect(dev.billing.enabled).toBe(true);
   });
 });

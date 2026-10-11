@@ -4,7 +4,8 @@
  * One balance per device (earned in calls, bought as coin packs, adjusted by
  * admins) and timed unlocks bought with it. Every movement writes a ledger
  * entry. Purchases are credited exactly once per Razorpay payment id whether
- * the credit comes from the Checkout success handler (POST /verify) or the
+ * the credit comes from the Checkout success handler (POST /verify, which
+ * confirms the payment is captured with Razorpay first) or the
  * payment.captured webhook, whichever arrives first.
  *
  * Flags (operator-editable, no deploy):
@@ -31,8 +32,8 @@ import {
   type WalletLedgerEntry,
   type WalletView,
 } from "../protocol";
-import { verifyWebhookSignature, type RazorpayGateway } from "./razorpay";
-import { CLAIM_TTL_MS, type WalletStore } from "./WalletStore";
+import { verifyWebhookSignature, type RazorpayGateway, type RazorpayPayment } from "./razorpay";
+import type { WalletStore } from "./WalletStore";
 
 const DAY_MS = 24 * 60 * 60_000;
 
@@ -63,7 +64,6 @@ const webhookEventSchema = z.object({
             order_id: z.string().min(1).nullable().optional(),
             amount: z.number().int(),
             currency: z.string(),
-            notes: z.union([z.record(z.string()), z.array(z.unknown())]).optional(),
           }),
         })
         .optional(),
@@ -71,7 +71,7 @@ const webhookEventSchema = z.object({
     .optional(),
 });
 
-export type WebhookOutcome = "credited" | "ignored" | "bad_signature" | "invalid" | "order_not_found" | "payment_mismatch";
+export type WebhookOutcome = "credited" | "ignored" | "bad_signature" | "invalid" | "order_unknown" | "payment_mismatch";
 
 interface PaymentFacts {
   paymentId: string;
@@ -196,10 +196,7 @@ export class BillingService {
     const cost = this.costPerDay() * days;
     const balance = await this.debit(deviceId, cost);
     if (balance === null) return { ok: false, error: "insufficient_coins" };
-    const now = this.now();
-    const current = (await this.store.getUnlock(deviceId, feature)) ?? 0;
-    const expiresAt = Math.max(now, current) + days * DAY_MS;
-    await this.store.setUnlock(deviceId, feature, expiresAt);
+    const expiresAt = await this.store.extendUnlock(deviceId, feature, days * DAY_MS, this.now());
     await this.record(deviceId, -cost, "unlock", `${feature}:${days}d`);
     await this.push(deviceId);
     return { ok: true, coins: balance, expiresAt };
@@ -214,11 +211,14 @@ export class BillingService {
     const pack = this.packs().find((p) => p.id === packId);
     if (!pack) return { ok: false, error: "unknown_pack" };
     const amount = pack.inr * 100;
-    // Razorpay caps receipts at 40 chars; a hash keeps the raw device id out of their dashboard.
-    const receipt = `${createHash("sha256").update(deviceId).digest("hex").slice(0, 24)}-${randomBytes(6).toString("hex")}`;
+    // Razorpay shows receipts and notes in its dashboard and echoes them in
+    // webhooks, so only a hash of the device id goes there. The order itself
+    // is the server's record; nothing is ever rebuilt from these notes.
+    const device = createHash("sha256").update(deviceId).digest("hex");
+    const receipt = `${device.slice(0, 24)}-${randomBytes(6).toString("hex")}`;
     let created;
     try {
-      created = await this.gateway.createOrder({ amount, currency: "INR", receipt, notes: { deviceId, packId } });
+      created = await this.gateway.createOrder({ amount, currency: "INR", receipt, notes: { device: device.slice(0, 16), packId } });
     } catch (err) {
       this.log.error({ err }, "razorpay order creation failed");
       return { ok: false, error: "upstream" };
@@ -240,9 +240,11 @@ export class BillingService {
   }
 
   /**
-   * Checkout success handler: verifies razorpay_signature and credits the
+   * Checkout success handler: verifies razorpay_signature, confirms with
+   * Razorpay that the payment is captured for this order and credits the
    * pack. Safe to call again for the same payment (the second call just
-   * returns the balance).
+   * returns the balance). An authorized-but-not-captured payment answers
+   * payment_pending; the client retries or the webhook credits later.
    */
   async verifyCheckout(
     deviceId: string,
@@ -252,11 +254,21 @@ export class BillingService {
   ): Promise<BillingResponse<{ coins: number }>> {
     if (!this.gateway) return { ok: false, error: "billing_disabled" };
     if (!this.gateway.verifyCheckout(orderId, paymentId, signature)) return { ok: false, error: "bad_signature" };
-    const order = await this.resolveOrder(orderId);
-    if (!order) return { ok: false, error: "order_not_found" };
+    const order = await this.store.getOrder(orderId);
+    if (!order) return { ok: false, error: "order_unknown" };
     if (order.deviceId !== deviceId) return { ok: false, error: "payment_mismatch" };
-    // Checkout does not return the amount; the signature binds the payment to this order.
-    const result = await this.credit(order, { paymentId, orderId, amount: order.amount, currency: order.currency });
+    if (order.status === "paid") return { ok: true, coins: await this.balance(deviceId) };
+    let payment: RazorpayPayment | null;
+    try {
+      payment = await this.gateway.fetchPayment(paymentId);
+    } catch (err) {
+      this.log.error({ err, orderId, paymentId }, "razorpay payment lookup failed");
+      return { ok: false, error: "upstream" };
+    }
+    if (!payment || payment.order_id !== orderId) return { ok: false, error: "payment_mismatch" };
+    if (payment.status === "authorized") return { ok: false, error: "payment_pending" };
+    if (payment.status !== "captured") return { ok: false, error: "payment_mismatch" };
+    const result = await this.credit(order, { paymentId, orderId, amount: payment.amount, currency: payment.currency });
     if (!result.ok) return result;
     return { ok: true, coins: result.coins };
   }
@@ -277,8 +289,8 @@ export class BillingService {
     if (event !== "payment.captured") return "ignored";
     const payment = payload?.payment?.entity;
     if (!payment?.order_id) return "invalid";
-    const order = await this.resolveOrder(payment.order_id, Array.isArray(payment.notes) ? undefined : payment.notes);
-    if (!order) return "order_not_found";
+    const order = await this.store.getOrder(payment.order_id);
+    if (!order) return "order_unknown";
     const result = await this.credit(order, {
       paymentId: payment.id,
       orderId: payment.order_id,
@@ -294,47 +306,12 @@ export class BillingService {
   /* ---------------------------------------------------------------- */
 
   /**
-   * The stored order, or one rebuilt from Razorpay's copy when this
-   * instance lost it (memory store restart). Notes carry deviceId and packId.
+   * Credits the order's pack once per payment id. `fresh` is false for a
+   * replay. The decision rests on durable state: an order already marked
+   * paid is never credited again, and the per-payment claim never expires.
+   * If the credit fails after the claim was taken the claim is given back,
+   * so a webhook retry or a client retry can still credit.
    */
-  private async resolveOrder(orderId: string, notes?: Record<string, string>): Promise<BillingOrderRecord | null> {
-    const stored = await this.store.getOrder(orderId);
-    if (stored) return stored;
-    let facts: { amount: number; currency: string; notes: Record<string, string> } | null = null;
-    if (notes?.deviceId && notes.packId) {
-      const pack = this.packs().find((p) => p.id === notes.packId);
-      if (pack) facts = { amount: pack.inr * 100, currency: "INR", notes };
-    }
-    if (!facts && this.gateway) {
-      try {
-        const remote = await this.gateway.fetchOrder(orderId);
-        if (remote) facts = { amount: remote.amount, currency: remote.currency, notes: remote.notes ?? {} };
-      } catch (err) {
-        this.log.warn({ err, orderId }, "could not fetch a lost order from razorpay");
-      }
-    }
-    if (!facts) return null;
-    const pack = this.packs().find((p) => p.id === facts.notes.packId);
-    const deviceId = facts.notes.deviceId;
-    if (!pack || !deviceId || facts.currency !== "INR" || facts.amount !== pack.inr * 100) return null;
-    this.log.warn({ orderId }, "rebuilt a lost order from razorpay notes");
-    const record: BillingOrderRecord = {
-      orderId,
-      deviceId,
-      packId: pack.id,
-      coins: pack.coins,
-      amount: facts.amount,
-      currency: "INR",
-      status: "created",
-      paymentId: null,
-      createdAt: this.now(),
-      paidAt: null,
-    };
-    await this.store.putOrder(record);
-    return record;
-  }
-
-  /** Credits the order's pack once per payment id. `fresh` is false for a replay. */
   private async credit(
     order: BillingOrderRecord,
     payment: PaymentFacts,
@@ -343,11 +320,20 @@ export class BillingService {
       this.log.warn({ orderId: order.orderId, paymentId: payment.paymentId }, "payment does not match its order");
       return { ok: false, error: "payment_mismatch" };
     }
-    const fresh = await this.store.claimOnce(`payment:${payment.paymentId}`, CLAIM_TTL_MS);
+    if (order.status === "paid") return { ok: true, coins: await this.balance(order.deviceId), fresh: false };
+    const claim = `payment:${payment.paymentId}`;
+    const fresh = await this.store.claimOnce(claim);
     if (!fresh) return { ok: true, coins: await this.balance(order.deviceId), fresh: false };
-    const coins = await this.store.addBalance(order.deviceId, order.coins, this.initialCoins);
-    await this.record(order.deviceId, order.coins, "purchase", payment.paymentId);
-    await this.store.putOrder({ ...order, status: "paid", paymentId: payment.paymentId, paidAt: this.now() });
+    let coins: number;
+    try {
+      coins = await this.store.addBalance(order.deviceId, order.coins, this.initialCoins);
+      await this.record(order.deviceId, order.coins, "purchase", payment.paymentId);
+      await this.store.putOrder({ ...order, status: "paid", paymentId: payment.paymentId, paidAt: this.now() });
+    } catch (err) {
+      this.log.error({ err, orderId: order.orderId, paymentId: payment.paymentId }, "credit failed after the payment was claimed; claim released");
+      await this.store.releaseClaim(claim);
+      throw err;
+    }
     this.log.info({ orderId: order.orderId, packId: order.packId, coins: order.coins }, "coins credited");
     await this.push(order.deviceId);
     return { ok: true, coins, fresh: true };
@@ -388,9 +374,10 @@ export const BILLING_STATUS: Record<BillingError, number> = {
   invalid: 400,
   rate_limited: 429,
   unknown_pack: 404,
-  order_not_found: 404,
+  order_unknown: 404,
   bad_signature: 403,
   payment_mismatch: 409,
+  payment_pending: 409,
   insufficient_coins: 402,
   upstream: 502,
 };

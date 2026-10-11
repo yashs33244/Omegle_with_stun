@@ -4,7 +4,7 @@
  *   GET  /packs    public catalogue: packs, cost per day, Razorpay key id, enabled flags
  *   GET  /wallet   coins and active unlocks           (session)
  *   POST /orders   {packId} -> Razorpay order          (session)
- *   POST /verify   {orderId, paymentId, signature}     (session) credits the pack once
+ *   POST /verify   {orderId, paymentId, signature}     (session) credits the pack once; limited per device
  *   POST /unlock   {feature, days}                     (session) spends coins
  *   POST /webhook  Razorpay payment.captured, raw body + X-Razorpay-Signature
  * "session" routes need `Authorization: Bearer <sessionToken>` from POST /api/session.
@@ -46,6 +46,7 @@ export function billingApiRouter(deps: BillingApiDeps): Router {
   const clock = deps.clock ?? Date.now;
   const reads = new IpBuckets({ capacity: 30, refillPerSec: 0.5 }, clock);
   const writes = new IpBuckets({ capacity: 10, refillPerSec: 0.1 }, clock);
+  const verifies = new IpBuckets({ capacity: 20, refillPerSec: 1 }, clock);
   const webhooks = new IpBuckets({ capacity: 60, refillPerSec: 1 }, clock);
   const ipOf = (req: Request) => requestIp(req, deps.proxyIpHeader);
 
@@ -69,9 +70,9 @@ export function billingApiRouter(deps: BillingApiDeps): Router {
   const deviceOf = (res: Response) => res.locals.deviceId as string;
 
   const limited =
-    (buckets: IpBuckets): RequestHandler =>
+    (buckets: IpBuckets, keyOf: (req: Request, res: Response) => string | null = ipOf): RequestHandler =>
     (req, res, next) => {
-      if (!buckets.allow(ipOf(req))) return sendError(res, "rate_limited");
+      if (!buckets.allow(keyOf(req, res))) return sendError(res, "rate_limited");
       next();
     };
 
@@ -90,7 +91,9 @@ export function billingApiRouter(deps: BillingApiDeps): Router {
     send(res, await deps.billing.createOrder(deviceOf(res), body.data.packId));
   });
 
-  router.post("/verify", noStore, limited(writes), session, json, async (req, res) => {
+  // Keyed by device, not IP: a payer behind a carrier NAT must be able to retry
+  // /verify until it answers, whatever the neighbours are doing.
+  router.post("/verify", noStore, session, limited(verifies, (_req, res) => deviceOf(res)), json, async (req, res) => {
     if (!deps.billing.enabled) return sendError(res, "billing_disabled");
     const body = billingVerifyRequestSchema.safeParse(req.body);
     if (!body.success) return sendError(res, "invalid");
@@ -118,8 +121,8 @@ export function billingApiRouter(deps: BillingApiDeps): Router {
         return sendError(res, "bad_signature");
       case "invalid":
         return sendError(res, "invalid");
-      case "order_not_found":
-        return sendError(res, "order_not_found");
+      case "order_unknown":
+        return sendError(res, "order_unknown");
       case "payment_mismatch":
         return sendError(res, "payment_mismatch");
     }

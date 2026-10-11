@@ -10,8 +10,8 @@
  *   - RedisWalletStore (prefix `chizzy:wallet:`):
  *       ledger:{deviceId}   list of JSON WalletLedgerEntry, newest first, capped
  *       unlock:{deviceId}   hash feature -> expiresAt (epoch ms)
- *       once:{key}          idempotency marker (TTL)
- *       order:{orderId}     JSON BillingOrderRecord
+ *       once:{key}          idempotency marker, kept for good (a payment id never un-happens)
+ *       order:{orderId}     JSON BillingOrderRecord, kept for good (replays are decided from it)
  *       orders              zset orderId -> createdAt, capped
  *
  * Debits are "add a negative delta, undo if the result went below zero"; the
@@ -29,8 +29,6 @@ export type CoinBalance = Pick<MatchStore, "getCoins" | "addCoins">;
 export const LEDGER_MAX = 200;
 /** Orders kept for the admin list. */
 export const ORDERS_MAX = 2_000;
-/** How long a payment id stays claimed. Razorpay retries webhooks for days; a week covers it. */
-export const CLAIM_TTL_MS = 30 * 24 * 60 * 60_000;
 
 export interface WalletStore {
   /** Stored balance, or null if the device never had coins. */
@@ -45,10 +43,14 @@ export interface WalletStore {
   /** Expiry of the unlock (epoch ms), even if it has passed; null when never unlocked. */
   getUnlock(deviceId: string, feature: PremiumFeature): Promise<number | null>;
   setUnlock(deviceId: string, feature: PremiumFeature, expiresAt: number): Promise<void>;
+  /** Atomically moves the expiry to max(now, current) + ms and returns it. */
+  extendUnlock(deviceId: string, feature: PremiumFeature, ms: number, now: number): Promise<number>;
   listUnlocks(deviceId: string): Promise<Record<string, number>>;
 
-  /** True the first time `key` is claimed within ttlMs; false for every later call. */
-  claimOnce(key: string, ttlMs: number): Promise<boolean>;
+  /** True the first time `key` is claimed; false for every later call. Claims never expire. */
+  claimOnce(key: string): Promise<boolean>;
+  /** Gives a claim back after the work it guarded failed, so a retry can credit. */
+  releaseClaim(key: string): Promise<void>;
 
   putOrder(order: BillingOrderRecord): Promise<void>;
   getOrder(orderId: string): Promise<BillingOrderRecord | null>;
@@ -56,16 +58,23 @@ export interface WalletStore {
   listOrders(limit: number): Promise<BillingOrderRecord[]>;
 }
 
+/** KEYS[1] unlock hash, ARGV[1] feature, ARGV[2] ms, ARGV[3] now. Returns the new expiry. */
+const EXTEND_UNLOCK_LUA = `
+local current = tonumber(redis.call('HGET', KEYS[1], ARGV[1]) or '0')
+local base = tonumber(ARGV[3])
+if current > base then base = current end
+local expires = base + tonumber(ARGV[2])
+redis.call('HSET', KEYS[1], ARGV[1], tostring(expires))
+return expires
+`;
+
 export class MemoryWalletStore implements WalletStore {
   private readonly ledger = new Map<string, WalletLedgerEntry[]>();
   private readonly unlocks = new Map<string, Record<string, number>>();
-  private readonly claims = new Map<string, number>();
+  private readonly claims = new Set<string>();
   private readonly orders = new Map<string, BillingOrderRecord>();
 
-  constructor(
-    private readonly coins: CoinBalance,
-    private readonly clock: () => number = Date.now,
-  ) {}
+  constructor(private readonly coins: CoinBalance) {}
 
   getBalance(deviceId: string): Promise<number | null> {
     return this.coins.getCoins(deviceId);
@@ -94,17 +103,24 @@ export class MemoryWalletStore implements WalletStore {
     this.unlocks.set(deviceId, { ...this.unlocks.get(deviceId), [feature]: expiresAt });
   }
 
+  async extendUnlock(deviceId: string, feature: PremiumFeature, ms: number, now: number): Promise<number> {
+    const expiresAt = Math.max(now, this.unlocks.get(deviceId)?.[feature] ?? 0) + ms;
+    this.unlocks.set(deviceId, { ...this.unlocks.get(deviceId), [feature]: expiresAt });
+    return expiresAt;
+  }
+
   async listUnlocks(deviceId: string): Promise<Record<string, number>> {
     return { ...this.unlocks.get(deviceId) };
   }
 
-  async claimOnce(key: string, ttlMs: number): Promise<boolean> {
-    const now = this.clock();
-    const until = this.claims.get(key);
-    if (until !== undefined && until > now) return false;
-    if (this.claims.size >= 100_000) for (const [k, v] of this.claims) if (v <= now) this.claims.delete(k);
-    this.claims.set(key, now + ttlMs);
+  async claimOnce(key: string): Promise<boolean> {
+    if (this.claims.has(key)) return false;
+    this.claims.add(key);
     return true;
+  }
+
+  async releaseClaim(key: string): Promise<void> {
+    this.claims.delete(key);
   }
 
   async putOrder(order: BillingOrderRecord): Promise<void> {
@@ -162,6 +178,18 @@ export class RedisWalletStore implements WalletStore {
     await this.redis.hset(`${this.prefix}unlock:${deviceId}`, feature, String(expiresAt));
   }
 
+  async extendUnlock(deviceId: string, feature: PremiumFeature, ms: number, now: number): Promise<number> {
+    const result = await this.redis.eval(
+      EXTEND_UNLOCK_LUA,
+      1,
+      `${this.prefix}unlock:${deviceId}`,
+      feature,
+      String(ms),
+      String(now),
+    );
+    return Number(result);
+  }
+
   async listUnlocks(deviceId: string): Promise<Record<string, number>> {
     const raw = await this.redis.hgetall(`${this.prefix}unlock:${deviceId}`);
     const out: Record<string, number> = {};
@@ -169,16 +197,20 @@ export class RedisWalletStore implements WalletStore {
     return out;
   }
 
-  async claimOnce(key: string, ttlMs: number): Promise<boolean> {
-    const res = await this.redis.set(`${this.prefix}once:${key}`, "1", "PX", ttlMs, "NX");
+  async claimOnce(key: string): Promise<boolean> {
+    const res = await this.redis.set(`${this.prefix}once:${key}`, "1", "NX");
     return res === "OK";
+  }
+
+  async releaseClaim(key: string): Promise<void> {
+    await this.redis.del(`${this.prefix}once:${key}`);
   }
 
   async putOrder(order: BillingOrderRecord): Promise<void> {
     const index = `${this.prefix}orders`;
     await this.redis
       .multi()
-      .set(`${this.prefix}order:${order.orderId}`, JSON.stringify(order), "PX", CLAIM_TTL_MS)
+      .set(`${this.prefix}order:${order.orderId}`, JSON.stringify(order))
       .zadd(index, order.createdAt, order.orderId)
       .zremrangebyrank(index, 0, -ORDERS_MAX - 1)
       .exec();

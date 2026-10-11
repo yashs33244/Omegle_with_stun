@@ -52,12 +52,29 @@ function runContract(name: string, make: () => Promise<WalletStore>, opts: { ski
       expect(await store.listUnlocks(randomUUID())).toEqual({});
     });
 
-    test("claimOnce is first-come only", async () => {
+    test("claimOnce is first-come only until the claim is released", async () => {
       const store = await make();
       const key = `payment:${randomUUID()}`;
-      expect(await store.claimOnce(key, 60_000)).toBe(true);
-      expect(await store.claimOnce(key, 60_000)).toBe(false);
-      expect(await store.claimOnce(`${key}:other`, 60_000)).toBe(true);
+      expect(await store.claimOnce(key)).toBe(true);
+      expect(await store.claimOnce(key)).toBe(false);
+      expect(await store.claimOnce(`${key}:other`)).toBe(true);
+      await store.releaseClaim(key);
+      expect(await store.claimOnce(key)).toBe(true);
+    });
+
+    test("extendUnlock is atomic: concurrent extends add up from max(now, current)", async () => {
+      const store = await make();
+      const d = randomUUID();
+      const now = 1_000_000;
+      expect(await store.extendUnlock(d, "gender_filter", 100, now)).toBe(now + 100);
+      // Expired unlock: the extension starts from now, not from the stale expiry.
+      expect(await store.extendUnlock(d, "gender_filter", 50, now + 500)).toBe(now + 550);
+      const results = await Promise.all([
+        store.extendUnlock(d, "gender_filter", 1000, now + 500),
+        store.extendUnlock(d, "gender_filter", 2000, now + 500),
+      ]);
+      expect(Math.max(...results)).toBe(now + 550 + 3000);
+      expect(await store.getUnlock(d, "gender_filter")).toBe(now + 550 + 3000);
     });
 
     test("orders are stored by id and listed newest first", async () => {

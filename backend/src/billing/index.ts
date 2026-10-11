@@ -35,6 +35,7 @@ export interface BillingFeatureDeps {
 
 export function createBilling(deps: BillingFeatureDeps): BillingService {
   const { config, logger } = deps;
+  const durable = deps.walletStore !== undefined || deps.redis !== undefined;
   const store = deps.walletStore ?? (deps.redis ? new RedisWalletStore(deps.store, deps.redis) : new MemoryWalletStore(deps.store));
   let gateway: RazorpayGateway | null;
   if (deps.gateway !== undefined) gateway = deps.gateway;
@@ -42,11 +43,19 @@ export function createBilling(deps: BillingFeatureDeps): BillingService {
     logger.warn("BILLING WARNING: RAZORPAY_FAKE is on; payments are not real");
     gateway = new FakeRazorpay();
   } else if (config.razorpayKeyId && config.razorpayKeySecret) {
-    gateway = new RazorpayClient(config.razorpayKeyId, config.razorpayKeySecret, deps.fetch);
+    if (config.nodeEnv === "production" && !durable) {
+      // Balances, unlocks, orders and payment claims would vanish on every
+      // deploy or restart; never take money against that.
+      logger.error("BILLING DISABLED: real payments need a durable store (REDIS_URL)");
+      gateway = null;
+    } else {
+      gateway = new RazorpayClient(config.razorpayKeyId, config.razorpayKeySecret, deps.fetch);
+    }
   } else {
     logger.info("billing disabled: RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET are not set");
     gateway = null;
   }
+  // Production refuses to start without the webhook secret (config.ts); elsewhere it is a warning.
   if (gateway && !config.razorpayWebhookSecret && !config.razorpayFake) {
     logger.warn("BILLING WARNING: RAZORPAY_WEBHOOK_SECRET is not set; only the Checkout success path credits coins");
   }
