@@ -62,9 +62,9 @@ test("admin console: token, severity-sorted queue, blurred evidence", async ({ o
     auth.push(req.headers()["authorization"] ?? null);
     const path = new URL(req.url()).pathname;
     const body =
-      path === "/admin/api/reports"
-        ? { reports: REPORTS }
-        : path.endsWith("/frame")
+      path === "/admin/api/queue"
+        ? REPORTS
+        : path.endsWith("/evidence")
           ? { frame: FRAME }
           : path === "/admin/api/flags"
             ? { flags: FLAG_DEFAULTS }

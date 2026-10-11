@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { RESTRICTION_REASONS, type AdminReport, type AdminReportAction, type RestrictionReason } from "@/lib/protocol";
-import type { EvidenceImage } from "@/lib/adminApi";
+import { AdminApiError, type EvidenceImage } from "@/lib/adminApi";
 import { watermarkCode } from "@/components/safety/watermarkCode";
 import {
   ADMIN_REASON_LABELS,
@@ -103,8 +103,8 @@ export const ReportDetail: React.FC<ReportDetailProps> = ({ report, onChanged })
     try {
       const res = await api.actOnReport(report.id, { ...action, ...(note.trim() ? { note: note.trim() } : {}) });
       if (action.action === "escalate_csam") {
-        const packet = res.packet ?? (await api.getCsamPacket(report.id));
-        downloadJson(`csam-packet-${report.id}.json`, packet);
+        if (!res.packet) throw new AdminApiError(500, "The server did not send the report packet.");
+        downloadJson(`csam-packet-${report.id}.json`, res.packet);
       }
       setResult({ tone: "ok", text: done });
       setNote("");

@@ -13,15 +13,18 @@ import {
 /**
  * Client for the admin API (/admin/api/*, Authorization: Bearer ADMIN_TOKEN).
  *
- * protocol.ts defines the payload types but not the routes, so the routes the
- * console expects are listed here in one place. List responses may be a bare
- * array or wrapped in an object ({ reports: [...] }); both are accepted.
+ * protocol.ts defines the payload types but not the routes, so the routes are
+ * listed here in one place. They follow backend/src/http/admin.ts. List
+ * responses may be a bare array or wrapped in an object ({ reports: [...] });
+ * both are accepted.
  */
 export const ADMIN_ROUTES = {
-  reports: "/admin/api/reports",
-  reportFrame: (id: string) => `/admin/api/reports/${encodeURIComponent(id)}/frame`,
+  /** Every open or acknowledged report, in review order. */
+  queue: "/admin/api/queue",
+  /** The latest reports in any status (the server caps the list). */
+  recentReports: "/admin/api/queue?status=all",
+  reportEvidence: (id: string) => `/admin/api/reports/${encodeURIComponent(id)}/evidence`,
   reportAction: (id: string) => `/admin/api/reports/${encodeURIComponent(id)}/action`,
-  reportPacket: (id: string) => `/admin/api/reports/${encodeURIComponent(id)}/packet`,
   appeals: "/admin/api/appeals",
   appealDecision: (id: string) => `/admin/api/appeals/${encodeURIComponent(id)}/decision`,
   takedowns: "/admin/api/takedowns",
@@ -115,13 +118,19 @@ export function createAdminApi({
     json<T>(path, { method, body: JSON.stringify(body) });
 
   return {
+    /** The whole open queue plus recently closed reports, each report once. */
     async listReports(): Promise<AdminReport[]> {
-      return list<AdminReport>(await json(ADMIN_ROUTES.reports), "reports");
+      const [open, recent] = await Promise.all([
+        json(ADMIN_ROUTES.queue).then((body) => list<AdminReport>(body, "reports")),
+        json(ADMIN_ROUTES.recentReports).then((body) => list<AdminReport>(body, "reports")),
+      ]);
+      const seen = new Set(open.map((r) => r.id));
+      return [...open, ...recent.filter((r) => !seen.has(r.id))];
     },
 
     /** Every call is an evidence access the server writes to the audit log. */
     async getReportFrame(id: string): Promise<EvidenceImage | null> {
-      const res = await request(ADMIN_ROUTES.reportFrame(id));
+      const res = await request(ADMIN_ROUTES.reportEvidence(id));
       const type = res.headers.get("Content-Type") ?? "";
       if (type.startsWith("image/")) {
         const src = URL.createObjectURL(await res.blob());
@@ -131,14 +140,11 @@ export function createAdminApi({
       return typeof frame === "string" && frame.startsWith("data:image/") ? { src: frame, revoke: () => {} } : null;
     },
 
+    /** escalate_csam answers with the filing packet. */
     async actOnReport(id: string, action: AdminReportAction): Promise<{ packet?: CsamReportPacket }> {
       const body = await post<unknown>(ADMIN_ROUTES.reportAction(id), action);
       const packet = unwrap<unknown>(body, "packet");
       return packet && typeof packet === "object" && "reportId" in packet ? { packet: packet as CsamReportPacket } : {};
-    },
-
-    async getCsamPacket(id: string): Promise<CsamReportPacket> {
-      return unwrap<CsamReportPacket>(await json(ADMIN_ROUTES.reportPacket(id)), "packet");
     },
 
     async listAppeals(): Promise<AdminAppeal[]> {

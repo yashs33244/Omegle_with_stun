@@ -97,8 +97,8 @@ function mockServer(opts: { status?: number } = {}) {
     calls.push({ method, path: url.pathname, body, auth: new Headers(init?.headers).get("Authorization") });
     if (opts.status) return json({ error: "unauthorized" }, opts.status);
     const p = url.pathname;
-    if (p === "/admin/api/reports") return json({ reports: REPORTS });
-    if (p.endsWith("/frame")) return json({ frame: "data:image/jpeg;base64,AAAA" });
+    if (p === "/admin/api/queue") return json(REPORTS);
+    if (p.endsWith("/evidence")) return json({ frame: "data:image/jpeg;base64,AAAA" });
     if (p.endsWith("/action")) {
       return body.action === "escalate_csam"
         ? json({ ok: true, packet: { reportId: "r-minor", humanViewed: false } })
@@ -145,7 +145,7 @@ describe("admin console", () => {
     await user.click(screen.getByRole("button", { name: "Sign in" }));
     expect(sessionStorage.getItem(ADMIN_TOKEN_KEY)).toBe("s3cret");
     await screen.findAllByTestId("queue-item");
-    expect(server.calls[0]).toMatchObject({ path: "/admin/api/reports", auth: "Bearer s3cret" });
+    expect(server.calls[0]).toMatchObject({ path: "/admin/api/queue", auth: "Bearer s3cret" });
   });
 
   it("signs out when the server rejects the token", async () => {
@@ -203,7 +203,7 @@ describe("admin console", () => {
     const detail = screen.getByTestId("report-detail");
     expect(within(detail).getByTestId("evidence-restricted")).toBeInTheDocument();
     expect(within(detail).queryByRole("button", { name: "Unblur" })).not.toBeInTheDocument();
-    expect(server.calls.some((c) => c.path.endsWith("/frame"))).toBe(false);
+    expect(server.calls.some((c) => c.path.endsWith("/evidence"))).toBe(false);
 
     await user.click(within(detail).getByRole("button", { name: "Escalate CSAM" }));
     await user.click(await screen.findByRole("button", { name: "Escalate and download packet" }));

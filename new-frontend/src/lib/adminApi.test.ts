@@ -16,9 +16,21 @@ describe("createAdminApi", () => {
     const api = createAdminApi({ token: "secret", baseUrl: "https://api.example/", fetch });
     await expect(api.listReports()).resolves.toEqual([]);
     const [url, init] = fetch.mock.calls[0] as unknown as [string, RequestInit];
-    expect(url).toBe("https://api.example/admin/api/reports");
+    expect(url).toBe("https://api.example/admin/api/queue");
     expect(new Headers(init.headers).get("Authorization")).toBe("Bearer secret");
     expect(init.credentials).toBe("omit");
+  });
+
+  it("lists the whole open queue plus recently closed reports, each once", async () => {
+    const open = [{ id: "a", status: "open" }, { id: "b", status: "acknowledged" }];
+    const recent = [{ id: "c", status: "dismissed" }, { id: "a", status: "open" }];
+    const fetch = vi.fn(async (url: string) => json(url.endsWith("?status=all") ? recent : open));
+    const api = createAdminApi({ token: "t", baseUrl: "http://x", fetch: fetch as never });
+    expect((await api.listReports()).map((r) => r.id)).toEqual(["a", "b", "c"]);
+    expect(fetch.mock.calls.map(([url]) => url).sort()).toEqual([
+      "http://x/admin/api/queue",
+      "http://x/admin/api/queue?status=all",
+    ]);
   });
 
   it("accepts bare arrays as well as wrapped lists", async () => {
