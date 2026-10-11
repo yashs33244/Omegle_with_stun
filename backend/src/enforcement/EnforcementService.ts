@@ -31,18 +31,42 @@ import type {
 } from "../protocol";
 import { toDataUrl, type EvidenceFrame, type EvidenceStore } from "./evidence";
 import {
+  ADMIN_ERRORS,
+  ADMIN_LIST_LIMIT,
+  ADMIT_RESULTS,
+  APPEALS_PER_DEVICE_PER_DAY,
+  APPEALS_PER_IP_PER_HOUR,
+  APPEAL_CLAIM_TTL_MS,
   APPEAL_DUE_MS,
+  AUDIT_ACTION,
   AUTO_PAUSE_MS,
   AUTO_PAUSE_THRESHOLD,
   AUTO_PAUSE_WINDOW_MS,
   COMPLETED_CALL_MS,
+  CSAM_PRESERVE_MS,
   DAY,
+  DEFAULT_REPORT_AFTER_END_MS,
+  DEVICE_FIELD,
+  DEVICE_TTL_MS,
+  FINGERPRINT_TTL_MS,
   HIGH_WEIGHT,
   HOUR,
+  INDEX,
+  KEY,
+  LAST_ROOM_GRACE_MS,
+  NETWORK_TTL_MS,
+  PERMANENT_SCORE,
+  PSEUDONYM_HEX_CHARS,
   REPORTS_PER_HOUR,
+  RETENTION_CHECK_INTERVAL_MS,
+  RETENTION_MS,
   SHORT_CALL_MS,
+  TAKEDOWNS_PER_IP_PER_HOUR,
   UNDERAGE_CORROBORATION_WINDOW_MS,
-  YEAR,
+  WARNING_STEP,
+  type LadderStep,
+} from "./constants";
+import {
   evidenceShowable,
   kindFor,
   ladderStep,
@@ -57,7 +81,7 @@ import {
   type FrameClassifier,
   type FrameScores,
 } from "./policy";
-import type { EnforcementStore } from "./store";
+import type { EnforcementStore } from "./EnforcementStore";
 import type { TurnstileVerifier } from "./turnstile";
 import type {
   DeviceNetwork,
@@ -109,17 +133,10 @@ export interface ReportInput {
   endedAt: number | null;
 }
 
-export type AdmitResult = "ok" | "rate_limited" | "duplicate";
+export type AdmitResult = (typeof ADMIT_RESULTS)[number];
 
-export type AdminError = "not_found" | "conflict" | "restricted";
+export type AdminError = (typeof ADMIN_ERRORS)[number];
 export type AdminResult<T> = { ok: true; value: T } | { ok: false; error: AdminError };
-
-const DEVICE_TTL_MS = YEAR;
-const FINGERPRINT_TTL_MS = 180 * DAY;
-const NETWORK_TTL_MS = DAY;
-const PERMANENT_SCORE = Number.MAX_SAFE_INTEGER;
-const OPEN_INDEX = "open-reports";
-const PENDING_APPEALS = "pending-appeals";
 
 const ok = <T>(value: T): AdminResult<T> => ({ ok: true, value });
 const fail = <T>(error: AdminError): AdminResult<T> => ({ ok: false, error });
@@ -138,7 +155,7 @@ function toPublic(r: StoredRestriction): Restriction {
 }
 
 function isActive(r: StoredRestriction, now: number): boolean {
-  return r.kind !== "warning" && r.liftedAt === null && (r.until === null || r.until > now);
+  return r.kind !== WARNING_STEP && r.liftedAt === null && (r.until === null || r.until > now);
 }
 
 /** Permanent first, then the latest end. */
@@ -176,7 +193,7 @@ export class EnforcementService {
     this.turnstile = deps.turnstile;
     this.classifier = deps.classifier;
     this.salt = deps.pseudonymSalt;
-    this.reportAfterEndMs = deps.reportAfterEndMs ?? 60_000;
+    this.reportAfterEndMs = deps.reportAfterEndMs ?? DEFAULT_REPORT_AFTER_END_MS;
     this.now = deps.now ?? Date.now;
   }
 
@@ -186,7 +203,7 @@ export class EnforcementService {
 
   /** Stable pseudonym for admin views and packets: never the raw device id. */
   pseudonym(deviceId: string): string {
-    return createHmac("sha256", this.salt).update(deviceId).digest("hex").slice(0, 16);
+    return createHmac("sha256", this.salt).update(deviceId).digest("hex").slice(0, PSEUDONYM_HEX_CHARS);
   }
 
   /* ---------------------------------------------------------------- */
@@ -195,7 +212,7 @@ export class EnforcementService {
 
   /** session:hello: remembers when the device was first seen (reporter weight). */
   async noteDeviceSeen(deviceId: string): Promise<void> {
-    await this.store.setFieldIfAbsent(`dev:${deviceId}`, "firstSeen", this.now(), DEVICE_TTL_MS);
+    await this.store.setFieldIfAbsent(KEY.device(deviceId), DEVICE_FIELD.firstSeen, this.now(), DEVICE_TTL_MS);
   }
 
   /**
@@ -204,31 +221,33 @@ export class EnforcementService {
    */
   async noteDeviceNetwork(deviceId: string, ip: string | null, country: string | null): Promise<void> {
     const net: DeviceNetwork = { ip, country };
-    await this.store.setValue(`net:${deviceId}`, net, NETWORK_TTL_MS);
+    await this.store.setValue(KEY.network(deviceId), net, NETWORK_TTL_MS);
   }
 
   /** Risk signal from elsewhere (age signal, reviewer): corroborates underage reports. */
   async flagMinorRisk(deviceId: string): Promise<void> {
-    await this.store.incrField(`dev:${deviceId}`, "minorFlag", 1, DEVICE_TTL_MS);
+    await this.store.incrField(KEY.device(deviceId), DEVICE_FIELD.minorFlag, 1, DEVICE_TTL_MS);
   }
 
   /** Called for every room that ends. Keeps the room briefly for late reports and counts completed calls. */
   async roomEnded(room: { roomId: string; devices: [string, string]; activeSince: number | null; endedAt: number }) {
     const last: LastRoom = { ...room };
-    await this.store.setValue(`lastroom:${room.roomId}`, last, this.reportAfterEndMs + 5_000);
+    await this.store.setValue(KEY.lastRoom(room.roomId), last, this.reportAfterEndMs + LAST_ROOM_GRACE_MS);
     if (room.activeSince !== null && room.endedAt - room.activeSince >= COMPLETED_CALL_MS) {
-      for (const d of room.devices) await this.store.incrField(`dev:${d}`, "completedCalls", 1, DEVICE_TTL_MS);
+      for (const d of room.devices) {
+        await this.store.incrField(KEY.device(d), DEVICE_FIELD.completedCalls, 1, DEVICE_TTL_MS);
+      }
     }
   }
 
   lastRoom(roomId: string): Promise<LastRoom | null> {
-    return this.store.getValue<LastRoom>(`lastroom:${roomId}`);
+    return this.store.getValue<LastRoom>(KEY.lastRoom(roomId));
   }
 
-  /** Rate limit (5 per hour per device) and one report per room per reporter. */
+  /** Rate limit (REPORTS_PER_HOUR per device) and one report per room per reporter. */
   async admitReport(reporterDevice: string, roomId: string): Promise<AdmitResult> {
-    if ((await this.store.hit(`report-rate:${reporterDevice}`, HOUR)) > REPORTS_PER_HOUR) return "rate_limited";
-    if (!(await this.store.claim(`room-report:${roomId}:${reporterDevice}`, DAY))) return "duplicate";
+    if ((await this.store.hit(KEY.reportRate(reporterDevice), HOUR)) > REPORTS_PER_HOUR) return "rate_limited";
+    if (!(await this.store.claim(KEY.roomReport(roomId, reporterDevice), DAY))) return "duplicate";
     return "ok";
   }
 
@@ -238,9 +257,11 @@ export class EnforcementService {
    * the device-fingerprint link (180 days) so later restrictions cover both.
    */
   async activeForDevice(deviceId: string, fingerprintHash?: string | null): Promise<Restriction | null> {
-    if (fingerprintHash) await this.store.setValue(`fp:${deviceId}`, fingerprintHash, FINGERPRINT_TTL_MS);
-    const ids = new Set(await this.store.indexRange(`restrictions:${deviceId}`));
-    if (fingerprintHash) for (const id of await this.store.indexRange(`restrictions-fp:${fingerprintHash}`)) ids.add(id);
+    if (fingerprintHash) await this.store.setValue(KEY.fingerprint(deviceId), fingerprintHash, FINGERPRINT_TTL_MS);
+    const ids = new Set(await this.store.indexRange(KEY.restrictions(deviceId)));
+    if (fingerprintHash) {
+      for (const id of await this.store.indexRange(KEY.restrictionsByFingerprint(fingerprintHash))) ids.add(id);
+    }
     const found = await this.activeOf([...ids]);
     return found ? toPublic(found) : null;
   }
@@ -252,7 +273,7 @@ export class EnforcementService {
   }
 
   private async deviceStats(deviceId: string): Promise<DeviceStats> {
-    const f = await this.store.getFields(`dev:${deviceId}`);
+    const f = await this.store.getFields(KEY.device(deviceId));
     return {
       firstSeen: f.firstSeen ?? null,
       completedCalls: f.completedCalls ?? 0,
@@ -315,11 +336,11 @@ export class EnforcementService {
       acknowledgedAt: null,
       decidedAt: null,
       restrictionId: null,
-      reportedNetwork: restricted ? await this.store.getValue<DeviceNetwork>(`net:${input.reportedDevice}`) : null,
+      reportedNetwork: restricted ? await this.store.getValue<DeviceNetwork>(KEY.network(input.reportedDevice)) : null,
     };
     await this.store.put("report", id, report, now);
-    await this.store.addToIndex(`against:${input.reportedDevice}`, id, now);
-    await this.store.addToIndex(OPEN_INDEX, id, now);
+    await this.store.addToIndex(KEY.reportsAgainst(input.reportedDevice), id, now);
+    await this.store.addToIndex(INDEX.openReports, id, now);
     this.log.info({ reportId: id, reason: input.reason, restricted }, "report stored");
 
     const restriction = await this.autoAction(report, reportedStats, otherUnderageReporters);
@@ -338,7 +359,7 @@ export class EnforcementService {
 
   /** Distinct OTHER devices that reported `deviceId` as underage recently. */
   private async underageReporters(deviceId: string, exclude: string, now: number): Promise<number> {
-    const ids = await this.store.indexRange(`against:${deviceId}`, { min: now - UNDERAGE_CORROBORATION_WINDOW_MS });
+    const ids = await this.store.indexRange(KEY.reportsAgainst(deviceId), { min: now - UNDERAGE_CORROBORATION_WINDOW_MS });
     const reports = await this.store.getMany<StoredReport>("report", ids);
     const devices = new Set<string>();
     for (const r of reports) {
@@ -371,9 +392,9 @@ export class EnforcementService {
       return this.restrict({ deviceId: device, reason: "underage", step: AUTO_PAUSE_MS, auto: true, report });
     }
 
-    const lastAuto = (await this.store.getValue<number>(`lastauto:${device}`)) ?? 0;
+    const lastAuto = (await this.store.getValue<number>(KEY.lastAutoPause(device))) ?? 0;
     const since = Math.max(now - AUTO_PAUSE_WINDOW_MS, lastAuto + 1);
-    const ids = await this.store.indexRange(`against:${device}`, { min: since });
+    const ids = await this.store.indexRange(KEY.reportsAgainst(device), { min: since });
     const reports = await this.store.getMany<StoredReport>("report", ids);
     const byReporter = new Map<string, number>();
     for (const r of reports) {
@@ -383,7 +404,7 @@ export class EnforcementService {
     }
     const total = [...byReporter.values()].reduce((a, b) => a + b, 0);
     if (total < AUTO_PAUSE_THRESHOLD) return null;
-    await this.store.setValue(`lastauto:${device}`, now, AUTO_PAUSE_WINDOW_MS);
+    await this.store.setValue(KEY.lastAutoPause(device), now, AUTO_PAUSE_WINDOW_MS);
     return this.restrict({
       deviceId: device,
       reason: restrictionReasonFor(report.reason, report.restricted),
@@ -397,32 +418,33 @@ export class EnforcementService {
   private async restrict(p: {
     deviceId: string;
     reason: RestrictionReason;
-    /** Duration in ms, null for permanent, or "warning". */
-    step: number | null | "warning";
+    step: LadderStep;
     auto: boolean;
     report: StoredReport | null;
   }): Promise<Restriction> {
     const now = this.now();
-    const warning = p.step === "warning";
+    const warning = p.step === WARNING_STEP;
     const duration = warning ? 0 : (p.step as number | null);
     const r: StoredRestriction = {
       id: randomUUID(),
       reason: p.reason,
-      kind: warning ? "warning" : kindFor(duration),
+      kind: warning ? WARNING_STEP : kindFor(duration),
       until: warning ? now : duration === null ? null : now + duration,
       createdAt: now,
       evidenceAvailable: evidenceShowable(p.reason, Boolean(p.report?.evidenceId), Boolean(p.report?.restricted)),
       appeal: { status: "none" },
       appealable: true,
       deviceId: p.deviceId,
-      fingerprintHash: await this.store.getValue<string>(`fp:${p.deviceId}`),
+      fingerprintHash: await this.store.getValue<string>(KEY.fingerprint(p.deviceId)),
       reportId: p.report?.id ?? null,
       auto: p.auto,
       liftedAt: null,
     };
     await this.store.put("restriction", r.id, r, restrictionEnd(r));
-    await this.store.addToIndex(`restrictions:${p.deviceId}`, r.id, now);
-    if (r.fingerprintHash && !warning) await this.store.addToIndex(`restrictions-fp:${r.fingerprintHash}`, r.id, now);
+    await this.store.addToIndex(KEY.restrictions(p.deviceId), r.id, now);
+    if (r.fingerprintHash && !warning) {
+      await this.store.addToIndex(KEY.restrictionsByFingerprint(r.fingerprintHash), r.id, now);
+    }
     if (p.report) {
       p.report.restrictionId = r.id;
       await this.store.put("report", p.report.id, p.report, p.report.createdAt);
@@ -431,7 +453,7 @@ export class EnforcementService {
       if (!p.auto) await this.flagMinorRisk(p.deviceId);
     }
     if (p.auto) {
-      await this.audit("auto.pause", r.id, `report ${p.report?.id ?? "-"}, reason ${r.reason}`, null);
+      await this.audit(AUDIT_ACTION.autoPause, r.id, `report ${p.report?.id ?? "-"}, reason ${r.reason}`, null);
       this.log.warn({ restrictionId: r.id, reason: r.reason }, "automatic pause applied");
     }
     const view = toPublic(r);
@@ -455,7 +477,7 @@ export class EnforcementService {
   private async owns(r: StoredRestriction, deviceId: string): Promise<boolean> {
     if (r.deviceId === deviceId) return true;
     if (!r.fingerprintHash) return false;
-    return (await this.store.getValue<string>(`fp:${deviceId}`)) === r.fingerprintHash;
+    return (await this.store.getValue<string>(KEY.fingerprint(deviceId))) === r.fingerprintHash;
   }
 
   async restrictionView(id: string, deviceId: string): Promise<RestrictionView | null> {
@@ -474,12 +496,16 @@ export class EnforcementService {
   }
 
   async submitAppeal(req: AppealRequest, ip: string | null): Promise<AppealResponse> {
-    if (ip && (await this.store.hit(`appeal-ip:${ip}`, HOUR)) > 10) return { ok: false, error: "rate_limited" };
-    if ((await this.store.hit(`appeal-dev:${req.deviceId}`, DAY)) > 5) return { ok: false, error: "rate_limited" };
+    if (ip && (await this.store.hit(KEY.appealIpRate(ip), HOUR)) > APPEALS_PER_IP_PER_HOUR) {
+      return { ok: false, error: "rate_limited" };
+    }
+    if ((await this.store.hit(KEY.appealDeviceRate(req.deviceId), DAY)) > APPEALS_PER_DEVICE_PER_DAY) {
+      return { ok: false, error: "rate_limited" };
+    }
     const r = await this.store.get<StoredRestriction>("restriction", req.restrictionId);
     if (!r || !(await this.owns(r, req.deviceId))) return { ok: false, error: "not_found" };
     if (!r.appealable) return { ok: false, error: "not_appealable" };
-    if (r.appeal.status !== "none" || !(await this.store.claim(`appeal:${r.id}`, 2 * YEAR))) {
+    if (r.appeal.status !== "none" || !(await this.store.claim(KEY.appealClaim(r.id), APPEAL_CLAIM_TTL_MS))) {
       return { ok: false, error: "already_appealed" };
     }
     const now = this.now();
@@ -495,14 +521,16 @@ export class EnforcementService {
       note: null,
     };
     await this.store.put("appeal", appeal.id, appeal, now);
-    await this.store.addToIndex(PENDING_APPEALS, appeal.id, appeal.dueAt);
+    await this.store.addToIndex(INDEX.pendingAppeals, appeal.id, appeal.dueAt);
     r.appeal = { status: "pending", submittedAt: now };
     await this.store.put("restriction", r.id, r, restrictionEnd(r));
     return { ok: true, appealId: appeal.id };
   }
 
   async submitTakedown(req: TakedownRequest, ip: string | null): Promise<TakedownResponse> {
-    if (ip && (await this.store.hit(`takedown-ip:${ip}`, HOUR)) > 5) return { ok: false, error: "rate_limited" };
+    if (ip && (await this.store.hit(KEY.takedownIpRate(ip), HOUR)) > TAKEDOWNS_PER_IP_PER_HOUR) {
+      return { ok: false, error: "rate_limited" };
+    }
     if (!(await this.turnstile(req.turnstileToken, ip))) return { ok: false, error: "turnstile_failed" };
     const now = this.now();
     const t: StoredTakedown = {
@@ -543,7 +571,7 @@ export class EnforcementService {
   }
 
   private async toAdmin(r: StoredReport): Promise<AdminReport> {
-    const prior = await this.store.indexRange(`against:${r.reportedDevice}`, { max: r.createdAt - 1 });
+    const prior = await this.store.indexRange(KEY.reportsAgainst(r.reportedDevice), { max: r.createdAt - 1 });
     return {
       id: r.id,
       createdAt: r.createdAt,
@@ -570,13 +598,13 @@ export class EnforcementService {
    */
   async queue(status?: AdminReport["status"] | "all"): Promise<AdminReport[]> {
     if (status && status !== "open") {
-      const ids = await this.store.range("report", { reverse: true, limit: 500 });
+      const ids = await this.store.range("report", { reverse: true, limit: ADMIN_LIST_LIMIT });
       const reports = (await this.store.getMany<StoredReport>("report", ids)).filter(
         (r): r is StoredReport => r !== null && (status === "all" || r.status === status),
       );
       return Promise.all(reports.map((r) => this.toAdmin(r)));
     }
-    const ids = await this.store.indexRange(OPEN_INDEX);
+    const ids = await this.store.indexRange(INDEX.openReports);
     const reports = (await this.store.getMany<StoredReport>("report", ids)).filter(
       (r): r is StoredReport => r !== null,
     );
@@ -599,13 +627,13 @@ export class EnforcementService {
     const r = await this.store.get<StoredReport>("report", id);
     if (!r) return fail("not_found");
     if (r.restricted) {
-      await this.audit("report.evidence_denied", id, "restricted item", actor.ip);
+      await this.audit(AUDIT_ACTION.evidenceDenied, id, "restricted item", actor.ip);
       return fail("restricted");
     }
     if (!r.evidenceId) return fail("not_found");
     const bytes = await this.evidence.get(r.evidenceId, { restricted: false });
     if (!bytes) return fail("not_found");
-    await this.audit("report.view_evidence", id, null, actor.ip);
+    await this.audit(AUDIT_ACTION.viewEvidence, id, null, actor.ip);
     if (!r.humanViewed) {
       r.humanViewed = true;
       await this.store.put("report", r.id, r, r.createdAt);
@@ -619,13 +647,16 @@ export class EnforcementService {
     r.status = status;
     r.decidedAt ??= this.now();
     await this.store.put("report", r.id, r, r.createdAt);
-    await this.store.removeFromIndex(OPEN_INDEX, r.id);
-    if (first) await this.store.incrField(`dev:${r.reporterDevice}`, upheld ? "upheld" : "dismissed", 1, DEVICE_TTL_MS);
+    await this.store.removeFromIndex(INDEX.openReports, r.id);
+    if (first) {
+      const field = upheld ? DEVICE_FIELD.upheld : DEVICE_FIELD.dismissed;
+      await this.store.incrField(KEY.device(r.reporterDevice), field, 1, DEVICE_TTL_MS);
+    }
   }
 
   /** Earlier human actions on the device that still count on the ladder. */
   private async confirmedCount(deviceId: string): Promise<number> {
-    const ids = await this.store.indexRange(`restrictions:${deviceId}`);
+    const ids = await this.store.indexRange(KEY.restrictions(deviceId));
     const all = await this.store.getMany<StoredRestriction>("restriction", ids);
     return all.filter((r) => r && !r.auto && r.liftedAt === null).length;
   }
@@ -695,8 +726,8 @@ export class EnforcementService {
     }
     r.restricted = true;
     r.legalHold = true;
-    r.preservedUntil = Math.max(r.preservedUntil ?? 0, now + YEAR);
-    r.reportedNetwork ??= await this.store.getValue<DeviceNetwork>(`net:${r.reportedDevice}`);
+    r.preservedUntil = Math.max(r.preservedUntil ?? 0, now + CSAM_PRESERVE_MS);
+    r.reportedNetwork ??= await this.store.getValue<DeviceNetwork>(KEY.network(r.reportedDevice));
     const already = r.status === "escalated";
     await this.decide(r, "escalated", true);
 
@@ -724,12 +755,12 @@ export class EnforcementService {
       evidencePreservedUntil: r.preservedUntil,
       chat: r.chat,
     };
-    await this.audit("report.escalate_csam", id, note ?? null, actor.ip);
+    await this.audit(AUDIT_ACTION.escalateCsam, id, note ?? null, actor.ip);
     return ok({ packet, restriction });
   }
 
   async listAppeals(): Promise<AdminAppeal[]> {
-    const ids = await this.store.range("appeal", { reverse: true, limit: 500 });
+    const ids = await this.store.range("appeal", { reverse: true, limit: ADMIN_LIST_LIMIT });
     const appeals = (await this.store.getMany<StoredAppeal>("appeal", ids)).filter(
       (a): a is StoredAppeal => a !== null,
     );
@@ -771,7 +802,7 @@ export class EnforcementService {
     a.decidedAt = now;
     a.note = note ?? null;
     await this.store.put("appeal", a.id, a, a.createdAt);
-    await this.store.removeFromIndex(PENDING_APPEALS, a.id);
+    await this.store.removeFromIndex(INDEX.pendingAppeals, a.id);
     r.appeal = { status: a.status, submittedAt: a.createdAt, decidedAt: now };
     await this.store.put("restriction", r.id, r, restrictionEnd(r));
     if (decision === "overturn") await this.lift(r);
@@ -782,7 +813,7 @@ export class EnforcementService {
   }
 
   async listTakedowns(): Promise<AdminTakedown[]> {
-    const ids = await this.store.range("takedown", { reverse: true, limit: 500 });
+    const ids = await this.store.range("takedown", { reverse: true, limit: ADMIN_LIST_LIMIT });
     const list = (await this.store.getMany<StoredTakedown>("takedown", ids)).filter(
       (t): t is StoredTakedown => t !== null,
     );
@@ -800,7 +831,7 @@ export class EnforcementService {
     t.resolution = resolution;
     t.resolvedAt = this.now();
     await this.store.put("takedown", t.id, t, t.createdAt);
-    await this.audit("takedown.resolve", id, null, actor.ip);
+    await this.audit(AUDIT_ACTION.resolveTakedown, id, null, actor.ip);
     const { restricted: _r, resolvedAt: _t, ...view } = t;
     return ok(view);
   }
@@ -815,15 +846,15 @@ export class EnforcementService {
    * and takedown tickets resolved over a year ago. Idempotent.
    */
   async sweepRetention(): Promise<{ reports: number; restrictions: number; appeals: number; takedowns: number }> {
-    const cutoff = this.now() - YEAR;
+    const cutoff = this.now() - RETENTION_MS;
     const counts = { reports: 0, restrictions: 0, appeals: 0, takedowns: 0 };
 
     for (const id of await this.store.range("report", { max: cutoff })) {
       const r = await this.store.get<StoredReport>("report", id);
       if (r?.legalHold) continue;
       if (r?.evidenceId) await this.evidence.delete(r.evidenceId, { restricted: r.restricted });
-      if (r) await this.store.removeFromIndex(`against:${r.reportedDevice}`, id);
-      await this.store.removeFromIndex(OPEN_INDEX, id);
+      if (r) await this.store.removeFromIndex(KEY.reportsAgainst(r.reportedDevice), id);
+      await this.store.removeFromIndex(INDEX.openReports, id);
       await this.store.delete("report", id);
       counts.reports++;
     }
@@ -831,8 +862,8 @@ export class EnforcementService {
     for (const id of await this.store.range("restriction", { max: cutoff })) {
       const r = await this.store.get<StoredRestriction>("restriction", id);
       if (r) {
-        await this.store.removeFromIndex(`restrictions:${r.deviceId}`, id);
-        if (r.fingerprintHash) await this.store.removeFromIndex(`restrictions-fp:${r.fingerprintHash}`, id);
+        await this.store.removeFromIndex(KEY.restrictions(r.deviceId), id);
+        if (r.fingerprintHash) await this.store.removeFromIndex(KEY.restrictionsByFingerprint(r.fingerprintHash), id);
       }
       await this.store.delete("restriction", id);
       counts.restrictions++;
@@ -841,7 +872,7 @@ export class EnforcementService {
     for (const id of await this.store.range("appeal", { max: cutoff })) {
       const a = await this.store.get<StoredAppeal>("appeal", id);
       if (a && (await this.store.get("restriction", a.restrictionId))) continue;
-      await this.store.removeFromIndex(PENDING_APPEALS, id);
+      await this.store.removeFromIndex(INDEX.pendingAppeals, id);
       await this.store.delete("appeal", id);
       counts.appeals++;
     }
@@ -856,13 +887,13 @@ export class EnforcementService {
   }
 
   /** Runs the retention sweep once a day across all instances (an hourly check takes a daily claim). */
-  start(checkEveryMs = HOUR): void {
+  start(checkEveryMs = RETENTION_CHECK_INTERVAL_MS): void {
     if (this.timer) return;
     const tick = () => {
       if (this.sweeping) return;
       const day = Math.floor(this.now() / DAY);
       this.sweeping = this.store
-        .claim(`retention:${day}`, DAY)
+        .claim(KEY.retentionClaim(day), DAY)
         .then((mine) => (mine ? this.sweepRetention() : null))
         .then((counts) => {
           if (counts) this.log.info(counts, "retention sweep done");

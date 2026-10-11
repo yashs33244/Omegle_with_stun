@@ -9,7 +9,7 @@ import { join } from "node:path";
 import Redis from "ioredis";
 import { io as ioClient, type Socket } from "socket.io-client";
 import { loadConfig, type Config } from "../src/config";
-import { RedisEnforcementStore } from "../src/enforcement/store";
+import { RedisEnforcementStore } from "../src/enforcement/RedisEnforcementStore";
 import { createLogger } from "../src/logger";
 import {
   PROTOCOL_VERSION,

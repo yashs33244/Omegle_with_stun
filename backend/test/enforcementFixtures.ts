@@ -9,7 +9,8 @@ import { join } from "node:path";
 import { EnforcementService, type RestrictionSink } from "../src/enforcement/EnforcementService";
 import { FsEvidenceStore, toDataUrl, type EvidenceStore } from "../src/enforcement/evidence";
 import type { FrameClassifier } from "../src/enforcement/policy";
-import { MemoryEnforcementStore, type EnforcementStore } from "../src/enforcement/store";
+import type { EnforcementStore } from "../src/enforcement/EnforcementStore";
+import { MemoryEnforcementStore } from "../src/enforcement/MemoryEnforcementStore";
 import { createLogger } from "../src/logger";
 import type { Restriction } from "../src/protocol";
 

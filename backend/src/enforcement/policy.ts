@@ -1,40 +1,31 @@
 /**
  * Pure enforcement rules: severity, SLA clocks, the restriction ladder,
- * reporter weighting, auto-pause thresholds and CSAM routing.
- * No I/O here, so every rule is unit tested directly (test/unit/enforcementPolicy.test.ts).
+ * reporter weighting, auto-pause thresholds and CSAM routing. The numbers
+ * live in constants.ts. No I/O here, so every rule is unit tested directly
+ * (test/unit/enforcementPolicy.test.ts).
  */
 import type { ReportReason, Restriction, RestrictionReason, Severity, TakedownRequest } from "../protocol";
+import {
+  ACK_SLA_MS,
+  DAY,
+  DISMISSED_FOR_ZERO_WEIGHT,
+  FULL_WEIGHT_AGE_HOURS,
+  FULL_WEIGHT_CALLS,
+  HOUR,
+  LADDER,
+  MINOR_THRESHOLD,
+  NEUTRAL_UPHELD_SHARE,
+  NSFW_THRESHOLD,
+  REPORTER_WEIGHT,
+  RESOLVE_SLA_MS,
+  TAKEDOWN_SLA_MS,
+  UPHELD_SHARE_FLOOR,
+  URGENT_RESOLVE_SLA_MS,
+  WARNING_STEP,
+  WEIGHT_DECIMALS,
+  type LadderStep,
+} from "./constants";
 import type { DeviceStats } from "./types";
-
-export const MINUTE = 60_000;
-export const HOUR = 60 * MINUTE;
-export const DAY = 24 * HOUR;
-export const YEAR = 365 * DAY;
-
-/** The only automatic, report-driven action: a short pause. */
-export const AUTO_PAUSE_MS = 10 * MINUTE;
-
-/** Human ladder: warning, 10 min, 24 h, 7 days, permanent (null). */
-export const LADDER: readonly (number | null | "warning")[] = ["warning", 10 * MINUTE, DAY, 7 * DAY, null];
-
-/** Reports per device per hour. */
-export const REPORTS_PER_HOUR = 5;
-/** Weighted reports against a device within this window count toward an auto pause. */
-export const AUTO_PAUSE_WINDOW_MS = DAY;
-/** Sum of reporter weights that triggers an auto pause. Fresh devices weigh about 0.23, so it takes 8 of them. */
-export const AUTO_PAUSE_THRESHOLD = 1.6;
-/** A reporter at or above this weight corroborates an underage report alone. */
-export const HIGH_WEIGHT = 0.7;
-/** Calls shorter than this carry half weight. */
-export const SHORT_CALL_MS = 2_000;
-/** A call at least this long counts as completed for the reporter weight. */
-export const COMPLETED_CALL_MS = 30_000;
-/** A second underage report within this window corroborates the first. */
-export const UNDERAGE_CORROBORATION_WINDOW_MS = 7 * DAY;
-
-/** Classifier thresholds for CSAM routing. */
-export const NSFW_THRESHOLD = 0.7;
-export const MINOR_THRESHOLD = 0.5;
 
 const REASON_RANK: Record<ReportReason, number> = {
   underage: 0,
@@ -67,18 +58,13 @@ export function queueRank(reason: ReportReason, restricted: boolean): [number, n
 /** SLA clocks: acknowledge within 24 h; resolve within 72 h for nudity or minors, 15 days otherwise. */
 export function reportSla(reason: ReportReason, restricted: boolean, createdAt: number) {
   const urgent = restricted || reason === "nudity" || reason === "underage";
-  return { ackDueAt: createdAt + DAY, resolveDueAt: createdAt + (urgent ? 3 * DAY : 15 * DAY) };
+  return { ackDueAt: createdAt + ACK_SLA_MS, resolveDueAt: createdAt + (urgent ? URGENT_RESOLVE_SLA_MS : RESOLVE_SLA_MS) };
 }
 
 /** Takedown clocks: 24 h for CSAM, 48 h for NCII (TAKE IT DOWN Act), 15 days otherwise. */
 export function takedownDueAt(kind: TakedownRequest["kind"], createdAt: number): number {
-  if (kind === "csam") return createdAt + DAY;
-  if (kind === "ncii") return createdAt + 2 * DAY;
-  return createdAt + 15 * DAY;
+  return createdAt + TAKEDOWN_SLA_MS[kind];
 }
-
-/** Appeals have a 48 h target. */
-export const APPEAL_DUE_MS = 2 * DAY;
 
 export function restrictionReasonFor(reason: ReportReason, restricted: boolean): RestrictionReason {
   if (restricted && reason !== "underage") return "minor-safety";
@@ -107,8 +93,8 @@ export function kindFor(durationMs: number | null): Restriction["kind"] {
  * device (warnings included) that were not overturned. `warn` always warns;
  * `restrict` starts at 10 min.
  */
-export function ladderStep(action: "warn" | "restrict", confirmed: number): number | null | "warning" {
-  if (action === "warn") return "warning";
+export function ladderStep(action: "warn" | "restrict", confirmed: number): LadderStep {
+  if (action === "warn") return WARNING_STEP;
   return LADDER[Math.min(Math.max(confirmed, 1), LADDER.length - 1)]!;
 }
 
@@ -119,16 +105,18 @@ export function ladderStep(action: "warn" | "restrict", confirmed: number): numb
  */
 export function reporterWeight(stats: DeviceStats, now: number): number {
   const decided = stats.upheld + stats.dismissed;
-  const upheldShare = decided > 0 ? stats.upheld / decided : 0.5;
-  if (stats.dismissed >= 3 && upheldShare < 0.25) return 0;
+  const upheldShare = decided > 0 ? stats.upheld / decided : NEUTRAL_UPHELD_SHARE;
+  if (stats.dismissed >= DISMISSED_FOR_ZERO_WEIGHT && upheldShare < UPHELD_SHARE_FLOOR) return 0;
   const ageHours = stats.firstSeen === null ? 0 : Math.max(0, now - stats.firstSeen) / HOUR;
-  const age = Math.min(1, ageHours / 72);
-  const calls = Math.min(1, stats.completedCalls / 10);
-  const w = 0.05 + 0.3 * age + 0.3 * calls + 0.35 * upheldShare;
-  return Math.round(Math.min(1, Math.max(0, w)) * 1000) / 1000;
+  const age = Math.min(1, ageHours / FULL_WEIGHT_AGE_HOURS);
+  const calls = Math.min(1, stats.completedCalls / FULL_WEIGHT_CALLS);
+  const w =
+    REPORTER_WEIGHT.base + REPORTER_WEIGHT.age * age + REPORTER_WEIGHT.calls * calls + REPORTER_WEIGHT.upheld * upheldShare;
+  const scale = 10 ** WEIGHT_DECIMALS;
+  return Math.round(Math.min(1, Math.max(0, w)) * scale) / scale;
 }
 
-/** Weight of one report: the reporter's weight, halved for calls under 2 s. */
+/** Weight of one report: the reporter's weight, halved for calls under SHORT_CALL_MS. */
 export function reportWeight(weight: number, shortCall: boolean): number {
   return shortCall ? weight / 2 : weight;
 }

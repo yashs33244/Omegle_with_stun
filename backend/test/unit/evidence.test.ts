@@ -3,8 +3,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { EVIDENCE_MAX_BYTES } from "../../src/enforcement/constants";
 import {
-  EVIDENCE_MAX_BYTES,
   FsEvidenceStore,
   S3EvidenceStore,
   parseEvidenceFrame,

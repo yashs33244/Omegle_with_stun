@@ -12,10 +12,17 @@
 import { createHash } from "node:crypto";
 import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-
-/** Decoded size cap. The protocol caps the data URL at 120k chars, about 90 KB of JPEG. */
-export const EVIDENCE_MAX_BYTES = 96 * 1024;
-const DATA_URL_PREFIX = "data:image/jpeg;base64,";
+import {
+  EVIDENCE_AREA,
+  EVIDENCE_DIR_MODE,
+  EVIDENCE_EXTENSION,
+  EVIDENCE_FILE_MODE,
+  EVIDENCE_ID_PATTERN,
+  EVIDENCE_MAX_BYTES,
+  EVIDENCE_MIN_BYTES,
+  JPEG_DATA_URL_PREFIX,
+  JPEG_MAGIC,
+} from "./constants";
 
 export interface EvidenceFrame {
   bytes: Uint8Array;
@@ -27,17 +34,17 @@ export interface EvidenceFrame {
  * size cap. Returns null when anything is off.
  */
 export function parseEvidenceFrame(dataUrl: string): EvidenceFrame | null {
-  if (!dataUrl.startsWith(DATA_URL_PREFIX)) return null;
-  const b64 = dataUrl.slice(DATA_URL_PREFIX.length);
+  if (!dataUrl.startsWith(JPEG_DATA_URL_PREFIX)) return null;
+  const b64 = dataUrl.slice(JPEG_DATA_URL_PREFIX.length);
   if (b64.length === 0 || b64.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) return null;
   const bytes = new Uint8Array(Buffer.from(b64, "base64"));
-  if (bytes.length < 4 || bytes.length > EVIDENCE_MAX_BYTES) return null;
-  if (bytes[0] !== 0xff || bytes[1] !== 0xd8 || bytes[2] !== 0xff) return null;
+  if (bytes.length < EVIDENCE_MIN_BYTES || bytes.length > EVIDENCE_MAX_BYTES) return null;
+  if (JPEG_MAGIC.some((byte, i) => bytes[i] !== byte)) return null;
   return { bytes, sha256: createHash("sha256").update(bytes).digest("hex") };
 }
 
 export function toDataUrl(bytes: Uint8Array): string {
-  return DATA_URL_PREFIX + Buffer.from(bytes).toString("base64");
+  return JPEG_DATA_URL_PREFIX + Buffer.from(bytes).toString("base64");
 }
 
 export interface EvidenceLocation {
@@ -51,29 +58,31 @@ export interface EvidenceStore {
   delete(id: string, where: EvidenceLocation): Promise<void>;
 }
 
-const SAFE_ID = /^[a-f0-9-]{36}$/;
-
 function checkId(id: string): void {
-  // Ids are server-generated UUIDs; refuse anything else so a path can never escape the directory.
-  if (!SAFE_ID.test(id)) throw new Error("invalid evidence id");
+  if (!EVIDENCE_ID_PATTERN.test(id)) throw new Error("invalid evidence id");
 }
 
-/** Files in `<dir>/general` and `<dir>/restricted`, directories 0700, files 0600. */
+/** Storage area (directory or S3 prefix) for a location. */
+function areaOf(where: EvidenceLocation): string {
+  return where.restricted ? EVIDENCE_AREA.restricted : EVIDENCE_AREA.general;
+}
+
+/** Files in `<dir>/general` and `<dir>/restricted`, directories EVIDENCE_DIR_MODE, files EVIDENCE_FILE_MODE. */
 export class FsEvidenceStore implements EvidenceStore {
   private ready?: Promise<void>;
 
   constructor(private readonly dir: string) {}
 
   private sub(where: EvidenceLocation): string {
-    return join(this.dir, where.restricted ? "restricted" : "general");
+    return join(this.dir, areaOf(where));
   }
 
   private ensureDirs(): Promise<void> {
     this.ready ??= (async () => {
       for (const d of [this.dir, this.sub({ restricted: false }), this.sub({ restricted: true })]) {
-        await mkdir(d, { recursive: true, mode: 0o700 });
+        await mkdir(d, { recursive: true, mode: EVIDENCE_DIR_MODE });
         // mkdir's mode is masked by the umask and ignored for existing directories.
-        await chmod(d, 0o700);
+        await chmod(d, EVIDENCE_DIR_MODE);
       }
     })().catch((err: unknown) => {
       this.ready = undefined;
@@ -85,13 +94,13 @@ export class FsEvidenceStore implements EvidenceStore {
   async put(id: string, bytes: Uint8Array, where: EvidenceLocation): Promise<void> {
     checkId(id);
     await this.ensureDirs();
-    await writeFile(join(this.sub(where), `${id}.jpg`), bytes, { mode: 0o600, flag: "wx" });
+    await writeFile(join(this.sub(where), `${id}${EVIDENCE_EXTENSION}`), bytes, { mode: EVIDENCE_FILE_MODE, flag: "wx" });
   }
 
   async get(id: string, where: EvidenceLocation): Promise<Uint8Array | null> {
     checkId(id);
     try {
-      return new Uint8Array(await readFile(join(this.sub(where), `${id}.jpg`)));
+      return new Uint8Array(await readFile(join(this.sub(where), `${id}${EVIDENCE_EXTENSION}`)));
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw err;
@@ -100,7 +109,7 @@ export class FsEvidenceStore implements EvidenceStore {
 
   async delete(id: string, where: EvidenceLocation): Promise<void> {
     checkId(id);
-    await rm(join(this.sub(where), `${id}.jpg`), { force: true });
+    await rm(join(this.sub(where), `${id}${EVIDENCE_EXTENSION}`), { force: true });
   }
 }
 
@@ -134,7 +143,7 @@ export class S3EvidenceStore implements EvidenceStore {
 
   private key(id: string, where: EvidenceLocation): string {
     checkId(id);
-    return `${where.restricted ? "restricted" : "general"}/${id}.jpg`;
+    return `${areaOf(where)}/${id}${EVIDENCE_EXTENSION}`;
   }
 
   async put(id: string, bytes: Uint8Array, where: EvidenceLocation): Promise<void> {

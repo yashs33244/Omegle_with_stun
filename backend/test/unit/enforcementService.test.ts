@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import type { ReportInput } from "../../src/enforcement/EnforcementService";
 import { parseEvidenceFrame } from "../../src/enforcement/evidence";
-import { AUTO_PAUSE_MS, DAY, MINUTE, YEAR } from "../../src/enforcement/policy";
+import { APPEALS_PER_IP_PER_HOUR, AUTO_PAUSE_MS, DAY, MINUTE, YEAR } from "../../src/enforcement/constants";
 import type { StoredReport, StoredRestriction } from "../../src/enforcement/types";
 import type { ReportReason } from "../../src/protocol";
 import { harness, jpegDataUrl, type Harness } from "../enforcementFixtures";
@@ -406,6 +406,23 @@ describe("restrictions, fingerprints and appeals", () => {
       ok: false,
       error: "rate_limited",
     });
+  });
+
+  test("appeals are rate limited per IP across devices", async () => {
+    h = harness();
+    const text = "Please take another look at this.";
+    const ip = "203.0.113.7";
+    for (let i = 0; i < APPEALS_PER_IP_PER_HOUR; i++) {
+      const res = await h.service.submitAppeal({ restrictionId: randomUUID(), deviceId: randomUUID(), text }, ip);
+      expect(res).toEqual({ ok: false, error: "not_found" });
+    }
+    expect(await h.service.submitAppeal({ restrictionId: randomUUID(), deviceId: randomUUID(), text }, ip)).toEqual({
+      ok: false,
+      error: "rate_limited",
+    });
+    // Another IP is unaffected.
+    const other = await h.service.submitAppeal({ restrictionId: randomUUID(), deviceId: randomUUID(), text }, "203.0.113.8");
+    expect(other).toEqual({ ok: false, error: "not_found" });
   });
 });
 
