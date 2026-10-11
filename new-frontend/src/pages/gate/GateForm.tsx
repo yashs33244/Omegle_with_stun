@@ -1,4 +1,4 @@
-import { useId, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { Loader, ShieldCheck } from "lucide-react";
 import { Trans, useTranslation } from "react-i18next";
 import { Button } from "@/components/retroui/Button";
@@ -29,14 +29,17 @@ export interface GateFormProps {
 }
 
 const fieldClass =
-  "w-full rounded border-2 border-black bg-white px-3 py-2 text-black text-base focus:outline-none focus:ring-2 focus:ring-yellow-500";
+  "w-full min-h-tap rounded-lg border-2 border-black bg-white px-3 py-2 text-black text-base text-center tabular-nums focus:outline-none focus:ring-2 focus:ring-yellow-500";
+
+const checkboxRowClass = "flex min-h-tap items-center gap-3 cursor-pointer rounded-lg px-1 -mx-1 hover:bg-gray-50";
+const checkboxClass = "h-5 w-5 shrink-0 accent-yellow-500";
 
 /** Opens in a new tab so the half-filled gate is kept. */
 const DocLink: React.FC<{ to: string; children?: React.ReactNode }> = ({
   to,
   children,
 }) => (
-  <a href={to} target="_blank" rel="noopener" className="underline font-medium">
+  <a href={to} target="_blank" rel="noopener" className="underline font-medium inline-block py-3 -my-3">
     {children}
   </a>
 );
@@ -54,6 +57,8 @@ export const GateForm: React.FC<GateFormProps> = ({
   const ids = useId();
   const { t } = useTranslation("gate");
   const [dob, setDob] = useState<DobParts>({ day: "", month: "", year: "" });
+  const monthRef = useRef<HTMLInputElement>(null);
+  const yearRef = useRef<HTMLInputElement>(null);
   const [dobTouched, setDobTouched] = useState(false);
   const [attest, setAttest] = useState(false);
   const [tos, setTos] = useState(false);
@@ -79,12 +84,14 @@ export const GateForm: React.FC<GateFormProps> = ({
     });
   };
 
+  // Digits only. A full day or month moves on to the next field, like a PIN pad.
   const setPart =
-    (part: keyof DobParts) => (e: React.ChangeEvent<HTMLInputElement>) =>
-      setDob((prev) => ({
-        ...prev,
-        [part]: e.target.value.replace(/\D/g, ""),
-      }));
+    (part: keyof DobParts) => (e: React.ChangeEvent<HTMLInputElement>) => {
+      const value = e.target.value.replace(/\D/g, "");
+      setDob((prev) => ({ ...prev, [part]: value }));
+      if (value.length === 2 && part === "day") monthRef.current?.focus();
+      if (value.length === 2 && part === "month") yearRef.current?.focus();
+    };
 
   return (
     <form
@@ -139,7 +146,9 @@ export const GateForm: React.FC<GateFormProps> = ({
                   id={`${ids}-day`}
                   data-testid="dob-day"
                   className={fieldClass}
+                  type="text"
                   inputMode="numeric"
+                  pattern="[0-9]*"
                   autoComplete="bday-day"
                   maxLength={2}
                   value={dob.day}
@@ -156,10 +165,13 @@ export const GateForm: React.FC<GateFormProps> = ({
                   {t("form.dob.month")}
                 </label>
                 <input
+                  ref={monthRef}
                   id={`${ids}-month`}
                   data-testid="dob-month"
                   className={fieldClass}
+                  type="text"
                   inputMode="numeric"
+                  pattern="[0-9]*"
                   autoComplete="bday-month"
                   maxLength={2}
                   value={dob.month}
@@ -175,10 +187,13 @@ export const GateForm: React.FC<GateFormProps> = ({
                   {t("form.dob.year")}
                 </label>
                 <input
+                  ref={yearRef}
                   id={`${ids}-year`}
                   data-testid="dob-year"
                   className={fieldClass}
+                  type="text"
                   inputMode="numeric"
+                  pattern="[0-9]*"
                   autoComplete="bday-year"
                   maxLength={4}
                   value={dob.year}
@@ -195,22 +210,22 @@ export const GateForm: React.FC<GateFormProps> = ({
             )}
           </fieldset>
 
-          <div className="space-y-3 text-sm text-black">
-            <label className="flex items-start gap-2 cursor-pointer">
+          <div className="space-y-1 text-sm text-black">
+            <label className={checkboxRowClass}>
               <input
                 type="checkbox"
                 data-testid="attest-18"
-                className="mt-1 h-4 w-4 accent-yellow-500"
+                className={checkboxClass}
                 checked={attest}
                 onChange={(e) => setAttest(e.target.checked)}
               />
               <span>{t("form.attest")}</span>
             </label>
-            <label className="flex items-start gap-2 cursor-pointer">
+            <label className={checkboxRowClass}>
               <input
                 type="checkbox"
                 data-testid="accept-tos"
-                className="mt-1 h-4 w-4 accent-yellow-500"
+                className={checkboxClass}
                 checked={tos}
                 onChange={(e) => setTos(e.target.checked)}
               />
@@ -250,17 +265,20 @@ export const GateForm: React.FC<GateFormProps> = ({
         </p>
       )}
 
-      <Button
-        type="submit"
-        data-testid="gate-continue"
-        disabled={!ready}
-        className="w-full justify-center bg-yellow-500 text-black hover:bg-yellow-400 disabled:opacity-50 disabled:cursor-not-allowed"
-      >
-        {submitting ? (
-          <Loader className="w-4 h-4 animate-spin mr-2" aria-hidden="true" />
-        ) : null}
-        {t("form.continue")}
-      </Button>
+      {/* Stays at the bottom of the screen while the card is taller than a phone. */}
+      <div className="sticky bottom-0 -mx-6 -mb-6 bg-white px-6 pt-3 pb-[max(var(--safe-bottom),1.5rem)] rounded-b-xl">
+        <Button
+          type="submit"
+          data-testid="gate-continue"
+          disabled={!ready}
+          className="w-full min-h-tap justify-center bg-yellow-400 text-black hover:bg-yellow-300 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {submitting ? (
+            <Loader className="w-4 h-4 animate-spin mr-2" aria-hidden="true" />
+          ) : null}
+          {t("form.continue")}
+        </Button>
+      </div>
     </form>
   );
 };
