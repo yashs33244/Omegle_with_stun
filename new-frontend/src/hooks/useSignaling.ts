@@ -576,8 +576,8 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
     socket.emit("match:decline", { roomId });
   }, []);
 
-  // call:skip carries no roomId and the server skips whatever room we are in now,
-  // so a second click (or the auto-skip timer) would skip the next, unseen match.
+  // call:skip names its room, so the server ignores it if we already left that room;
+  // the local guard also stops a second click (or the auto-skip timer) from sending again.
   // A pending match can be skipped too (Next while an instant call connects, Esc on the card).
   const skippedRoom = useRef<string | null>(null);
   const skip = useCallback(() => {
@@ -586,7 +586,7 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
     const inRoom = status === "in-call" || status === "match-found" || status === "starting-call";
     if (!socket || !roomId || !inRoom || skippedRoom.current === roomId) return;
     skippedRoom.current = roomId;
-    socket.emit("call:skip");
+    socket.emit("call:skip", { roomId });
   }, []);
 
   const emitTyping = useCallback((typing: boolean) => {

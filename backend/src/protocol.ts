@@ -127,6 +127,13 @@ export const updatePreferencesSchema = z.object({ preferences: preferencesSchema
 
 export const roomRefSchema = z.object({ roomId });
 
+/**
+ * call:skip may name the room it means. When it does, the server ignores a skip
+ * for a room the sender has already left, so a late or repeated skip cannot end
+ * the next match. Optional so older clients that send nothing keep working.
+ */
+export const callSkipSchema = roomRefSchema.optional();
+
 const sessionDescription = z.object({
   type: z.enum(["offer", "answer"]),
   sdp: z.string().max(LIMITS.sdpMax),
@@ -381,7 +388,7 @@ export interface ClientToServerEvents {
    */
   "call:connected": (p: RoomRef) => void;
   /** Ends the pending or active room. Both sides are re-queued; the pair is blocked for a while. */
-  "call:skip": () => void;
+  "call:skip": (p?: RoomRef) => void;
   "rtc:signal": (p: RtcSignal) => void;
   "chat:send": (p: ChatSendPayload, ack: (res: ChatAck) => void) => void;
   "chat:typing": (p: ChatTypingPayload) => void;

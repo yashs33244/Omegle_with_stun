@@ -20,6 +20,7 @@ import {
   helloSchema,
   moderationSignalSchema,
   reportSchema,
+  callSkipSchema,
   roomRefSchema,
   rtcSignalSchema,
   updatePreferencesSchema,
@@ -236,7 +237,7 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
     on("match:accept", "control", roomRefSchema, (p) => service.accept(socket.id, p.roomId));
     on("match:decline", "control", roomRefSchema, (p) => service.decline(socket.id, p.roomId));
     on("call:connected", "control", roomRefSchema, (p) => service.connected(socket.id, p.roomId));
-    on("call:skip", "control", null, () => service.skip(socket.id));
+    on("call:skip", "control", callSkipSchema, (p) => service.skip(socket.id, p?.roomId));
     on("rtc:signal", "signal", rtcSignalSchema, (p) => service.signal(socket.id, p));
     on("chat:send", "chat", chatSendSchema, (p, reply) => service.chat(socket.id, p, reply));
     on("chat:typing", "typing", chatTypingSchema, (p) => service.typing(socket.id, p));

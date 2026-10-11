@@ -19,10 +19,13 @@ function renderSettings(overrides: Partial<React.ComponentProps<typeof ChatSetti
   return props;
 }
 
+/** A select's accessible name is its label followed by the current value. */
+const labelled = (label: string) => new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`);
+
 async function openSelect(name: string) {
   const user = userEvent.setup();
-  await user.click(screen.getByRole("button", { name }));
-  return { user, listbox: screen.getByRole("listbox", { name }) };
+  await user.click(screen.getByRole("button", { name: labelled(name) }));
+  return { user, listbox: screen.getByRole("listbox", { name: labelled(name) }) };
 }
 
 describe("ChatSettings", () => {
@@ -40,8 +43,8 @@ describe("ChatSettings", () => {
 
   it("shows the current selections as labels", () => {
     renderSettings({ preferences: { genderFilter: "female", languageFilter: "hi" } });
-    expect(screen.getByRole("button", { name: "Who do you want to meet?" })).toHaveTextContent("Female");
-    expect(screen.getByRole("button", { name: "Preferred Language" })).toHaveTextContent("Hindi");
+    expect(screen.getByRole("button", { name: "Who do you want to meet? Female" })).toHaveTextContent("Female");
+    expect(screen.getByRole("button", { name: /^Preferred Language .*Hindi/ })).toHaveTextContent("Hindi");
   });
 
   it("renders every gender filter option", async () => {
