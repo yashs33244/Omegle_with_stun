@@ -5,6 +5,7 @@ import type { Preferences, Profile } from "@/lib/protocol";
 import { initialSignalingState, type SignalingState } from "@/hooks/useSignaling";
 import type { PeerConnectionState } from "@/hooks/usePeerConnection";
 import { SAFETY_COACH_KEY } from "@/components/safety/safetyText";
+import type * as MediaQuery from "@/hooks/useMediaQuery";
 
 let signalingState: SignalingState;
 let peerState: PeerConnectionState;
@@ -36,7 +37,12 @@ vi.mock("@/hooks/useSignaling", async (importOriginal) => {
 });
 vi.mock("@/hooks/usePeerConnection", () => ({ usePeerConnection: () => peerState }));
 vi.mock("@/hooks/useAudioLevelDetection", () => ({ useAudioLevelDetection: () => ({ isSpeaking: false }) }));
-vi.mock("@/hooks/use-mobile", () => ({ useIsMobile: () => false }));
+// jsdom has no matchMedia: these tests render the desktop (two-column) layout.
+let desktopLayout = true;
+vi.mock("@/hooks/useMediaQuery", async (importOriginal) => {
+  const actual = await importOriginal<typeof MediaQuery>();
+  return { ...actual, useMediaQuery: (query: string) => (query === actual.DESKTOP_QUERY ? desktopLayout : false) };
+});
 
 const { Room } = await import("./Room");
 
@@ -246,5 +252,67 @@ describe("Room call timer and connection report", () => {
     expect(reportConnected).toHaveBeenCalledTimes(1);
     act(() => vi.advanceTimersByTime(65_000));
     expect(screen.getByText("Connected: 1:05")).toBeInTheDocument();
+  });
+});
+
+describe("Room action bar and chat", () => {
+  const message = (id: string, from: "me" | "partner", text: string) => ({ id, from, text, ts: 1 });
+
+  beforeEach(() => {
+    signalingState = inCall();
+    peerState = {
+      remoteStream: null,
+      remoteAudioTrack: null,
+      connectionState: "connected",
+      connectedAt: Date.now(),
+      quality: "GOOD",
+      ...PEER_EXTRAS,
+    };
+  });
+  afterEach(() => {
+    desktopLayout = true;
+    vi.clearAllMocks();
+  });
+
+  it("has Next, Stop, Chat, Report and the mic in one bar, and Next skips", () => {
+    renderRoom();
+    const bar = screen.getByTestId("call-actions");
+    for (const id of ["next-button", "stop-button", "chat-toggle", "report-button", "mic-toggle", "text-only-toggle"]) {
+      expect(bar.contains(screen.getByTestId(id)), id).toBe(true);
+    }
+    expect(screen.queryByTestId("flip-camera")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("next-button"));
+    expect(skip).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts partner messages that arrive while the chat is closed and clears them on open", () => {
+    const { micChanges, cameraChanges, rerender } = renderRoom();
+    expect(screen.queryByTestId("chat-unread")).not.toBeInTheDocument();
+
+    signalingState = inCall({ messages: [message("a", "partner", "hi"), message("b", "me", "yo"), message("c", "partner", "there?")] });
+    rerender(<Harness micChanges={micChanges} cameraChanges={cameraChanges} />);
+    expect(screen.getByTestId("chat-unread")).toHaveTextContent("2");
+    expect(screen.getByTestId("chat-toast")).toHaveTextContent("there?");
+
+    fireEvent.click(screen.getByTestId("chat-toggle"));
+    expect(screen.getByTestId("chat-toggle")).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByTestId("chat-input")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-unread")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("chat-toast")).not.toBeInTheDocument();
+  });
+
+  it("opens the chat as a sheet over the video on phones", () => {
+    desktopLayout = false;
+    renderRoom();
+    expect(screen.queryByTestId("chat-sheet")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("chat-toggle"));
+    const sheet = screen.getByTestId("chat-sheet");
+    expect(sheet.contains(screen.getByTestId("chat-input"))).toBe(true);
+    fireEvent.click(screen.getByTestId("chat-close"));
+    expect(screen.queryByTestId("chat-sheet")).not.toBeInTheDocument();
+    // Text-only keeps the sheet up without a close button.
+    fireEvent.click(screen.getByRole("button", { name: /Text Only/ }));
+    expect(screen.getByTestId("chat-sheet")).toBeInTheDocument();
+    expect(screen.queryByTestId("chat-close")).not.toBeInTheDocument();
   });
 });

@@ -92,7 +92,7 @@ describe("ChatSettings", () => {
     expect(screen.getByRole("button", { name: labelled("Who do you want to meet?") })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: labelled("Preferred Language") })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Report/ })).not.toBeInTheDocument();
-    expect(screen.getByText(/tap the flag on their video/)).toBeInTheDocument();
+    expect(screen.getByText(/tap the flag in the call controls/)).toBeInTheDocument();
   });
 
   it("offers the UI language switcher", () => {
