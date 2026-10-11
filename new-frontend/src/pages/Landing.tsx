@@ -1,9 +1,8 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
 import { Camera, Loader, Pencil, Settings, User, Users } from "lucide-react";
 import { Link } from "react-router-dom";
 import { Trans, useTranslation } from "react-i18next";
 import { useMediaStream } from "../hooks/useMediaStream";
-import { Room } from "./Room";
 import { Footer } from "@/components/Footer";
 import { trackOnce } from "@/lib/observability";
 import { Button } from "@/components/retroui/Button";
@@ -20,6 +19,13 @@ import { useStreamVideo } from "@/hooks/useStreamVideo";
 import { runningOnMobile } from "@/lib/mobile";
 import { preloadModels } from "@/moderation/modelClient";
 import { toProfile, type ProfileForm } from "../lib/profileForm";
+
+// The call screen (signalling, WebRTC, moderation hooks, captions, Spark) is its
+// own chunk: the start screen paints without it, and loadRoom() fetches it as
+// soon as the gate has passed so Start does not wait for the network.
+const loadRoom = () => import("./Room");
+const Room = lazy(() => loadRoom().then((m) => ({ default: m.Room })));
+const RoomFallback = () => <div className="h-screen w-full bg-gray-900" style={{ height: "100dvh" }} aria-busy="true" />;
 
 export interface LandingProps {
   /** Server default for the match mode (GET /api/config defaultMode). */
@@ -42,8 +48,10 @@ export const Landing: React.FC<LandingProps> = ({
   const startOptions = useStartOptions(defaultMode);
   const [isPhone] = useState(runningOnMobile);
 
-  // Download and compile the moderation models while the user sets up.
+  // Fetch the call screen now and download/compile the moderation models once
+  // the start screen is idle, so neither competes with its first paint.
   useEffect(() => {
+    void loadRoom();
     preloadModels();
   }, []);
 
@@ -111,21 +119,23 @@ export const Landing: React.FC<LandingProps> = ({
 
   if (step === "chat") {
     return (
-      <Room
-        profile={profile}
-        preferences={preferences}
-        onPreferencesChange={setPreferences}
-        localStream={stream}
-        micEnabled={micEnabled}
-        onMicEnabledChange={setMicEnabled}
-        onCameraEnabledChange={setCameraEnabled}
-        onBackToHome={leaveRoom}
-        mode={startOptions.mode}
-        hideIp={startOptions.hideIp}
-        onHideIpChange={startOptions.setHideIp}
-        onFlipCamera={isPhone ? () => void flipCamera() : undefined}
-        frontCamera={facingMode === "user"}
-      />
+      <Suspense fallback={<RoomFallback />}>
+        <Room
+          profile={profile}
+          preferences={preferences}
+          onPreferencesChange={setPreferences}
+          localStream={stream}
+          micEnabled={micEnabled}
+          onMicEnabledChange={setMicEnabled}
+          onCameraEnabledChange={setCameraEnabled}
+          onBackToHome={leaveRoom}
+          mode={startOptions.mode}
+          hideIp={startOptions.hideIp}
+          onHideIpChange={startOptions.setHideIp}
+          onFlipCamera={isPhone ? () => void flipCamera() : undefined}
+          frontCamera={facingMode === "user"}
+        />
+      </Suspense>
     );
   }
 
