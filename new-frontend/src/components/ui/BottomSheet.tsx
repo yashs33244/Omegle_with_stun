@@ -25,12 +25,17 @@
  * Layout: `max-h` is the visible viewport (`--app-height`) minus the top safe
  * area and a small margin; `--safe-bottom` pads the footer (or the body when
  * there is no footer).
+ *
+ * `useModalSheetOpen()` (./modalSheet) tells floating UI outside the sheet (the
+ * Spark card) that a modal sheet is up: Radix sets `pointer-events: none` on the
+ * body, so anything rendered above the sheet would look live but be inert.
  */
 import * as React from "react";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "@/lib/utils";
+import { countModalSheet } from "./modalSheet";
 
 type ContentProps = React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>;
 
@@ -121,6 +126,12 @@ export const BottomSheet: React.FC<BottomSheetProps> = ({
   const close = React.useCallback(() => onOpenChange(false), [onOpenChange]);
   const { offset, handleProps } = useDragToDismiss(close);
   const styles = TONE[tone];
+  const countsAsModal = open && modal;
+  React.useEffect(() => {
+    if (!countsAsModal) return;
+    countModalSheet(1);
+    return () => countModalSheet(-1);
+  }, [countsAsModal]);
 
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange} modal={modal}>
