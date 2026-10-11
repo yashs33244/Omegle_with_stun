@@ -5,6 +5,16 @@
  */
 import type Redis from "ioredis";
 import { FLAG_DEFAULTS, flagsSchema, type Flags } from "../protocol";
+import {
+  CLOCK_LOCALE,
+  FLAGS_CACHE_TTL_MS,
+  FLAGS_KEY,
+  MINUTES_PER_DAY,
+  MINUTES_PER_HOUR,
+  MINUTE_MS,
+  NOON_MINUTES,
+  PAUSED_MESSAGE,
+} from "./constants";
 
 export interface FlagsStore {
   /** Stored overrides merged over FLAG_DEFAULTS. */
@@ -48,7 +58,7 @@ export class MemoryFlagsStore implements FlagsStore {
 export class RedisFlagsStore implements FlagsStore {
   constructor(
     private readonly redis: Redis,
-    private readonly key = "chizzy:flags",
+    private readonly key = FLAGS_KEY,
   ) {}
 
   async get(): Promise<Flags> {
@@ -81,11 +91,11 @@ export interface MatchingStatus {
 
 /** Minutes since local midnight in `timeZone` for the instant `ms`. */
 function localMinutes(ms: number, timeZone: string): number {
-  const parts = new Intl.DateTimeFormat("en-GB", { timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
+  const parts = new Intl.DateTimeFormat(CLOCK_LOCALE, { timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
     .formatToParts(new Date(ms));
   const h = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
   const m = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
-  return h * 60 + m;
+  return h * MINUTES_PER_HOUR + m;
 }
 
 interface Window {
@@ -98,11 +108,11 @@ interface Window {
 export function parseStaffedHours(value: string): Window | null {
   const m = /^(\d{2}):(\d{2})-(\d{2}):(\d{2}) ([A-Za-z_]+\/[A-Za-z_]+)$/.exec(value.trim());
   if (!m) return null;
-  const start = Number(m[1]) * 60 + Number(m[2]);
-  const end = Number(m[3]) * 60 + Number(m[4]);
-  if (start > 24 * 60 || end > 24 * 60 || start === end) return null;
+  const start = Number(m[1]) * MINUTES_PER_HOUR + Number(m[2]);
+  const end = Number(m[3]) * MINUTES_PER_HOUR + Number(m[4]);
+  if (start > MINUTES_PER_DAY || end > MINUTES_PER_DAY || start === end) return null;
   try {
-    new Intl.DateTimeFormat("en-GB", { timeZone: m[5] });
+    new Intl.DateTimeFormat(CLOCK_LOCALE, { timeZone: m[5] });
   } catch {
     return null;
   }
@@ -110,10 +120,10 @@ export function parseStaffedHours(value: string): Window | null {
 }
 
 function clockLabel(minutes: number): string {
-  if (minutes === 0 || minutes === 24 * 60) return "midnight";
-  if (minutes === 12 * 60) return "noon";
-  const h = Math.floor(minutes / 60);
-  const m = minutes % 60;
+  if (minutes === 0 || minutes === MINUTES_PER_DAY) return "midnight";
+  if (minutes === NOON_MINUTES) return "noon";
+  const h = Math.floor(minutes / MINUTES_PER_HOUR);
+  const m = minutes % MINUTES_PER_HOUR;
   const h12 = h % 12 === 0 ? 12 : h % 12;
   return `${h12}${m ? `:${String(m).padStart(2, "0")}` : ""} ${h < 12 ? "am" : "pm"}`;
 }
@@ -130,17 +140,17 @@ function insideWindow(w: Window, minutes: number): boolean {
 
 export function matchingStatus(flags: Flags, now: number): MatchingStatus {
   if (!flags.matching_enabled) {
-    return { open: false, reopensAt: null, message: flags.banner_message || "Matching is paused right now." };
+    return { open: false, reopensAt: null, message: flags.banner_message || PAUSED_MESSAGE };
   }
   const window = flags.staffed_hours ? parseStaffedHours(flags.staffed_hours) : null;
   if (!window || insideWindow(window, localMinutes(now, window.timeZone))) {
     return { open: true, reopensAt: null, message: null };
   }
   // Find the next opening minute (at most a day ahead).
-  const startOfMinute = now - (now % 60_000);
+  const startOfMinute = now - (now % MINUTE_MS);
   let reopensAt: number | null = null;
-  for (let i = 1; i <= 24 * 60; i++) {
-    const t = startOfMinute + i * 60_000;
+  for (let i = 1; i <= MINUTES_PER_DAY; i++) {
+    const t = startOfMinute + i * MINUTE_MS;
     if (insideWindow(window, localMinutes(t, window.timeZone))) {
       reopensAt = t;
       break;
@@ -160,7 +170,7 @@ export class FlagsReader {
 
   constructor(
     readonly store: FlagsStore,
-    private readonly ttlMs = 2_000,
+    private readonly ttlMs = FLAGS_CACHE_TTL_MS,
   ) {}
 
   current(): Flags {
