@@ -27,8 +27,8 @@ export interface LegalPageProps {
 /** Shell for legal and safety pages. Every one is a DRAFT until the lawyer signs it off. */
 export const LegalPage: React.FC<LegalPageProps> = ({ title, updated, englishAuthoritative = false, children }) => {
   const { t } = useTranslation(["legal", "common"]);
+  // The document title comes from RouteMeta (src/lib/seo.ts).
   useEffect(() => {
-    document.title = `${title} | Chizzy`;
     window.scrollTo(0, 0);
   }, [title]);
 

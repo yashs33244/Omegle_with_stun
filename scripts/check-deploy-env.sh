@@ -12,7 +12,7 @@ docs="$root/DEPLOYMENT.md"
 
 # Set by deploy.sh or the workflow itself, baked in at build time, or only
 # meant for local runs.
-skip=" BACKEND_IMAGE FRONTEND_IMAGE IMAGE_TAG GATEWAY_CONF_VERSION VITE_API_URL BACKEND_PORT FRONTEND_PORT "
+skip=" BACKEND_IMAGE FRONTEND_IMAGE IMAGE_TAG GATEWAY_CONF_VERSION VITE_API_URL VITE_SITE_URL BACKEND_PORT FRONTEND_PORT "
 
 env_keys=$(sed -n '/^ENV_KEYS=(/,/^)/p' "$deploy_sh" | sed -e '1d' -e '$d' | tr -s ' ' '\n')
 envs_list=$(sed -n 's/^ *envs: *//p' "$workflow" | tr ',' '\n' | tr -d ' ')

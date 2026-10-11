@@ -78,6 +78,7 @@ launch build"); the backend itself also refuses to start without them.
 | `EC2_SSH_FINGERPRINT` | unset | SHA256 host key fingerprint; when set, the SSH steps refuse a different host key (recommended). Get it with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the host |
 | `VITE_API_URL` | `REACT_APP_API_URL`, then `https://chizzyapi.itsyash.space` | public URL of the socket server, baked into the frontend build and its CSP |
 | `REACT_APP_API_URL` | none | older name of `VITE_API_URL`, still read as a fallback |
+| `VITE_SITE_URL` | `https://chizzy.itsyash.space` | public URL of the site, baked into the frontend build: canonical and link preview URLs, `sitemap.xml` and `robots.txt` |
 | `CORS_ORIGINS` | `https://chizzy.itsyash.space` | comma list of allowed browser origins (the frontend URL). The backend refuses to start in production without it |
 | `BACKEND_REPLICAS` | `2` | number of backend containers |
 | `BIND_ADDRESS` | `0.0.0.0` | host address the gateway (3004) and frontend (5173) ports bind to. Set `127.0.0.1` when the host proxy runs on the same host and connects via localhost, so the ports are not reachable around it |
@@ -406,7 +407,7 @@ docker rmi yashs3324/omegle-backend:<old-sha> yashs3324/omegle-frontend:<old-sha
 
 ```sh
 docker build -t yashs3324/omegle-backend:test ./backend
-docker build --build-arg VITE_API_URL=https://chizzyapi.itsyash.space -t yashs3324/omegle-frontend:test ./new-frontend
+docker build --build-arg VITE_API_URL=https://chizzyapi.itsyash.space --build-arg VITE_SITE_URL=https://chizzy.itsyash.space -t yashs3324/omegle-frontend:test ./new-frontend
 ```
 
 The backend image installs and compiles with bun and runs on `node:22-alpine`

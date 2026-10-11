@@ -207,6 +207,7 @@ Empty values mean "use the default". Compose passes every variable below.
 | var | default | notes |
 |---|---|---|
 | VITE_API_URL | `http://localhost:3004` in dev, `https://chizzyapi.itsyash.space` in production builds | API and socket origin, baked in at build time (`--build-arg VITE_API_URL=...` for the image). The frontend nginx derives its CSP `connect-src` from the same value. |
+| VITE_SITE_URL | `https://chizzy.itsyash.space` | Public origin of the site, baked in at build time (`--build-arg VITE_SITE_URL=...`): canonical and link preview (`og:url`, `og:image`) URLs, `sitemap.xml` and `robots.txt`. |
 
 Everything else the SPA needs at runtime (Turnstile site key, Sentry DSN,
 PostHog key, banner, staffed hours) comes from `GET /api/config`.

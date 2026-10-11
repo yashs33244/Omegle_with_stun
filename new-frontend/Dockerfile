@@ -12,6 +12,10 @@ COPY . .
 ARG VITE_API_URL=https://chizzyapi.itsyash.space
 # An empty build arg falls back like config.ts does, so the bundle and the CSP agree.
 ENV VITE_API_URL=${VITE_API_URL:-https://chizzyapi.itsyash.space}
+# Public origin of the site: canonical, og:url and og:image URLs, sitemap.xml
+# and robots.txt (vite.config.ts, scripts/prerender-meta.mjs).
+ARG VITE_SITE_URL=https://chizzy.itsyash.space
+ENV VITE_SITE_URL=${VITE_SITE_URL:-https://chizzy.itsyash.space}
 RUN npm run build
 # Pre-compressed copies of the moderation models and their runtimes, served by
 # gzip_static (nginx.conf, /models/): the 12 MB MediaPipe wasm goes out as

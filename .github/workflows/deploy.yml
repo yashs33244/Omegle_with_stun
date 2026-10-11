@@ -55,6 +55,7 @@ jobs:
           # VITE_API_URL is new; REACT_APP_API_URL is the older secret with the same value.
           build-args: |
             VITE_API_URL=${{ secrets.VITE_API_URL || secrets.REACT_APP_API_URL || 'https://chizzyapi.itsyash.space' }}
+            VITE_SITE_URL=${{ secrets.VITE_SITE_URL || 'https://chizzy.itsyash.space' }}
           tags: |
             ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
             ${{ env.FRONTEND_IMAGE }}:latest

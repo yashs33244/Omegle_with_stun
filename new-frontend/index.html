@@ -3,22 +3,32 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Title, description, canonical and the og/twitter copies are rewritten
+         per route by scripts/prerender-meta.mjs after the build (src/lib/seoRoutes.json).
+         VITE_SITE_URL is the public origin, filled in by Vite (vite.config.ts). -->
     <title>Chizzy - Video chat with strangers who share your interests</title>
     <meta name="description" content="Chizzy is a free, anonymous video chat that matches you with people who share your interests. Pick your topics, accept a match and start talking." />
+    <link rel="canonical" href="%VITE_SITE_URL%/" />
     <meta name="theme-color" content="#111827" />
-    <link rel="icon" href="/favicon.ico" />
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
 
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Chizzy" />
+    <meta property="og:url" content="%VITE_SITE_URL%/" />
     <meta property="og:title" content="Chizzy - Video chat with strangers who share your interests" />
-    <meta property="og:description" content="Free, anonymous video chat that matches you with people who share your interests." />
-    <meta property="og:image" content="https://chizzy.itsyash.space/og-image.png" />
+    <meta property="og:description" content="Chizzy is a free, anonymous video chat that matches you with people who share your interests. Pick your topics, accept a match and start talking." />
+    <meta property="og:image" content="%VITE_SITE_URL%/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
     <meta property="og:image:alt" content="Chizzy video chat" />
 
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content="Chizzy - Video chat with strangers who share your interests" />
-    <meta name="twitter:description" content="Free, anonymous video chat that matches you with people who share your interests." />
-    <meta name="twitter:image" content="https://chizzy.itsyash.space/og-image.png" />
+    <meta name="twitter:description" content="Chizzy is a free, anonymous video chat that matches you with people who share your interests. Pick your topics, accept a match and start talking." />
+    <meta name="twitter:image" content="%VITE_SITE_URL%/og-image.png" />
   </head>
 
   <body>
