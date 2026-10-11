@@ -6,6 +6,8 @@
  *
  * The wallet arrives over the socket (wallet:update after session:hello,
  * forwarded by useWalletSync in the room) and over REST when the sheet opens.
+ * A paid Checkout that /verify has not credited yet is kept in localStorage
+ * and retried here, including after a reload (pendingPayment.ts).
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -14,6 +16,15 @@ import { billingApi as defaultBillingApi, type BillingApi } from "@/lib/billingA
 import type { BillingPacksResponse, PremiumFeature, UnlockDays, WalletView } from "@/lib/protocol";
 import { getSessionToken } from "@/lib/session";
 import { ERROR_KEYS, PremiumContext, type PremiumErrorKey, type PremiumOutcome, type PremiumValue } from "./PremiumContext";
+import {
+  attemptVerify,
+  clearPendingPayment,
+  loadPendingPayment,
+  savePendingPayment,
+  settlePendingPayment,
+  type PendingPayment,
+  type SettleHandle,
+} from "./pendingPayment";
 import { openCheckout as defaultOpenCheckout } from "./razorpayCheckout";
 import { UnlockSheet } from "./UnlockSheet";
 
@@ -35,7 +46,9 @@ export const PremiumProvider: React.FC<PremiumProviderProps> = ({ children, api 
   const [wallet, setWallet] = useState<WalletView | null>(null);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [busy, setBusy] = useState<"buy" | "unlock" | null>(null);
+  const [pending, setPending] = useState(false);
   const catalogueLoad = useRef<Promise<void> | null>(null);
+  const settling = useRef<SettleHandle | null>(null);
 
   const loadCatalogue = useCallback(() => {
     catalogueLoad.current ??= api
@@ -61,6 +74,33 @@ export const PremiumProvider: React.FC<PremiumProviderProps> = ({ children, api 
   useEffect(() => {
     void loadCatalogue();
   }, [loadCatalogue]);
+
+  /** Keeps retrying a paid Checkout until the server credits or refuses it; one loop at a time. */
+  const settle = useCallback(
+    (payment: PendingPayment, alreadyTried = false) => {
+      settling.current?.cancel();
+      const handle = settlePendingPayment(payment, { api, getToken: getSessionToken, alreadyTried });
+      settling.current = handle;
+      setPending(true);
+      void handle.done.then((result) => {
+        if (settling.current !== handle) return;
+        settling.current = null;
+        setPending(false);
+        if (result.status === "ok") setWallet((w) => ({ coins: result.coins, unlocks: w?.unlocks ?? [] }));
+      });
+    },
+    [api],
+  );
+
+  // A payment left over from an earlier page (closed tab, reload) is settled on load.
+  useEffect(() => {
+    const leftover = loadPendingPayment();
+    if (leftover) settle(leftover);
+    return () => {
+      settling.current?.cancel();
+      settling.current = null;
+    };
+  }, [settle]);
 
   const openUnlockSheet = useCallback(() => {
     setSheetOpen(true);
@@ -104,22 +144,33 @@ export const PremiumProvider: React.FC<PremiumProviderProps> = ({ children, api 
         const result = await openCheckout(order, { name: "Chizzy", description: t("packCoins", { coins: order.coins }) });
         if (result.status === "dismissed") return { ok: false, error: "dismissed" };
         if (result.status === "failed") return { ok: false, error: "paymentFailed" };
-        const verified = await api.verifyPayment(token, { orderId: order.orderId, paymentId: result.paymentId, signature: result.signature });
-        if (!verified.ok) return { ok: false, error: ERROR_KEYS[verified.error] };
-        setWallet((w) => ({ coins: verified.coins, unlocks: w?.unlocks ?? [] }));
-        return { ok: true };
+        // From here on the user has paid: the proof survives until /verify answers.
+        const payment: PendingPayment = { orderId: order.orderId, paymentId: result.paymentId, signature: result.signature, startedAt: Date.now() };
+        savePendingPayment(payment);
+        const verified = await attemptVerify(api, token, payment);
+        if (verified.status === "ok") {
+          clearPendingPayment();
+          setWallet((w) => ({ coins: verified.coins, unlocks: w?.unlocks ?? [] }));
+          return { ok: true };
+        }
+        if (verified.status === "failed") {
+          clearPendingPayment();
+          return { ok: false, error: verified.error };
+        }
+        settle(payment, true);
+        return { ok: false, error: "paymentPending" };
       } catch (err) {
         return { ok: false, error: thrownErrorKey(err) };
       } finally {
         setBusy(null);
       }
     },
-    [api, openCheckout, t],
+    [api, openCheckout, settle, t],
   );
 
   const value = useMemo<PremiumValue>(
-    () => ({ catalogue, wallet, sheetOpen, busy, openUnlockSheet, closeUnlockSheet, refresh, applyWallet, applyCoins, unlock, buy }),
-    [catalogue, wallet, sheetOpen, busy, openUnlockSheet, closeUnlockSheet, refresh, applyWallet, applyCoins, unlock, buy],
+    () => ({ catalogue, wallet, sheetOpen, busy, pending, openUnlockSheet, closeUnlockSheet, refresh, applyWallet, applyCoins, unlock, buy }),
+    [catalogue, wallet, sheetOpen, busy, pending, openUnlockSheet, closeUnlockSheet, refresh, applyWallet, applyCoins, unlock, buy],
   );
 
   return (

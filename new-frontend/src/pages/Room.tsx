@@ -26,7 +26,7 @@ import { usePipDrag } from "@/hooks/usePipDrag";
 import { useSignaling, type ChatEntry } from "@/hooks/useSignaling";
 import { useWakeLock } from "@/hooks/useWakeLock";
 import { useRoomGate } from "@/pages/gate/useRoomGate";
-import { useWalletSync } from "@/premium";
+import { useGenderFilterGate, useWalletSync } from "@/premium";
 import type { ErrorCode, MatchMode, ModerationSignalPayload, Preferences, Profile, PublicProfile, SimpleAck } from "@/lib/protocol";
 import { RemoteBlurOverlay } from "@/moderation/RemoteBlurOverlay";
 import { isBlurred } from "@/moderation/blurGate";
@@ -164,7 +164,7 @@ const RoomSession: React.FC<RoomProps> = ({
   onFlipCamera,
   frontCamera = true,
 }) => {
-  const { t } = useTranslation(["room", "safety"]);
+  const { t } = useTranslation(["room", "safety", "premium"]);
   const desktop = useMediaQuery(DESKTOP_QUERY);
   const landscape = useMediaQuery(LANDSCAPE_QUERY);
   const [preferences, setPreferences] = useState<Preferences>(initialPreferences);
@@ -305,6 +305,20 @@ const RoomSession: React.FC<RoomProps> = ({
     },
     [updatePreferences, onPreferencesChange],
   );
+
+  // The server queues us with the filter off when its unlock is missing or
+  // lapsed (hello ack, or premium_required mid-session): keep the local
+  // preferences honest and say so, with a way to the unlock sheet.
+  const [filterOff, setFilterOff] = useState(false);
+  const genderGate = useGenderFilterGate();
+  const serverGenderFilter = state.genderFilter;
+  useEffect(() => {
+    if (serverGenderFilter === null || serverGenderFilter === preferences.genderFilter) return;
+    const next = { ...preferences, genderFilter: serverGenderFilter };
+    setPreferences(next);
+    onPreferencesChange?.(next);
+    setFilterOff(serverGenderFilter === "all");
+  }, [serverGenderFilter, preferences, onPreferencesChange]);
 
   const handleSend = (text: string) => {
     void signaling.sendChat(text).then(safety.noteChatAck);
@@ -470,6 +484,21 @@ const RoomSession: React.FC<RoomProps> = ({
             {noticeKey && (
               <StatusChip tone="warn">
                 <span className="pointer-events-auto">{t(noticeKey)}</span>
+              </StatusChip>
+            )}
+            {filterOff && (
+              <StatusChip tone="warn" testId="gender-filter-off">
+                <span className="pointer-events-auto">{t("premium:filterOff")}</span>
+                <button
+                  type="button"
+                  className="pointer-events-auto rounded-full bg-yellow-400 px-2 py-0.5 text-xs font-semibold text-black"
+                  onClick={() => {
+                    setFilterOff(false);
+                    genderGate.openUnlockSheet();
+                  }}
+                >
+                  {t("premium:filterOffAction")}
+                </button>
               </StatusChip>
             )}
             {faceGate.paused && inCall && !textOnlyMode && (

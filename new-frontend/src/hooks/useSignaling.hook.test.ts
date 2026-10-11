@@ -84,7 +84,7 @@ describe("useSignaling (socket wiring)", () => {
     expect(socket.hellos()).toHaveLength(1);
     expect(socket.hellos()[0].payload).toMatchObject({ protocolVersion: 3, profile, preferences, mode: "preview" });
 
-    act(() => socket.hellos()[0].ack?.(null, { ok: true, coins: 120, iceServers: [] }));
+    act(() => socket.hellos()[0].ack?.(null, { ok: true, coins: 120, iceServers: [], mode: "preview", genderFilter: "all" }));
     expect(result.current.state.status).toBe("waiting");
     expect(result.current.state.coins).toBe(120);
 

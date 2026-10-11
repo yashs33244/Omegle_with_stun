@@ -25,8 +25,11 @@
   "unlockedToast": "Gender filter unlocked.",
   "creditedToast": "Coins added to your wallet.",
   "close": "Close",
+  "filterOff": "Gender filter turned off: unlock it in Settings.",
+  "filterOffAction": "Unlock",
   "errors": {
     "paymentFailed": "The payment did not go through. You were not charged.",
+    "paymentPending": "Payment is processing, coins arrive in a minute.",
     "dismissed": "Payment cancelled.",
     "unreachable": "Cannot reach the server. Check your connection and try again.",
     "insufficientCoins": "Not enough coins for that.",

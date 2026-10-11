@@ -25,7 +25,7 @@ export const UnlockSheet: React.FC = () => {
   const [feedback, setFeedback] = useState<Feedback>(null);
 
   if (!premium) return null;
-  const { catalogue, wallet, busy } = premium;
+  const { catalogue, wallet, busy, pending } = premium;
   const coins = wallet?.coins ?? null;
   const expiresAt = unlockFor(wallet, "gender_filter");
   const costPerDay = catalogue?.costPerDay ?? 0;
@@ -93,6 +93,11 @@ export const UnlockSheet: React.FC = () => {
         {expiresAt ? t("statusUnlocked", { date: formatDate(expiresAt) }) : t("statusLocked")}
       </p>
 
+      {pending && (
+        <p role="status" data-testid="premium-pending" className="mt-2 text-xs text-yellow-300">
+          {t("errors.paymentPending")}
+        </p>
+      )}
       <section className="mt-5" aria-labelledby="unlock-heading">
         <h3 id="unlock-heading" className="mb-2 text-sm font-medium">
           {t("unlockHeading")}

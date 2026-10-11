@@ -8,6 +8,7 @@ import type { BillingError, BillingPacksResponse, PremiumFeature, UnlockDays, Wa
 
 export type PremiumErrorKey =
   | "paymentFailed"
+  | "paymentPending"
   | "dismissed"
   | "unreachable"
   | "insufficientCoins"
@@ -26,6 +27,8 @@ export interface PremiumState {
   sheetOpen: boolean;
   /** A Buy or Unlock in flight; the sheet disables its buttons meanwhile. */
   busy: "buy" | "unlock" | null;
+  /** A paid Checkout still being verified in the background (see pendingPayment.ts). */
+  pending: boolean;
 }
 
 export interface PremiumValue extends PremiumState {
@@ -57,9 +60,10 @@ export const ERROR_KEYS: Record<BillingError, PremiumErrorKey> = {
   invalid: "generic",
   rate_limited: "rateLimited",
   unknown_pack: "generic",
-  order_not_found: "generic",
+  order_unknown: "generic",
   bad_signature: "paymentFailed",
   payment_mismatch: "paymentFailed",
+  payment_pending: "paymentPending",
   insufficient_coins: "insufficientCoins",
   upstream: "unreachable",
 };

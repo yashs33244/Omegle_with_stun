@@ -12,6 +12,7 @@ import {
   type ChatAck,
   type ClientToServerEvents,
   type ErrorCode,
+  type GenderFilter,
   type HelloAck,
   type IceServer,
   type MatchEndReason,
@@ -79,6 +80,13 @@ export interface SignalingState {
   error: string | null;
   /** Short-lived server notice such as rate limiting. */
   notice: ErrorCode | null;
+  /**
+   * The gender filter the server applies to us: from the hello ack (which
+   * downgrades a locked filter to "all"), a saved session:preferences, or
+   * "all" after premium_required when an unlock lapsed mid-session. Null
+   * before hello.
+   */
+  genderFilter: GenderFilter | null;
   /** How far the server widened the search while waiting: 0 topic + language, 1 language, 2 anyone. */
   relaxStep: number;
   /** People online, when the server shares the real count. */
@@ -104,6 +112,7 @@ export const initialSignalingState: SignalingState = {
   lastEndReason: null,
   error: null,
   notice: null,
+  genderFilter: null,
   relaxStep: 0,
   online: null,
 };
@@ -111,7 +120,7 @@ export const initialSignalingState: SignalingState = {
 export type SignalingEvent =
   | { type: "socket-disconnected" }
   | { type: "connect-failed" }
-  | { type: "hello-ok"; coins: number; iceServers: IceServer[] }
+  | { type: "hello-ok"; coins: number; iceServers: IceServer[]; genderFilter: GenderFilter }
   | { type: "hello-failed"; error: ErrorCode | "timeout"; message?: string }
   | { type: "queue-waiting"; relaxStep?: number; online?: number | null }
   | {
@@ -138,6 +147,7 @@ export type SignalingEvent =
   | { type: "friends-new"; roomId: string }
   | { type: "session-replaced" }
   | { type: "server-error"; code: ErrorCode; message?: string }
+  | { type: "preferences-saved"; genderFilter: GenderFilter }
   | { type: "notice-cleared" };
 
 const TERMINAL: SignalingStatus[] = ["banned", "replaced"];
@@ -195,6 +205,7 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
         error: null,
         coins: event.coins,
         iceServers: event.iceServers,
+        genderFilter: event.genderFilter,
       };
     }
 
@@ -307,7 +318,12 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
 
     case "server-error":
       if (event.code === "banned") return { ...clearRoom(state), status: "banned", reconnecting: false };
+      // The unlock ran out mid-session: the server queues us with the filter off.
+      if (event.code === "premium_required") return { ...state, genderFilter: "all" };
       return { ...state, notice: event.code };
+
+    case "preferences-saved":
+      return { ...state, genderFilter: event.genderFilter };
 
     case "notice-cleared":
       return state.notice ? { ...state, notice: null } : state;
@@ -464,7 +480,10 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
         if (err) {
           dispatch({ type: "hello-failed", error: "timeout", message: i18n.t("room:signaling.noAnswer") });
         } else if (res.ok === true) {
-          dispatch({ type: "hello-ok", coins: res.coins, iceServers: res.iceServers });
+          // An older server may not say which filter it applied; assume ours.
+          const genderFilter = res.genderFilter ?? preferencesRef.current.genderFilter;
+          if (genderFilter !== preferencesRef.current.genderFilter) preferencesRef.current = { ...preferencesRef.current, genderFilter };
+          dispatch({ type: "hello-ok", coins: res.coins, iceServers: res.iceServers, genderFilter });
         } else {
           dispatch({ type: "hello-failed", error: res.error, message: res.message });
           if (res.error === "banned") stop();
@@ -688,7 +707,10 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
     if (!socket) return notConnected();
     try {
       const res = await socket.timeout(ACK_TIMEOUT_MS).emitWithAck("session:preferences", { preferences: next });
-      if (res.ok) preferencesRef.current = next;
+      if (res.ok) {
+        preferencesRef.current = next;
+        dispatch({ type: "preferences-saved", genderFilter: next.genderFilter });
+      }
       return res;
     } catch {
       return { ok: false, error: "internal", message: i18n.t("room:signaling.noAnswer") };

@@ -1,9 +1,10 @@
 import React from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BillingApi } from "@/lib/billingApi";
 import type { BillingPacksResponse, WalletView } from "@/lib/protocol";
 import { SESSION_TOKEN_KEY, resetSessionStateForTests } from "@/lib/session";
+import { PENDING_GIVE_UP_MS, PENDING_PAYMENT_KEY } from "./pendingPayment";
 import { PremiumProvider } from "./PremiumProvider";
 import type { CheckoutResult } from "./razorpayCheckout";
 import { useGenderFilterGate } from "./useGenderFilterGate";
@@ -132,5 +133,78 @@ describe("UnlockSheet", () => {
     await screen.findByTestId("unlock-sheet");
     expect(await screen.findByTestId("buy-disabled")).toBeInTheDocument();
     expect(screen.queryByTestId("buy-week")).not.toBeInTheDocument();
+  });
+});
+
+describe("pending payment", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps the proof of payment and retries /verify with backoff after a rate limit, then credits", async () => {
+    let answers = 0;
+    const api = fakeApi({
+      verifyPayment: vi.fn(async () => {
+        answers++;
+        if (answers === 1) return { ok: false as const, error: "rate_limited" as const };
+        if (answers === 2) return { ok: false as const, error: "payment_pending" as const };
+        if (answers === 3) throw new Error("offline");
+        return { ok: true as const, coins: 800 };
+      }),
+    });
+    renderWith(api, async () => ({ status: "paid", paymentId: "pay_slow", signature: "sig" }));
+    fireEvent.click(screen.getByText("open"));
+    await screen.findByTestId("unlock-sheet");
+    fireEvent.click(screen.getByTestId("buy-week"));
+    await waitFor(() => expect(screen.getByTestId("premium-feedback")).toHaveTextContent("Payment is processing"));
+    expect(screen.getByTestId("premium-pending")).toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem(PENDING_PAYMENT_KEY)!)).toMatchObject({ orderId: "order_1", paymentId: "pay_slow", signature: "sig" });
+    expect(api.verifyPayment).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(api.verifyPayment).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(api.verifyPayment).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(api.verifyPayment).toHaveBeenCalledTimes(4);
+    await waitFor(() => expect(screen.getByTestId("wallet-coins")).toHaveTextContent("800 coins"));
+    expect(screen.queryByTestId("premium-pending")).not.toBeInTheDocument();
+    expect(localStorage.getItem(PENDING_PAYMENT_KEY)).toBeNull();
+    expect(api.verifyPayment).toHaveBeenLastCalledWith("tok", { orderId: "order_1", paymentId: "pay_slow", signature: "sig" });
+  });
+
+  it("drops the record on a terminal answer and settles a leftover payment on the next load", async () => {
+    const refused = fakeApi({ verifyPayment: vi.fn(async () => ({ ok: false as const, error: "bad_signature" as const })) });
+    renderWith(refused);
+    fireEvent.click(screen.getByText("open"));
+    await screen.findByTestId("unlock-sheet");
+    fireEvent.click(screen.getByTestId("buy-week"));
+    await waitFor(() => expect(screen.getByTestId("premium-feedback")).toHaveTextContent("did not go through"));
+    expect(localStorage.getItem(PENDING_PAYMENT_KEY)).toBeNull();
+    cleanup();
+
+    localStorage.setItem(PENDING_PAYMENT_KEY, JSON.stringify({ orderId: "order_9", paymentId: "pay_9", signature: "s9", startedAt: Date.now() }));
+    const api = fakeApi();
+    renderWith(api);
+    await waitFor(() => expect(api.verifyPayment).toHaveBeenCalledWith("tok", { orderId: "order_9", paymentId: "pay_9", signature: "s9" }));
+    await waitFor(() => expect(localStorage.getItem(PENDING_PAYMENT_KEY)).toBeNull());
+    await waitFor(() => expect(screen.getByTestId("gate")).toHaveTextContent("true:false:800:100"));
+  });
+
+  it("stops retrying ten minutes after the payment", async () => {
+    const api = fakeApi({ verifyPayment: vi.fn(async () => ({ ok: false as const, error: "rate_limited" as const })) });
+    localStorage.setItem(
+      PENDING_PAYMENT_KEY,
+      JSON.stringify({ orderId: "order_old", paymentId: "pay_old", signature: "s", startedAt: Date.now() - PENDING_GIVE_UP_MS }),
+    );
+    renderWith(api);
+    // One last attempt on load, then the record is dropped (the webhook is the fallback).
+    await waitFor(() => expect(api.verifyPayment).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(localStorage.getItem(PENDING_PAYMENT_KEY)).toBeNull());
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(api.verifyPayment).toHaveBeenCalledTimes(1);
   });
 });

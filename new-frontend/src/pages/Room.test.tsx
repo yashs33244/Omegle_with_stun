@@ -6,6 +6,7 @@ import { initialSignalingState, type SignalingState } from "@/hooks/useSignaling
 import type { PeerConnectionState } from "@/hooks/usePeerConnection";
 import { SAFETY_COACH_KEY } from "@/components/safety/safetyText";
 import type * as MediaQuery from "@/hooks/useMediaQuery";
+import { PremiumContext, type PremiumValue } from "@/premium/PremiumContext";
 
 let signalingState: SignalingState;
 let peerState: PeerConnectionState;
@@ -49,6 +50,21 @@ const { Room } = await import("./Room");
 
 /** The media lane's peer fields, for a call that is neither private nor degraded. */
 const PEER_EXTRAS = { failure: null, privateMode: false, privateRequested: false, relayed: false, lowBandwidth: false };
+/** A premium context with nothing unlocked, for the gender filter notice. */
+const PREMIUM_OFF: PremiumValue = {
+  catalogue: null,
+  wallet: null,
+  sheetOpen: false,
+  busy: null,
+  pending: false,
+  openUnlockSheet: vi.fn(),
+  closeUnlockSheet: vi.fn(),
+  refresh: vi.fn(async () => undefined),
+  applyWallet: vi.fn(),
+  applyCoins: vi.fn(),
+  unlock: vi.fn(async () => ({ ok: true as const })),
+  buy: vi.fn(async () => ({ ok: true as const })),
+};
 
 // These tests are about the call itself: the first-use safety card was already dismissed.
 beforeEach(() => {
@@ -315,5 +331,56 @@ describe("Room action bar and chat", () => {
     fireEvent.click(screen.getByRole("button", { name: /Text Only/ }));
     expect(screen.getByTestId("chat-sheet")).toBeInTheDocument();
     expect(screen.queryByTestId("chat-close")).not.toBeInTheDocument();
+  });
+});
+
+describe("Room gender filter downgrade", () => {
+  beforeEach(() => {
+    peerState = { remoteStream: null, remoteAudioTrack: null, connectionState: "new", connectedAt: null, quality: "GOOD", ...PEER_EXTRAS };
+  });
+
+  it("adopts the server's filter, tells Landing, and offers the unlock sheet", () => {
+    signalingState = { ...initialSignalingState, status: "waiting", coins: 100, genderFilter: "all" };
+    const onPreferencesChange = vi.fn();
+    const openUnlockSheet = vi.fn();
+    render(
+      <PremiumContext.Provider value={{ ...PREMIUM_OFF, openUnlockSheet }}>
+        <Room
+          profile={profile}
+          preferences={{ genderFilter: "female", languageFilter: "any" }}
+          onPreferencesChange={onPreferencesChange}
+          localStream={null}
+          micEnabled
+          onMicEnabledChange={vi.fn()}
+          onCameraEnabledChange={vi.fn()}
+          onBackToHome={vi.fn()}
+        />
+      </PremiumContext.Provider>,
+    );
+    expect(onPreferencesChange).toHaveBeenCalledWith({ genderFilter: "all", languageFilter: "any" });
+    const notice = screen.getByTestId("gender-filter-off");
+    expect(notice).toHaveTextContent("Gender filter turned off");
+    fireEvent.click(screen.getByRole("button", { name: "Unlock" }));
+    expect(openUnlockSheet).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId("gender-filter-off")).not.toBeInTheDocument();
+  });
+
+  it("shows nothing when the server applies the filter that was sent", () => {
+    signalingState = { ...initialSignalingState, status: "waiting", coins: 100, genderFilter: "female" };
+    const onPreferencesChange = vi.fn();
+    render(
+      <Room
+        profile={profile}
+        preferences={{ genderFilter: "female", languageFilter: "any" }}
+        onPreferencesChange={onPreferencesChange}
+        localStream={null}
+        micEnabled
+        onMicEnabledChange={vi.fn()}
+        onCameraEnabledChange={vi.fn()}
+        onBackToHome={vi.fn()}
+      />,
+    );
+    expect(onPreferencesChange).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("gender-filter-off")).not.toBeInTheDocument();
   });
 });
