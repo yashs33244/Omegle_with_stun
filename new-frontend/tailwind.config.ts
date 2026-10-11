@@ -20,6 +20,27 @@ export default {
       },
     },
     extend: {
+      // Layout tokens from src/index.css: min-h-tap, h-app, pb-safe-bottom, mt-safe-top...
+      spacing: {
+        "safe-top": "var(--safe-top)",
+        "safe-right": "var(--safe-right)",
+        "safe-bottom": "var(--safe-bottom)",
+        "safe-left": "var(--safe-left)",
+        tap: "var(--tap-min)",
+      },
+      height: {
+        app: "var(--app-height)",
+      },
+      minHeight: {
+        app: "var(--app-height)",
+        tap: "var(--tap-min)",
+      },
+      maxHeight: {
+        app: "var(--app-height)",
+      },
+      minWidth: {
+        tap: "var(--tap-min)",
+      },
       colors: {
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",

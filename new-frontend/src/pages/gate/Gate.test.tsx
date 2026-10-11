@@ -83,6 +83,24 @@ beforeEach(() => {
 });
 
 describe("Gate", () => {
+  it("moves from day to month to year as each is completed, numeric keypad on phones", async () => {
+    const user = userEvent.setup();
+    const { api } = fakeApi(config());
+    renderGate(api);
+
+    const day = await screen.findByTestId("dob-day");
+    expect(day).toHaveAttribute("inputmode", "numeric");
+    await user.type(day, "27");
+    expect(screen.getByTestId("dob-month")).toHaveFocus();
+    await user.keyboard("03");
+    expect(screen.getByTestId("dob-year")).toHaveFocus();
+    await user.keyboard("1999");
+    expect(screen.getByTestId("dob-year")).toHaveValue("1999");
+    // Tapping anywhere on the row toggles the box.
+    await user.click(screen.getByText("I am 18 or older."));
+    expect(screen.getByTestId("attest-18")).toBeChecked();
+  });
+
   it("asks a new visitor for date of birth, attestation and Terms before showing the app", async () => {
     const user = userEvent.setup();
     const { api, requests } = fakeApi(config());

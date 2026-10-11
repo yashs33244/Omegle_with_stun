@@ -11,25 +11,30 @@ import { Link } from "react-router-dom";
 import { Footer } from "@/components/Footer";
 import { Countdown } from "./Countdown";
 
-/** Centered white card on the dark app background, with the footer below. */
+/**
+ * Centred white card on the dark app background, with the footer below. The
+ * card and the header share the first screen; the footer follows underneath.
+ */
 export const GateShell: React.FC<{
   children: React.ReactNode;
   testId?: string;
 }> = ({ children, testId }) => {
   const { t } = useTranslation();
   return (
-    <div className="min-h-screen bg-gray-900 flex flex-col">
-      <header className="px-6 pt-6 text-center">
-        <p className="text-3xl font-bold text-yellow-400">{t("appName")}</p>
-      </header>
-      <main className="flex-1 flex items-center justify-center p-4">
-        <div
-          data-testid={testId}
-          className="w-full max-w-md rounded-lg border-2 border-black bg-white p-6 shadow-md text-black"
-        >
-          {children}
-        </div>
-      </main>
+    <div className="bg-gray-900 flex flex-col">
+      <div className="min-h-app flex flex-col">
+        <header className="px-4 pt-[max(var(--safe-top),1rem)] pb-2 text-center">
+          <p className="text-3xl font-bold text-yellow-400">{t("appName")}</p>
+        </header>
+        <main className="flex-1 flex items-center justify-center px-4 pb-4">
+          <div
+            data-testid={testId}
+            className="w-full max-w-md rounded-xl border-2 border-black bg-white p-6 shadow-md text-black"
+          >
+            {children}
+          </div>
+        </main>
+      </div>
       <Footer />
     </div>
   );

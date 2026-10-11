@@ -290,27 +290,60 @@ describe("Landing photo capture", () => {
   });
 });
 
-describe("Landing home settings", () => {
-  it("names the language and country pickers by label and current value", async () => {
-    render(<Landing />, { wrapper: MemoryRouter });
-    expect(await screen.findByRole("button", { name: "Language English" })).toHaveTextContent("English");
-    expect(screen.getByRole("button", { name: /^Country .*India$/ })).toHaveTextContent("India");
-  });
-
-  it("closes an open dropdown when Start is clicked", async () => {
+describe("Landing settings sheet", () => {
+  async function openSettings() {
     const user = userEvent.setup();
     render(<Landing />, { wrapper: MemoryRouter });
-    const start = await screen.findByTestId("start-chat");
-    await waitFor(() => expect(start).toBeEnabled());
+    await waitFor(() => expect(screen.getByTestId("start-chat")).toBeEnabled());
+    await user.click(screen.getByTestId("open-settings"));
+    const sheet = await screen.findByTestId("start-settings");
+    return { user, sheet };
+  }
 
-    const country = screen.getByRole("button", { name: /^Country/ });
+  it("keeps language and country off the start screen and names their pickers by label and value", async () => {
+    const { sheet } = await openSettings();
+    expect(within(sheet).getByRole("button", { name: "I speak English" })).toHaveTextContent("English");
+    expect(within(sheet).getByRole("button", { name: /^Country .*India$/ })).toHaveTextContent("India");
+    expect(within(sheet).getByRole("button", { name: "Who do you want to meet? Everyone" })).toBeInTheDocument();
+    expect(within(sheet).getByRole("button", { name: /^Preferred Language/ })).toBeInTheDocument();
+    expect(within(sheet).getByTestId("language-switcher")).toBeInTheDocument();
+  });
+
+  it("a press outside the sheet closes an open dropdown first, then the sheet", async () => {
+    const { user, sheet } = await openSettings();
+    const overlay = sheet.previousElementSibling as HTMLElement;
+    const country = within(sheet).getByRole("button", { name: /^Country/ });
     await user.click(country);
     expect(screen.getByRole("listbox", { name: "Country" })).toBeInTheDocument();
 
-    await user.click(start);
+    await user.click(overlay);
     expect(screen.queryByRole("listbox", { name: "Country" })).not.toBeInTheDocument();
     expect(country).toHaveAttribute("aria-expanded", "false");
-    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByTestId("start-settings")).toBeInTheDocument();
+
+    await user.click(overlay);
+    await waitFor(() => expect(screen.queryByTestId("start-settings")).not.toBeInTheDocument());
+  });
+
+  it("carries the chosen country, language and match preferences into the chat", async () => {
+    const { user, sheet } = await openSettings();
+    await user.click(within(sheet).getByRole("button", { name: /^Country/ }));
+    await user.click(screen.getByRole("option", { name: /Germany/ }));
+    await user.click(within(sheet).getByRole("button", { name: /^I speak/ }));
+    await user.click(screen.getByRole("option", { name: "Hindi" }));
+    await user.click(within(sheet).getByRole("button", { name: /^Who do you want to meet/ }));
+    await user.click(screen.getByRole("option", { name: "Female" }));
+    await user.click(within(sheet).getByTestId("settings-done"));
+    await waitFor(() => expect(screen.queryByTestId("start-settings")).not.toBeInTheDocument());
+
+    expect(screen.getByTestId("gender-filter-note")).toHaveTextContent("Meeting: Female");
+    await user.click(screen.getByTestId("start-chat"));
+    await user.click(await screen.findByTestId("skip-photo"));
+    await user.type(await screen.findByTestId("name-input"), "Asha");
+    await user.click(screen.getByTestId("begin-chat"));
+    await screen.findByTestId("room");
+    expect(roomProps.current?.profile).toMatchObject({ country: "DE", language: "hi" });
+    expect(roomProps.current?.preferences).toEqual({ genderFilter: "female", languageFilter: "any" });
   });
 });
 

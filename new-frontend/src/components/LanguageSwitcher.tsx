@@ -1,36 +1,31 @@
 import { useTranslation } from "react-i18next";
-import { LANGUAGES, currentLang, setLanguage } from "@/lib/i18n";
+import { Segmented } from "@/components/ui/Segmented";
+import { LANGUAGES, currentLang, setLanguage, type Lang } from "@/lib/i18n";
 
-/** EN / हिन्दी toggle. Shown in the footer and in chat settings. */
-export const LanguageSwitcher: React.FC<{ tone?: "dark" | "light"; className?: string }> = ({
+/** EN / हिन्दी segmented control. Shown in the footer and in the settings sheets. */
+export const LanguageSwitcher: React.FC<{ tone?: "dark" | "light"; className?: string; fullWidth?: boolean }> = ({
   tone = "dark",
   className = "",
+  fullWidth = false,
 }) => {
   const { t } = useTranslation();
-  const active = currentLang();
-  const activeClass = tone === "dark" ? "bg-yellow-400 text-black" : "bg-black text-white";
-  const idleClass = tone === "dark" ? "text-gray-300 hover:text-white" : "text-gray-600 hover:text-black";
   return (
-    <div
+    <Segmented<Lang>
       role="group"
       aria-label={t("language.label")}
       data-testid="language-switcher"
-      className={`inline-flex items-center gap-1 text-xs ${className}`}
-    >
-      {LANGUAGES.map((l) => (
-        <button
-          key={l.code}
-          type="button"
-          lang={l.code}
-          aria-pressed={active === l.code}
-          aria-label={t("language.switchTo", { language: l.label })}
-          data-testid={`language-${l.code}`}
-          onClick={() => void setLanguage(l.code)}
-          className={`px-2 py-0.5 rounded border border-transparent font-semibold ${active === l.code ? activeClass : idleClass}`}
-        >
-          {l.short}
-        </button>
-      ))}
-    </div>
+      tone={tone}
+      fullWidth={fullWidth}
+      className={className}
+      value={currentLang()}
+      onChange={(code) => void setLanguage(code)}
+      options={LANGUAGES.map((l) => ({
+        value: l.code,
+        label: l.short,
+        lang: l.code,
+        testId: `language-${l.code}`,
+        ariaLabel: t("language.switchTo", { language: l.label }),
+      }))}
+    />
   );
 };

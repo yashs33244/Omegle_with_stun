@@ -55,19 +55,31 @@ test("a press outside the profile dialog closes an open dropdown before the dial
   await expect(dialog).toBeHidden();
 });
 
-test("an open home dropdown closes when Start is clicked", async ({ openStranger }) => {
+test("the settings sheet holds country and language, and a press outside closes an open dropdown before the sheet", async ({
+  openStranger,
+}) => {
   const stranger = await openStranger("Jon");
   const { page } = stranger;
   await passGate(stranger);
-  const start = page.getByTestId("start-chat");
-  await expect(start).toBeEnabled();
+  await expect(page.locator("#home-country"), "country is not on the start screen itself").toHaveCount(0);
 
+  await page.getByTestId("open-settings").click();
+  const sheet = page.getByTestId("start-settings");
+  await expect(sheet).toBeVisible();
   const country = page.locator("#home-country");
   await country.click();
   await expect(page.getByRole("listbox", { name: "Country" })).toBeVisible();
-  await start.click();
+  await page.getByRole("option", { name: /Germany/ }).click();
+  await expect(country).toContainText("Germany");
 
-  await expect(page.getByRole("dialog")).toBeVisible();
-  await expect(page.getByRole("listbox", { name: "Country" })).toBeHidden();
-  await expect(country).toHaveAttribute("aria-expanded", "false");
+  await page.locator("#home-language").click();
+  await expect(page.getByRole("listbox", { name: "I speak" })).toBeVisible();
+  // The dimmed backdrop, outside the sheet.
+  await page.mouse.click(20, 20);
+  await expect(page.getByRole("listbox", { name: "I speak" })).toBeHidden();
+  await expect(sheet).toBeVisible();
+
+  await page.mouse.click(20, 20);
+  await expect(sheet).toBeHidden();
+  await expect(page.getByTestId("start-chat")).toBeEnabled();
 });
