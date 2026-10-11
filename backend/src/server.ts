@@ -5,13 +5,17 @@
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import type Redis from "ioredis";
 import type { Config } from "./config";
+import { createBilling, type BillingService } from "./billing";
+import type { RazorpayGateway } from "./billing/razorpay";
+import type { WalletStore } from "./billing/WalletStore";
 import { createEnforcement, type EnforcementOptions, type EnforcementService } from "./enforcement";
 import { FlagsReader, MemoryFlagsStore, type FlagsStore } from "./flags/flags";
 import { adminApiRouter } from "./http/admin";
+import { billingApiRouter } from "./http/billing";
 import { createApp } from "./http/app";
 import { publicApiRouter } from "./http/public";
 import type { Logger } from "./logger";
-import { MatchService } from "./match/MatchService";
+import { MatchService, type Emitter } from "./match/MatchService";
 import { createMetrics, type Metrics } from "./metrics";
 import { MemorySignalStore, RedisSignalStore, SafetySignals } from "./safety/signals";
 import type { FetchFn } from "./turn/cloudflare";
@@ -44,6 +48,8 @@ export interface ServerDeps {
   restrictions?: RestrictionChecker;
   /** Enforcement overrides (stores, Turnstile verifier, classifier) for tests and wiring. */
   enforcement?: EnforcementOptions;
+  /** Billing overrides for tests: a fake gateway (null = disabled) or a prepared wallet store. */
+  billing?: { gateway?: RazorpayGateway | null; walletStore?: WalletStore };
 }
 
 export interface ChizzyServer {
@@ -54,6 +60,8 @@ export interface ChizzyServer {
   flags: FlagsReader;
   /** Reports, restrictions, appeals, takedowns. Also the session lane's restrictions dependency (activeForDevice). */
   enforcement: EnforcementService;
+  /** Coins, Razorpay orders and premium unlocks. */
+  billing: BillingService;
   /** The deps this server was built with, for feature modules that need the shared Redis client. */
   deps: ServerDeps;
   /**
@@ -86,6 +94,23 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
   });
   for (const warning of sessionWarnings(config)) logger.warn(`SESSION GATE WARNING: ${warning}`);
   const enforcement = createEnforcement(config, { logger, redis: deps.redis }, deps.enforcement);
+  // Socket.IO exists only after the HTTP app, which needs billing: late-bound.
+  const live: { emitter?: Emitter } = {};
+  const billing = createBilling({
+    config,
+    flags,
+    store,
+    logger,
+    redis: deps.redis,
+    fetch: deps.fetch,
+    gateway: deps.billing?.gateway,
+    walletStore: deps.billing?.walletStore,
+    // The device's live socket, on whichever instance holds it.
+    notify: async (deviceId, view) => {
+      const socketId = await store.getDeviceSocket(deviceId);
+      if (socketId) live.emitter?.emit(socketId, "wallet:update", view);
+    },
+  });
   const app = createApp({
     store,
     registry: metrics.registry,
@@ -94,10 +119,12 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     session: session.router,
     routes: (a) => {
       a.use(publicApiRouter({ enforcement, proxyIpHeader: config.proxyIpHeader, logger }));
+      a.use("/api/billing", billingApiRouter({ billing, tokens: session.tokens, proxyIpHeader: config.proxyIpHeader, logger }));
       a.use(
         "/admin/api",
         adminApiRouter({
           enforcement,
+          billing,
           flags,
           logger,
           adminToken: config.adminToken,
@@ -111,6 +138,8 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
   const httpServer = createHttpServer(app);
   const io = createSocketServer(httpServer, config);
   deps.configureIo?.(io);
+  const emitter = createEmitter(io);
+  live.emitter = emitter;
 
   const turn = new TurnService({
     config,
@@ -151,7 +180,8 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     turn,
     safety,
     enforcement,
-    emitter: createEmitter(io),
+    billing,
+    emitter,
     gate: session.gate,
   });
   const handlers = attachHandlers(io, {
@@ -180,6 +210,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     metrics,
     flags,
     enforcement,
+    billing,
     deps,
     async listen(port, host) {
       await started;

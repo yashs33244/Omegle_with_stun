@@ -119,6 +119,7 @@ describe("hello and matching", () => {
 
   test("gender filters are mutual", async () => {
     ts = await startServer();
+    await ts.server.flags.set({ premium_filters_enabled: false }); // gender filters cost coins by default
     const a = await ts.connect();
     const b = await ts.connect();
     const c = await ts.connect();
@@ -157,6 +158,7 @@ describe("hello and matching", () => {
 
   test("session:preferences takes effect on the next match pass", async () => {
     ts = await startServer();
+    await ts.server.flags.set({ premium_filters_enabled: false });
     const a = await ts.connect();
     const b = await ts.connect();
     await sendHello(a, hello({ profile: profile({ gender: "male" }), preferences: prefs({ genderFilter: "female" }) }));
@@ -419,6 +421,7 @@ describe("ending a match", () => {
 
   test("queue order is FIFO", async () => {
     ts = await startServer();
+    await ts.server.flags.set({ premium_filters_enabled: false });
     const first = await ts.connect();
     const second = await ts.connect();
     await sendHello(first, hello({ profile: profile({ topics: ["art"], name: "First" }) }));
