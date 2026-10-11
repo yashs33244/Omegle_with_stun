@@ -125,7 +125,7 @@ services:
   # Host networking because TURN needs a wide UDP relay port range. Open on the
   # host firewall / security group: 3478 tcp+udp and TURN_MIN_PORT-TURN_MAX_PORT udp.
   coturn:
-    image: coturn/coturn:4.7.0-alpine
+    image: coturn/coturn:4.18.0-alpine
     profiles: ["turn"]
     network_mode: host
     environment:
