@@ -37,6 +37,8 @@ jobs:
         run: bash scripts/test-deploy.sh
       - name: Every compose setting can be set through the deploy
         run: sh scripts/check-deploy-env.sh
+      - name: Vercel, Cloudflare Pages and nginx send the same frontend headers
+        run: sh scripts/check-frontend-headers.sh
 
   ops-lint:
     name: Workflows and shell scripts
@@ -52,7 +54,7 @@ jobs:
           deploy/deploy.sh deploy/cloudflare-ips.sh scripts/backup-redis.sh scripts/restore-redis.sh
           scripts/check-lockfiles.sh scripts/sync-protocol.sh scripts/sync-spark-prompts.sh scripts/check-pins.sh
           scripts/check-deploy-env.sh scripts/test-deploy.sh scripts/test-gateway-real-ip.sh
-          new-frontend/nginx-api-origin.envsh
+          scripts/check-frontend-headers.sh new-frontend/nginx-api-origin.envsh
 
   backend:
     name: Backend

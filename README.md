@@ -6,7 +6,7 @@ meet, and get matched with a stranger for a peer-to-peer WebRTC call with
 text chat on the side.
 
 Live: https://chizzy.itsyash.space (API and socket server: https://chizzyapi.itsyash.space).
-Free-tier mirror: https://chizzy-chat.vercel.app (API: https://chizzy-api.onrender.com), see [Free hosting](#free-hosting-vercel--render).
+Free-tier mirror: https://chizzy-chat.vercel.app (API: https://chizzy-api.onrender.com), see [Free hosting](#free-hosting-cloudflare-pages-or-vercel--render).
 
 ## Features (v1 launch build)
 
@@ -130,8 +130,8 @@ flowchart LR
 | `scripts/` | protocol sync, lockfile check, Redis backup and restore, `loadtest/` (load test and canary) |
 | `docs/` | runbooks, capacity, retention, risk assessment, safety decision log, launch checklist |
 | `docs/engineering-conventions.md` | backend module boundaries, the constants and enums-as-const rules, the patterns in use, test layering and the add-a-feature checklist |
-| `.github/workflows/` | CI (`ci.yml`), the EC2 deploy (`deploy.yml`), the synthetic canary (`canary.yml`), the free-tier pinger (`keepalive.yml`) |
-| `render.yaml`, `new-frontend/vercel.json` | the free-tier deployment: backend on Render, frontend on Vercel |
+| `.github/workflows/` | CI (`ci.yml`), the EC2 deploy (`deploy.yml`), the Cloudflare Pages deploy (`pages.yml`), the synthetic canary (`canary.yml`), the free-tier pinger (`keepalive.yml`) |
+| `render.yaml`, `new-frontend/vercel.json`, `new-frontend/wrangler.jsonc`, `new-frontend/_headers.template` | the free-tier deployment: backend on Render, frontend on Vercel (non-commercial mirror) or Cloudflare Pages (production) |
 
 ## Quick start (local development)
 
@@ -258,23 +258,34 @@ DEPLOYMENT.md) and `REDIS_URL` pointing at the redis service. Backend,
 gateway and frontend run with `nofile` 65535; both nginx configs use
 `worker_connections 16384` and `worker_rlimit_nofile 65535`.
 
-### Free hosting: Vercel + Render
+### Free hosting: Cloudflare Pages or Vercel + Render
 
 The whole stack also runs for free, with the limits below: the SPA as a
-static site on Vercel (`new-frontend/vercel.json`: build, SPA rewrite and
-the same security headers nginx sends, with the Render origin in
-`connect-src`) and the backend as a Render Free web service built from
-`backend/Dockerfile` (`render.yaml`). Live at https://chizzy-chat.vercel.app
-and https://chizzy-api.onrender.com.
+static site and the backend as a Render Free web service built from
+`backend/Dockerfile` (`render.yaml`). The current mirror is
+https://chizzy-chat.vercel.app and https://chizzy-api.onrender.com.
 
-- **Vercel** builds `new-frontend` with `VITE_API_URL=https://chizzy-api.onrender.com`
-  and `VITE_SITE_URL=https://chizzy-chat.vercel.app` (project environment
+- **Vercel is for the pre-payments mirror only.** Its Hobby plan forbids
+  commercial use, so it cannot serve the SPA once coin packs are on sale.
+  `new-frontend/vercel.json` holds the build, the SPA rewrite and the same
+  security headers nginx sends, with the Render origin in `connect-src`;
+  Vercel builds with `VITE_API_URL=https://chizzy-api.onrender.com` and
+  `VITE_SITE_URL=https://chizzy-chat.vercel.app` (project environment
   variables). Deploy with `cd new-frontend && vercel deploy --prod`.
+- **Cloudflare Pages is the production path** (free plan, commercial use
+  allowed, no bandwidth cap). `.github/workflows/pages.yml` builds and
+  uploads `dist/` on every push to `new-v` once the `PAGES_ENABLED`
+  variable and the `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` secrets
+  are set; `npm run build` writes `dist/_headers` (from
+  `new-frontend/_headers.template`, CSP `connect-src` from `VITE_API_URL`)
+  so Pages sends the same headers as nginx and Vercel, which
+  `scripts/check-frontend-headers.sh` enforces in CI. Setup, custom domain
+  and what to do with the Vercel project: DEPLOYMENT.md "Cloudflare Pages".
 - **Render** runs one instance with the in-memory store, `TRUST_PROXY=true`
   with `PROXY_IP_HEADER=true-client-ip` and `TRUST_CLOUDFLARE=true` (Render
   sits behind Cloudflare, so the real IP and `CF-IPCountry` are available),
   and `TURNSTILE_DISABLED=true` until Turnstile keys exist. `CORS_ORIGINS`
-  is the Vercel origin.
+  is the site origin (Vercel or Pages).
 - **Spin-down.** A Free web service sleeps after 15 minutes without inbound
   traffic and takes about a minute to wake. Two things keep it warm: the
   backend GETs its own `/healthz` every 10 minutes (`KEEPALIVE_URL`, which
@@ -342,6 +353,7 @@ and https://chizzy-api.onrender.com.
 | `scripts/sync-protocol.sh [--check]` | copy the protocol to the frontend / fail when the copies differ (CI) |
 | `scripts/sync-spark-prompts.sh [--check]` | generate the Spark prompt files from the catalog / fail when they differ (CI) |
 | `scripts/check-lockfiles.sh` | lockfiles must only reference the public npm registry (CI) |
+| `scripts/check-frontend-headers.sh` | `vercel.json`, `_headers.template` (Cloudflare Pages) and the nginx config must send the same headers (CI) |
 | `node scripts/loadtest/loadtest.ts` | signaling load test ([docs/capacity.md](docs/capacity.md)) |
 | `node scripts/loadtest/canary.ts` | two-client synthetic canary (`CANARY_URL`) |
 | `scripts/backup-redis.sh`, `scripts/restore-redis.sh` | Redis snapshot to S3 and restore |
