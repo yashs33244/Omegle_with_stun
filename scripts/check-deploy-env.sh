@@ -12,19 +12,24 @@ docs="$root/DEPLOYMENT.md"
 
 # Set by deploy.sh or the workflow itself, baked in at build time, or only
 # meant for local runs.
-skip=" BACKEND_IMAGE FRONTEND_IMAGE IMAGE_TAG GATEWAY_CONF_VERSION VITE_API_URL BACKEND_PORT FRONTEND_PORT TURN_MIN_PORT TURN_MAX_PORT "
+skip=" BACKEND_IMAGE FRONTEND_IMAGE IMAGE_TAG GATEWAY_CONF_VERSION VITE_API_URL BACKEND_PORT FRONTEND_PORT "
 
-env_keys=$(sed -n '/^ENV_KEYS=(/,/^)/p' "$deploy_sh" | tr -s ' ()=' '\n\n\n\n')
+env_keys=$(sed -n '/^ENV_KEYS=(/,/^)/p' "$deploy_sh" | sed -e '1d' -e '$d' | tr -s ' ' '\n')
 envs_list=$(sed -n 's/^ *envs: *//p' "$workflow" | tr ',' '\n' | tr -d ' ')
 
+# shellcheck disable=SC2016 # a literal ${ is meant
+compose_vars=$(grep -o '\${[A-Z_][A-Z0-9_]*' "$compose" | cut -c3- | sort -u)
+
 missing=""
-for var in $(grep -o '\${[A-Z_][A-Z0-9_]*' "$compose" | cut -c3- | sort -u); do
+while IFS= read -r var; do
   case "$skip" in *" $var "*) continue ;; esac
   printf '%s\n' "$env_keys" | grep -qx "$var" || missing="$missing\n  $var: not in ENV_KEYS in deploy/deploy.sh"
   grep -Eq "^ +$var: \\\$\\{\\{ secrets\\.$var( |\\})" "$workflow" || missing="$missing\n  $var: not passed from secrets in the deploy step env of deploy.yml"
   printf '%s\n' "$envs_list" | grep -qx "$var" || missing="$missing\n  $var: not in the envs: list of deploy.yml"
   grep -q "\`$var\`" "$docs" || missing="$missing\n  $var: not documented in DEPLOYMENT.md"
-done
+done <<EOF
+$compose_vars
+EOF
 
 if [ -n "$missing" ]; then
   printf 'docker-compose.yml reads settings the deploy cannot set:%b\n' "$missing" >&2

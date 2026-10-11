@@ -10,7 +10,9 @@
 # deploy/ there), the current files are saved to .previous/ and the new ones
 # installed. When DEPLOY_WRITE_ENV=1, .env is rewritten from the environment
 # (the workflow passes the GitHub secrets); otherwise only IMAGE_TAG in the
-# existing .env changes. Secret values are never printed.
+# existing .env changes. Secret values are never printed. Either way the
+# secrets a production backend needs are checked first, so a missing one stops
+# the deploy before any file on the host changes.
 #
 # State kept next to .env:
 #   .deployed-tag  last tag that passed verification (the rollback target)
@@ -35,9 +37,13 @@ ENV_KEYS=(
   STUN_URLS TURN_URLS TURN_SECRET TURN_USERNAME TURN_CREDENTIAL TURN_TTL_SECONDS
   METRICS_TOKEN LOG_LEVEL
   SESSION_SECRET SESSION_SECRET_PREVIOUS TURNSTILE_SECRET TURNSTILE_SITE_KEY TURNSTILE_DISABLED
+  SESSION_RATE_PER_IP_PER_MIN SESSION_RATE_PER_NETWORK_PER_MIN
+  MATCH_CAP_PER_DEVICE_PER_HOUR MATCH_CAP_PER_IP_PER_HOUR
   TRUST_CLOUDFLARE TURN_PROVIDER CF_TURN_KEY_ID CF_TURN_API_TOKEN CF_ACCOUNT_ID CF_ANALYTICS_TOKEN
+  TURN_CACHE_SECONDS TURN_MAX_PER_DEVICE_HOUR TURN_MAX_PER_IP_HOUR TURN_SPEND_DAILY_GB
   SENTRY_DSN SENTRY_DSN_FRONTEND POSTHOG_KEY POSTHOG_HOST
-  ADMIN_TOKEN ADMIN_ALLOWED_IPS EVIDENCE_S3_BUCKET AWS_REGION
+  ADMIN_TOKEN ADMIN_ALLOWED_IPS PSEUDONYM_SALT
+  EVIDENCE_S3_BUCKET EVIDENCE_S3_REGION EVIDENCE_S3_KMS_KEY_ID
   CLOUDFLARE_ONLY BACKUP_S3_URI
 )
 installed=0
@@ -55,6 +61,7 @@ validate_env() {
   local key
   if [ "${DEPLOY_WRITE_ENV:-0}" != "1" ]; then
     [ -f .env ] || die ".env is missing; run the deploy workflow once to create it"
+    check_production_secrets
     return 0
   fi
   [ -n "${BACKEND_IMAGE:-}" ] || die "BACKEND_IMAGE is required"
@@ -64,6 +71,45 @@ validate_env() {
       *"'"* | *$'\n'*) die "$key must not contain a single quote or newline" ;;
     esac
   done
+  check_production_secrets
+}
+
+# Value a setting will have in .env: from the environment when this run
+# writes .env, otherwise from the existing .env.
+setting() {
+  if [ "${DEPLOY_WRITE_ENV:-0}" = "1" ]; then printf '%s' "${!1-}"; else env_value "$1"; fi
+}
+
+# The backend refuses to start in production without these (config.ts), which
+# would only show up as a failed health check and a rollback. Checking here
+# stops the deploy before anything on the host changes, and names the secret.
+check_production_secrets() {
+  local missing="" key min val
+  # Minimum lengths match backend/src/config.ts.
+  for key in CORS_ORIGINS:1 SESSION_SECRET:32 ADMIN_TOKEN:24; do
+    min=${key#*:}
+    key=${key%%:*}
+    val=$(setting "$key")
+    [ "${#val}" -ge "$min" ] || missing="$missing $key"
+  done
+  case "$(setting TURNSTILE_DISABLED)" in
+    true | 1 | yes) log "WARNING: TURNSTILE_DISABLED is set; the session gate does not check for bots" ;;
+    *)
+      [ -n "$(setting TURNSTILE_SECRET)" ] || missing="$missing TURNSTILE_SECRET"
+      [ -n "$(setting TURNSTILE_SITE_KEY)" ] || missing="$missing TURNSTILE_SITE_KEY"
+      ;;
+  esac
+  if [ -n "$(setting EVIDENCE_S3_BUCKET)" ] && [ -z "$(setting EVIDENCE_S3_REGION)" ]; then
+    missing="$missing EVIDENCE_S3_REGION"
+  fi
+  val=$(setting PSEUDONYM_SALT)
+  if [ -z "$val" ]; then
+    log "WARNING: PSEUDONYM_SALT is empty; admin pseudonyms come from ADMIN_TOKEN and change when it is rotated"
+  elif [ "${#val}" -lt 16 ]; then
+    missing="$missing PSEUDONYM_SALT"
+  fi
+  [ -z "$missing" ] ||
+    die "missing or too short:$missing (set the GitHub secrets; DEPLOYMENT.md, \"First deploy of the launch build\")"
 }
 
 # Writes .env from the environment. Call validate_env first.

@@ -24,7 +24,8 @@ the exit criteria in LAUNCH_PLAN section 6, not by a date.
 
 - [ ] Domain: a dedicated domain, categorised with the main web-filter vendors.
 - [ ] Cloudflare: zone for the domain; both the SPA and the API hostname **proxied** (orange cloud).
-- [ ] Cloudflare: Turnstile widget for the SPA hostname -> `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET`.
+- [ ] Cloudflare: Turnstile widget for the SPA hostname -> `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET` (one secret for the session gate and the takedown form).
+- [ ] Cloudflare: Cache Rule making `<spa>/models/*` eligible for cache (`.wasm` is not cached by default).
 - [ ] Cloudflare: Realtime TURN key -> `CF_TURN_KEY_ID`, `CF_TURN_API_TOKEN`; set `TURN_PROVIDER=cloudflare`.
 - [ ] Cloudflare: account id and a read-only Analytics API token -> `CF_ACCOUNT_ID`, `CF_ANALYTICS_TOKEN`; set the daily TURN spend thresholds.
 - [ ] Cloudflare: Access application in front of `https://<api>/admin/api/*` (and `/admin` on the SPA), one-time PIN or Google login for the owner and the backup reviewer.
@@ -35,8 +36,21 @@ the exit criteria in LAUNCH_PLAN section 6, not by a date.
 - [ ] AWS: Budgets alerts at $20, $50, $100; CloudWatch alarms on `StatusCheckFailed`, `CPUCreditBalance`, `NetworkOut`; EC2 auto-recovery.
 - [ ] AWS: S3 buckets in `ap-south-1` for Redis backups (`BACKUP_S3_URI`) and, if used, evidence (`EVIDENCE_S3_BUCKET`, with KMS, lifecycle rules per docs/retention.md and Object Lock for the CSAM hold); instance role with only the needed actions; IMDSv2 hop limit 2.
 - [ ] AWS (or another India-region store): log shipping with 180 days retention for CERT-In. **Not built yet.**
-- [ ] Generate `SESSION_SECRET` and `ADMIN_TOKEN` (`openssl rand -hex 32`) and add every secret listed in DEPLOYMENT.md to GitHub.
+- [ ] Generate `SESSION_SECRET`, `ADMIN_TOKEN` and `PSEUDONYM_SALT` (`openssl rand -hex 32`, three different values; keep the salt offline, it never changes) and add every secret listed in DEPLOYMENT.md to GitHub.
 - [ ] Security group: 443 (and 80) from Cloudflare ranges only, SSH from your IP only (or SSM); then set `CLOUDFLARE_ONLY=true` and `TRUST_CLOUDFLARE=true`.
+
+## Integration (launch build wiring)
+
+Owner decisions and checks left by the integration of the launch lanes.
+
+- [ ] First deploy of the launch build: follow the checklist in DEPLOYMENT.md ("First deploy of the launch build"). A missing required secret now stops the deploy before it touches the host.
+- [ ] Confirm the gateway trust model: the gateway trusts `X-Forwarded-For` only from private hops and takes the client IP from `CF-Connecting-IP` only when the previous hop is a Cloudflare range (DEPLOYMENT.md, "Cloudflare in front"). The access log records that client IP first, then the connecting peer.
+- [ ] Confirm the 1 s `proxy_connect_timeout` on every gateway route (`/socket.io/`, `/api/`, `/admin/api/`, `/`): it lets a request move on from a dead replica quickly, and replicas on the Docker network connect in well under 1 ms.
+- [ ] Decide whether the call connect monitor may end a text-only call after 10 s without media (it does today; the client fallback timer never skips a text-only user).
+- [ ] Canary: the backend has no Turnstile bypass, so `CANARY_TURNSTILE_BYPASS` does nothing. Point `CANARY_URL` at a staging stack with the Turnstile test keys, or decide to build a bypass.
+- [ ] Evidence on the `evidence-data` volume is not covered by the Redis backup: back the volume up, or set `EVIDENCE_S3_BUCKET` and `EVIDENCE_S3_REGION`.
+- [ ] Watch the first CI run of the `e2e` and `stack` jobs: both now verify real Turnstile test tokens with Cloudflare, so they need outbound access to `challenges.cloudflare.com`.
+- [ ] Rerun the load test with the session gate and instant mode (the recorded numbers used `--skip-session` and preview mode); record in docs/capacity.md.
 
 ## Operations
 

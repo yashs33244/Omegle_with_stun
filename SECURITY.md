@@ -43,11 +43,13 @@ in-app report button or the takedown form, not here.
   drops them. With `CLOUDFLARE_ONLY=true` it refuses public traffic that did
   not come through Cloudflare (DEPLOYMENT.md, "Cloudflare in front").
 - **Admin console.** `/admin/api/*` requires `Authorization: Bearer
-  ADMIN_TOKEN` (off when unset), optionally an IP allowlist
+  ADMIN_TOKEN` (required in production; off when unset elsewhere),
+  optionally an IP allowlist
   (`ADMIN_ALLOWED_IPS`), and should sit behind Cloudflare Access. Every admin
   action and every evidence access is written to an audit log. Responses are
   `Cache-Control: no-store`. Evidence is shown blurred and greyscale by
-  default.
+  default. Admins see device pseudonyms keyed by `PSEUDONYM_SALT`, not raw
+  device ids.
 - **Data kept on the server.** See docs/retention.md. No chat text (except
   lines attached to a report), no video or audio, no dates of birth. Logs
   carry socket ids, room ids and event names, never names, photos or chat
@@ -63,8 +65,10 @@ in-app report button or the takedown form, not here.
   Docker network, `/metrics` is not exposed publicly, and CORS is restricted
   to `CORS_ORIGINS` in production.
 - **Secrets.** All secrets live in GitHub Actions secrets and are written to
-  the host's `.env` (mode 600) without being printed. `SESSION_SECRET` can be
-  rotated with `SESSION_SECRET_PREVIOUS`.
+  the host's `.env` (mode 600) without being printed. In production the
+  backend refuses to start without `SESSION_SECRET`, `ADMIN_TOKEN` and the
+  Turnstile keys, and the deploy stops before touching the host when one is
+  missing. `SESSION_SECRET` can be rotated with `SESSION_SECRET_PREVIOUS`.
 - **Supply chain.** Workflow actions are pinned to commit SHAs, base images to
   exact versions, dependencies to lockfiles that may only reference the public
   npm registry, and Dependabot proposes updates. CI runs actionlint and

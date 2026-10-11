@@ -82,5 +82,14 @@ check "203.0.113.7, 10.0.0.5" "1.1.1.1" "IN" "203.0.113.7 203.0.113.7 []"
 # header it sent, is believed.
 check "203.0.113.7, 198.51.100.9" "1.1.1.1" "IN" "198.51.100.9 198.51.100.9 []"
 
+# The access log names the client the backend saw, then the connecting peer.
+if docker logs "$name" 2>/dev/null | grep -q '^198\.51\.100\.9 via 104\.21\.61\.104 '; then
+  echo "ok   access log records the Cloudflare client and the edge"
+else
+  echo "FAIL access log lacks '198.51.100.9 via 104.21.61.104':" >&2
+  docker logs "$name" 2>&1 | tail -n 5 >&2
+  failed=1
+fi
+
 if [ "$failed" != 0 ]; then exit 1; fi
 echo "gateway real client IP checks passed"
