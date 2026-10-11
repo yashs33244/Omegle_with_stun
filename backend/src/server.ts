@@ -46,7 +46,7 @@ export interface ServerDeps {
    * analytics). Tests inject a fake; defaults to global fetch.
    */
   fetch?: FetchFn;
-  /** Active restriction lookup for POST /api/session (enforcement lane). No-op when unset. */
+  /** Restriction lookup and network notes for POST /api/session; tests inject a fake, production uses `enforcement`. */
   restrictions?: RestrictionChecker;
   /** Enforcement overrides (stores, Turnstile verifier, classifier) for tests and wiring. */
   enforcement?: EnforcementOptions;
@@ -84,6 +84,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
   const { store, logger } = deps;
   const flags = new FlagsReader(deps.flags ?? new MemoryFlagsStore());
   const metrics = createMetrics(store);
+  const enforcement = createEnforcement(config, { logger, redis: deps.redis }, deps.enforcement);
   const session = createSessionFeature({
     config,
     flags,
@@ -92,10 +93,9 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     registry: metrics.registry,
     redis: deps.redis,
     fetch: deps.fetch,
-    restrictions: deps.restrictions,
+    restrictions: deps.restrictions ?? enforcement,
   });
   for (const warning of sessionWarnings(config)) logger.warn(`SESSION GATE WARNING: ${warning}`);
-  const enforcement = createEnforcement(config, { logger, redis: deps.redis }, deps.enforcement);
   // Socket.IO exists only after the HTTP app, which needs billing: late-bound.
   const live: { emitter?: Emitter } = {};
   const billing = createBilling({

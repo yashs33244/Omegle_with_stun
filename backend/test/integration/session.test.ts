@@ -196,6 +196,7 @@ describe("POST /api/session", () => {
     };
     const restricted = randomUUID();
     const seen: string[] = [];
+    const noted: [string, string | null, string | null][] = [];
     ts = await gated(
       { sessionRatePerIpPerMin: 3 },
       {
@@ -203,6 +204,9 @@ describe("POST /api/session", () => {
           activeForDevice: async (deviceId, fingerprint) => {
             seen.push(fingerprint);
             return deviceId === restricted ? restriction : null;
+          },
+          noteDeviceNetwork: async (deviceId, ip, country) => {
+            noted.push([deviceId, ip, country]);
           },
         },
       },
@@ -212,11 +216,47 @@ describe("POST /api/session", () => {
       body: { ok: false, error: "banned", restriction },
     });
     expect(seen[0]).toBe("a".repeat(64));
+    expect(noted).toEqual([]);
     await ts.server.flags.set({ new_sessions_enabled: false });
     expect(await postSession(ts, sessionBody())).toEqual({ status: 503, body: { ok: false, error: "closed" } });
     await ts.server.flags.set({ new_sessions_enabled: true });
-    expect((await postSession(ts, sessionBody())).status).toBe(200);
+    const issued = sessionBody();
+    expect((await postSession(ts, issued)).status).toBe(200);
+    expect(noted).toEqual([[issued.deviceId, "127.0.0.1", null]]);
     expect(await postSession(ts, sessionBody())).toEqual({ status: 429, body: { ok: false, error: "rate_limited" } });
+  });
+
+  test("without an injected checker the gate uses the enforcement lane: a restriction follows the device and its fingerprint", async () => {
+    ts = await gated({ sessionRatePerIpPerMin: 100 });
+    const fingerprint = "f".repeat(64);
+    const banned = sessionBody({ fingerprint });
+    expect((await postSession(ts, banned)).status).toBe(200);
+    // Another device of the same browser was seen before the restriction.
+    const sibling = sessionBody({ fingerprint });
+    expect((await postSession(ts, sibling)).status).toBe(200);
+
+    const { reportId } = await ts.server.enforcement.submitReport({
+      roomId: randomUUID(),
+      reporterDevice: randomUUID(),
+      reportedDevice: banned.deviceId,
+      reason: "harassment",
+      frame: null,
+      activeSince: Date.now() - 60_000,
+      endedAt: null,
+    });
+    const action = await ts.server.enforcement.actOnReport(reportId, { action: "restrict", durationMs: 86_400_000 }, { ip: null });
+    if (!action.ok || !action.value.restriction) throw new Error("restrict did not apply");
+    const id = action.value.restriction.id;
+
+    expect(await postSession(ts, banned)).toMatchObject({ status: 403, body: { ok: false, error: "banned", restriction: { id } } });
+    expect(await postSession(ts, sessionBody({ fingerprint }))).toMatchObject({ status: 403, body: { error: "banned", restriction: { id } } });
+    expect((await postSession(ts, sessionBody({ fingerprint: "e".repeat(64) }))).status).toBe(200);
+    // The sibling device got its token before the restriction: hello still refuses it via the stored link.
+    expect(await ts.server.enforcement.activeForDevice(sibling.deviceId)).toMatchObject({ id });
+    // Network facts noted at the gate reach the CSAM packet.
+    const escalated = await ts.server.enforcement.escalate(reportId, { ip: null });
+    if (!escalated.ok) throw new Error(escalated.error);
+    expect(escalated.value.packet).toMatchObject({ reportedIpAddress: "127.0.0.1", reportedCountry: null });
   });
 });
 
