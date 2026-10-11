@@ -116,6 +116,53 @@ flowchart LR
   live on the `evidence-data` volume (or S3). Without `REDIS_URL` the backend
   runs in memory (single instance: local dev and tests).
 
+## Architecture and limits
+
+Three documents in `docs/` answer "how does it work, what are the events,
+and what are the limits" with evidence from the code:
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) (components, the matching
+loop, stores, deploy topologies), [docs/PROTOCOL.md](docs/PROTOCOL.md)
+(every Socket.IO event and REST route, with sequence diagrams) and
+[docs/LIMITS.md](docs/LIMITS.md) (how many users, how long a call, every
+limit with its source, and what is lost on a restart).
+
+```mermaid
+flowchart LR
+  B["Browser A: SPA"]
+  P["Browser B: SPA"]
+  CF["Cloudflare: proxy, Turnstile, TURN"]
+  subgraph FE["Frontend host (static)"]
+    V["Vercel or Cloudflare Pages, or the nginx frontend container"]
+  end
+  subgraph API["API host"]
+    direction TB
+    R1["Render Free: one backend, memory store"]
+    subgraph CO["Docker Compose on EC2"]
+      GW["gateway nginx least_conn"]
+      BE["backend x2: Express + Socket.IO"]
+      RD[("Redis 7: queue, rooms, flags, wallets")]
+      GW --> BE --> RD
+    end
+  end
+  B -->|"GET /"| CF --> V
+  B -->|"POST /api/session, wss /socket.io/"| CF
+  CF --> R1
+  CF --> GW
+  B <-->|"WebRTC media, peer to peer or via TURN"| P
+```
+
+Headline limits; the full tables and the evidence for each number are in
+[docs/LIMITS.md](docs/LIMITS.md).
+
+| Limit | Free tier (Render Free, memory store) | Full stack (compose, 2 replicas, Redis) |
+|---|---|---|
+| Concurrent users | estimate: a few hundred sockets (0.1 CPU); 1,000 sockets measured on one process at about 15% of a laptop core | written peak 1,000 sockets; estimate 2,000 to 3,000 with the Redis match lock as the ceiling; the 3,000-socket test has not been run |
+| Call duration cap | none: active rooms have no TTL (`backend/src/store/constants.ts`); a call ends on Next, Stop, disconnect, `call:failed`, a ban, a deploy or instance loss | same |
+| Socket frame size | 256 KiB (`MAX_HTTP_BUFFER_SIZE`, `backend/src/realtime/socket.ts`) | same |
+| Connections per IP | 10 per instance (`MAX_CONNECTIONS_PER_IP`), burst 20 then 1/s new connections | 10 per replica, so 20 per IP across 2 replicas |
+| Accept window | 30 s (`MATCH_ACCEPT_TIMEOUT_MS`) + 750 ms grace | same |
+| What survives a restart | nothing: sessions, rooms, flags, bans, reports, evidence (unless S3), wallets | flags, bans, reports, evidence, wallets, caps; live calls and rooms are dropped and clients re-queue |
+
 ## Repository layout
 
 | path | what |
@@ -129,6 +176,9 @@ flowchart LR
 | `deploy/` | gateway nginx configs, the Cloudflare IP script and the host deploy script |
 | `scripts/` | protocol sync, lockfile check, Redis backup and restore, `loadtest/` (load test and canary) |
 | `docs/` | runbooks, capacity, retention, risk assessment, safety decision log, launch checklist |
+| `docs/ARCHITECTURE.md` | how the pieces fit: components, matching loop, stores, deploy topologies, with diagrams |
+| `docs/PROTOCOL.md` | every Socket.IO event and REST route with payloads, error codes and sequence diagrams |
+| `docs/LIMITS.md` | how many users, how long a call, every enforced limit with its source, weaknesses, data loss matrix |
 | `docs/engineering-conventions.md` | backend module boundaries, the constants and enums-as-const rules, the patterns in use, test layering and the add-a-feature checklist |
 | `.github/workflows/` | CI (`ci.yml`), the EC2 deploy (`deploy.yml`), the Cloudflare Pages deploy (`pages.yml`), the synthetic canary (`canary.yml`), the free-tier pinger (`keepalive.yml`) |
 | `render.yaml`, `new-frontend/vercel.json`, `new-frontend/wrangler.jsonc`, `new-frontend/_headers.template` | the free-tier deployment: backend on Render, frontend on Vercel (non-commercial mirror) or Cloudflare Pages (production) |
@@ -462,3 +512,4 @@ Honest list; the risk assessment ([docs/risk-assessment.md](docs/risk-assessment
 - [DEPLOYMENT.md](DEPLOYMENT.md): CI/CD, GitHub secrets, Cloudflare, host setup, rollback.
 - [SECURITY.md](SECURITY.md): reporting vulnerabilities and the security model.
 - [docs/](docs/): runbooks, capacity, retention, risk assessment, decision log, launch checklist.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/PROTOCOL.md](docs/PROTOCOL.md), [docs/LIMITS.md](docs/LIMITS.md): architecture, protocol and limits, with diagrams.
