@@ -161,8 +161,10 @@ test("an in-app browser gets the open-in-browser notice before anything else", a
     await expect(page.getByTestId("start-chat")).toHaveCount(0);
     await page.getByTestId("copy-link").click();
     await expect(notice).toContainText("Link copied.");
+    // Continuing lands on the age gate: the notice comes before it, not after.
     await page.getByRole("button", { name: "Continue here anyway" }).click();
-    await expect(page.getByTestId("start-chat")).toBeVisible();
+    await expect(page.getByTestId("gate-form")).toBeVisible();
+    await passGate({ name: "InApp", context, page, problems: [] });
   } finally {
     await context.close();
   }
