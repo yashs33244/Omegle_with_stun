@@ -33,9 +33,14 @@ export const CONNECTION_QUALITY = {
   DISCONNECTED: { color: 'text-red-400', bar: 'bg-red-400', bars: 0 }
 } as const;
 
-// "music, art" -> "Music, Art"
-export function formatTopics(topics: readonly string[]): string {
-  return topics.map((t) => t.charAt(0).toUpperCase() + t.slice(1)).join(', ');
+/** A translator for topic names: any `t` from useTranslation (the landing namespace holds them). */
+type TopicTranslator = (key: string, options: { defaultValue: string }) => string;
+
+// Topic ids as names in the UI language: ["music", "art"] -> "Music, Art & Design" (or the Hindi names).
+export function formatTopics(t: TopicTranslator, topics: readonly string[]): string {
+  return topics
+    .map((topic) => t(`landing:topics.${topic}`, { defaultValue: topic.charAt(0).toUpperCase() + topic.slice(1) }))
+    .join(', ');
 }
 
 // Format connection time for display

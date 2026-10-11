@@ -150,7 +150,7 @@ export const MatchPrompt: React.FC<MatchPromptProps> = ({
               ))}
             </div>
           )}
-          <p className="text-sm text-gray-400">{t("match.interestedIn", { topics: formatTopics(partner.topics) })}</p>
+          <p className="text-sm text-gray-400">{t("match.interestedIn", { topics: formatTopics(t, partner.topics) })}</p>
           {isFriend && (
             <p className="flex items-center gap-1 text-sm text-pink-400">
               <Heart className="h-4 w-4" aria-hidden="true" /> {t("match.friends")}

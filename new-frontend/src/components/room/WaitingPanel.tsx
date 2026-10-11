@@ -162,7 +162,7 @@ export const WaitingPanel: React.FC<WaitingPanelProps> = ({
         )}
         <p className="text-2xl font-bold">{t("waiting.looking")}</p>
         <p className="text-sm text-gray-300" data-testid="relax-hint" data-step={relaxStep}>
-          {t(hintKey, { topics: formatTopics(topics) })}
+          {t(hintKey, { topics: formatTopics(t, topics) })}
         </p>
       </div>
       {online !== null && (
