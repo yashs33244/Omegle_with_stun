@@ -1,0 +1,58 @@
+# Render Blueprint: the backend on a Free web service (frontend is on Vercel,
+# see new-frontend/vercel.json). Apply from the Render dashboard with
+# New -> Blueprint, or let an existing instance sync on every push to new-v.
+#
+# Free tier facts this file works around (render.com/docs/free):
+# - spins down after 15 min without inbound traffic, ~1 min to come back:
+#   the backend pings its own /healthz every 10 min (KEEPALIVE_URL defaults to
+#   RENDER_EXTERNAL_URL/healthz) and .github/workflows/keepalive.yml wakes it
+#   if it still fell asleep. One always-on service uses ~744 of the 750 free
+#   instance hours a month, so keep it the only Free web service in the workspace.
+# - ephemeral filesystem and a single instance: the in-memory store is used
+#   (no REDIS_URL), so sessions, bans and report evidence are lost on every
+#   deploy or restart. Set EVIDENCE_S3_* and a Redis URL to keep them.
+# - Render sits behind Cloudflare, so True-Client-IP and CF-IPCountry are
+#   trustworthy: TRUST_PROXY + PROXY_IP_HEADER give real per-IP limits and
+#   TRUST_CLOUDFLARE enables the country blocklist.
+services:
+  - type: web
+    name: chizzy-api
+    runtime: docker
+    plan: free
+    region: singapore
+    branch: new-v
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3004"
+      - key: LOG_LEVEL
+        value: info
+      # Browser origin of the Vercel frontend. Update after the first Vercel deploy.
+      - key: CORS_ORIGINS
+        value: https://chizzy-chat.vercel.app
+      - key: TRUST_PROXY
+        value: "true"
+      - key: PROXY_IP_HEADER
+        value: true-client-ip
+      - key: TRUST_CLOUDFLARE
+        value: "true"
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ADMIN_TOKEN
+        generateValue: true
+      - key: PSEUDONYM_SALT
+        generateValue: true
+      # No Cloudflare account yet: the session gate runs without the bot check.
+      # Replace with TURNSTILE_SITE_KEY + TURNSTILE_SECRET when you have them.
+      - key: TURNSTILE_DISABLED
+        value: "true"
+      - key: MATCH_ACCEPT_TIMEOUT_MS
+        value: "30000"
+      - key: EVIDENCE_DIR
+        value: /data/evidence

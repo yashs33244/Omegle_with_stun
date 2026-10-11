@@ -1,0 +1,36 @@
+name: Keep-alive
+
+# Wakes a free-tier backend (Render spins a Free web service down after 15
+# minutes without inbound traffic and needs about a minute to come back).
+# The backend also pings itself every 10 minutes (backend/src/keepalive.ts),
+# but a process that is already asleep cannot do that; this schedule can.
+# GitHub runs cron jobs best-effort, often minutes late, so the two together
+# are what keeps the service warm.
+#
+# Opt-in: the job is skipped until the repository VARIABLE KEEPALIVE_URL is set
+# (Settings -> Secrets and variables -> Actions -> Variables), for example
+# https://chizzy-api.onrender.com/healthz. Scheduled runs only happen on the
+# default branch.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: keepalive
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    name: GET the backend health check
+    if: vars.KEEPALIVE_URL != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      # A spun-down service answers after ~60 s, so allow for the wake-up.
+      - name: Ping
+        env:
+          URL: ${{ vars.KEEPALIVE_URL }}
+        run: curl --fail --silent --show-error --max-time 120 --retry 2 --retry-delay 20 "$URL"

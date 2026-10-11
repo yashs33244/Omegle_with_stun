@@ -146,9 +146,12 @@ describe("geo", () => {
     expect(isCountryBlocked("GB", { ...flags, blocked_countries: "" })).toBe(false);
   });
 
-  test("X-Real-IP only behind the trusted proxy", () => {
-    expect(requestIp({ "x-real-ip": "1.2.3.4" }, "10.0.0.1", false)).toBe("10.0.0.1");
-    expect(requestIp({ "x-real-ip": "1.2.3.4" }, "10.0.0.1", true)).toBe("1.2.3.4");
+  test("only the configured proxy header is believed, and only behind the trusted proxy", () => {
+    const headers = { "x-real-ip": "1.2.3.4", "true-client-ip": "5.6.7.8", "x-forwarded-for": "9.9.9.9" };
+    expect(requestIp(headers, "10.0.0.1", null)).toBe("10.0.0.1");
+    expect(requestIp(headers, "10.0.0.1", "x-real-ip")).toBe("1.2.3.4");
+    expect(requestIp(headers, "10.0.0.1", "true-client-ip")).toBe("5.6.7.8");
+    expect(requestIp({ "x-real-ip": " " }, "10.0.0.1", "x-real-ip")).toBe("10.0.0.1");
   });
 
   test("ip and network buckets", () => {

@@ -2,7 +2,7 @@
  * Admin API, mounted at /admin/api. Every request needs
  * `Authorization: Bearer <ADMIN_TOKEN>` (constant-time compare). Without a
  * configured token the API answers 503: it is never open. ADMIN_ALLOWED_IPS
- * limits the client IPs (X-Real-IP is trusted only with TRUST_PROXY). Put
+ * limits the client IPs (the PROXY_IP_HEADER is trusted only with TRUST_PROXY). Put
  * Cloudflare Access in front in production (see DEPLOYMENT.md). CORS follows
  * CORS_ORIGINS: the console runs on the SPA host and sends the bearer token,
  * so its preflight is answered before the token check.
@@ -40,7 +40,7 @@ export interface AdminApiDeps {
   logger: Logger;
   adminToken?: string;
   adminAllowedIps: string[];
-  trustProxy: boolean;
+  proxyIpHeader: string | null;
   corsOrigins: Config["corsOrigins"];
   clock?: () => number;
 }
@@ -73,7 +73,7 @@ export function adminApiRouter(deps: AdminApiDeps): Router {
   const clock = deps.clock ?? Date.now;
   const requests = new IpBuckets({ capacity: 120, refillPerSec: 2 }, clock);
   const failures = new Map<string, { count: number; resetAt: number }>();
-  const ipOf = (req: Request) => requestIp(req, deps.trustProxy);
+  const ipOf = (req: Request) => requestIp(req, deps.proxyIpHeader);
   const actor = (req: Request) => ({ ip: ipOf(req) });
   const allowed = new Set(deps.adminAllowedIps);
 

@@ -80,7 +80,7 @@ describe("call:start ICE servers", () => {
 
   test("the per-IP hourly cap applies across devices", async () => {
     ts = await startServer(
-      { ...cloudflare, trustProxy: true, turnMaxPerIpHour: 2, turnCacheSeconds: 0 },
+      { ...cloudflare, proxyIpHeader: "x-real-ip", turnMaxPerIpHour: 2, turnCacheSeconds: 0 },
       undefined,
       { fetch: fakeCloudflare().fetch },
     );

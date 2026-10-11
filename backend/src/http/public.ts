@@ -12,11 +12,11 @@ import type { Logger } from "../logger";
 import { appealRequestSchema, takedownRequestSchema, type AppealResponse, type TakedownResponse } from "../protocol";
 import { TokenBucket, type BucketSpec } from "../rateLimit";
 
-/** Client IP: X-Real-IP from our gateway when TRUST_PROXY is on, else the TCP peer. IPv4-mapped IPv6 is unwrapped. */
-export function requestIp(req: Request, trustProxy: boolean): string | null {
+/** Client IP: the trusted proxy header when TRUST_PROXY is on, else the TCP peer. IPv4-mapped IPv6 is unwrapped. */
+export function requestIp(req: Request, proxyIpHeader: string | null): string | null {
   let ip: string | undefined;
-  if (trustProxy) {
-    const header = req.get("x-real-ip")?.trim();
+  if (proxyIpHeader) {
+    const header = req.get(proxyIpHeader)?.trim();
     if (header) ip = header;
   }
   ip ??= req.socket.remoteAddress;
@@ -48,7 +48,7 @@ export class IpBuckets {
 
 export interface PublicApiDeps {
   enforcement: EnforcementService;
-  trustProxy: boolean;
+  proxyIpHeader: string | null;
   logger: Logger;
 }
 
@@ -74,7 +74,7 @@ export function publicApiRouter(deps: PublicApiDeps): Router {
   // Per-instance burst cap in front of the store-backed limits in EnforcementService.
   const reads = new IpBuckets({ capacity: 30, refillPerSec: 0.5 });
   const writes = new IpBuckets({ capacity: 10, refillPerSec: 0.1 });
-  const ip = (req: Request) => requestIp(req, deps.trustProxy);
+  const ip = (req: Request) => requestIp(req, deps.proxyIpHeader);
 
   const noStore: RequestHandler = (_req, res, next) => {
     res.set("Cache-Control", "no-store");

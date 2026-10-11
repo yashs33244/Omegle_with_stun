@@ -312,17 +312,17 @@ describe("admin API access", () => {
   });
 
   test("ADMIN_ALLOWED_IPS honors X-Real-IP only behind a trusted proxy", async () => {
-    ts = await boot({ trustProxy: true, adminAllowedIps: ["203.0.113.5"] });
+    ts = await boot({ proxyIpHeader: "x-real-ip", adminAllowedIps: ["203.0.113.5"] });
     expect((await admin("/queue", { headers: { "X-Real-IP": "203.0.113.5" } })).status).toBe(200);
     expect((await admin("/queue", { headers: { "X-Real-IP": "203.0.113.6" } })).status).toBe(403);
     expect((await admin("/queue")).status).toBe(403);
     await ts.close();
 
-    ts = await boot({ trustProxy: false, adminAllowedIps: ["203.0.113.5"] });
+    ts = await boot({ proxyIpHeader: null, adminAllowedIps: ["203.0.113.5"] });
     expect((await admin("/queue", { headers: { "X-Real-IP": "203.0.113.5" } })).status).toBe(403);
     await ts.close();
 
-    ts = await boot({ trustProxy: false, adminAllowedIps: ["127.0.0.1"] });
+    ts = await boot({ proxyIpHeader: null, adminAllowedIps: ["127.0.0.1"] });
     expect((await admin("/queue", { headers: { "X-Real-IP": "203.0.113.9" } })).status).toBe(200);
   });
 

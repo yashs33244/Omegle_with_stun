@@ -31,10 +31,13 @@ export function isCountryBlocked(country: string | null, flags: Flags): boolean 
   return country !== null && blockedCountries(flags).has(country);
 }
 
-/** Client IP: X-Real-IP from our gateway when TRUST_PROXY is on, else the TCP peer. */
-export function requestIp(headers: Headers, remoteAddress: string | undefined, trustProxy: boolean): string {
-  if (trustProxy) {
-    const real = header(headers, "x-real-ip");
+/**
+ * Client IP: the configured proxy header (X-Real-IP from our gateway,
+ * True-Client-IP on Render) when TRUST_PROXY is on, else the TCP peer.
+ */
+export function requestIp(headers: Headers, remoteAddress: string | undefined, proxyIpHeader: string | null): string {
+  if (proxyIpHeader) {
+    const real = header(headers, proxyIpHeader);
     if (real) return real;
   }
   return remoteAddress ?? "unknown";

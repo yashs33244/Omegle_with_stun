@@ -192,7 +192,7 @@ describe("reports and bans", () => {
 
 describe("connection limits", () => {
   test("per-IP cap honors X-Real-IP when TRUST_PROXY is on", async () => {
-    ts = await startServer({ trustProxy: true, maxConnectionsPerIp: 2 });
+    ts = await startServer({ proxyIpHeader: "x-real-ip", maxConnectionsPerIp: 2 });
     const headers = { "X-Real-IP": "203.0.113.7" };
     await ts.connect({ headers });
     const second = await ts.connect({ headers });
@@ -206,7 +206,7 @@ describe("connection limits", () => {
   });
 
   test("reconnecting does not refill the rate limits: new connections per IP are rate limited", async () => {
-    ts = await startServer({ trustProxy: true, connectRatePerIp: loadConfig({}).connectRatePerIp });
+    ts = await startServer({ proxyIpHeader: "x-real-ip", connectRatePerIp: loadConfig({}).connectRatePerIp });
     const headers = { "X-Real-IP": "203.0.113.9" };
     let refused: unknown;
     for (let i = 0; i < 50 && refused === undefined; i++) {
@@ -224,7 +224,7 @@ describe("connection limits", () => {
   });
 
   test("X-Real-IP is ignored when TRUST_PROXY is off", async () => {
-    ts = await startServer({ trustProxy: false, maxConnectionsPerIp: 2 });
+    ts = await startServer({ proxyIpHeader: null, maxConnectionsPerIp: 2 });
     await ts.connect({ headers: { "X-Real-IP": "203.0.113.1" } });
     await ts.connect({ headers: { "X-Real-IP": "203.0.113.2" } });
     await expect(ts.connect({ headers: { "X-Real-IP": "203.0.113.3" } })).rejects.toThrow("too_many_connections");

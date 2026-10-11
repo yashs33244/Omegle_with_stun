@@ -5,6 +5,7 @@ import { ConfigError, loadConfig, type Config } from "./config";
 import { createLogger } from "./logger";
 import Redis from "ioredis";
 import { RedisFlagsStore } from "./flags/flags";
+import { startKeepalive } from "./keepalive";
 import { closeSentry, initSentry } from "./observability/sentry";
 import { connectRedisAdapter, type RedisAdapterHandle } from "./realtime/redisAdapter";
 import { createServer } from "./server";
@@ -55,12 +56,14 @@ async function main(): Promise<void> {
   });
   const port = await server.listen(config.port);
   logger.info({ port, env: config.nodeEnv }, "listening");
+  const stopKeepalive = config.keepaliveUrl ? startKeepalive({ url: config.keepaliveUrl, logger }) : undefined;
 
   let shuttingDown = false;
   const shutdown = (signal: string, exitCode = 0) => {
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info({ signal }, "shutting down");
+    stopKeepalive?.();
     const force = setTimeout(() => {
       logger.error("shutdown grace period exceeded, exiting");
       process.exit(1);

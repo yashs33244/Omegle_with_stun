@@ -10,7 +10,8 @@ describe("loadConfig", () => {
     expect(c.nodeEnv).toBe("development");
     expect(c.port).toBe(3004);
     expect(c.corsOrigins).toBe("*");
-    expect(c.trustProxy).toBe(false);
+    expect(c.proxyIpHeader).toBeNull();
+    expect(c.keepaliveUrl).toBeUndefined();
     expect(c.maxConnectionsPerIp).toBe(10);
     expect(c.matchAcceptTimeoutMs).toBe(30000);
     expect(c.stunUrls).toEqual(["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]);
@@ -96,7 +97,7 @@ describe("loadConfig", () => {
     }
     expect(Object.keys(env).sort()).toEqual(
       [
-        "NODE_ENV", "PORT", "CORS_ORIGINS", "REDIS_URL", "TRUST_PROXY", "MAX_CONNECTIONS_PER_IP", "CONNECT_BURST_PER_IP", "CONNECT_RATE_PER_IP_PER_SEC",
+        "NODE_ENV", "PORT", "CORS_ORIGINS", "REDIS_URL", "TRUST_PROXY", "PROXY_IP_HEADER", "KEEPALIVE_URL", "RENDER_EXTERNAL_URL", "MAX_CONNECTIONS_PER_IP", "CONNECT_BURST_PER_IP", "CONNECT_RATE_PER_IP_PER_SEC",
         "MATCH_ACCEPT_TIMEOUT_MS", "STUN_URLS", "TURN_URLS", "TURN_SECRET", "TURN_USERNAME",
         "TURN_CREDENTIAL", "TURN_TTL_SECONDS", "LOG_LEVEL", "METRICS_TOKEN", "SHUTDOWN_GRACE_MS",
         "SESSION_SECRET", "SESSION_SECRET_PREVIOUS", "TURNSTILE_SECRET", "TURNSTILE_SITE_KEY",
@@ -122,8 +123,20 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ TURN_URLS: "turn:t:3478", TURN_USERNAME: "u" })).toThrow(/TURN_CREDENTIAL/);
     const c = loadConfig({ TURN_URLS: "turn:t:3478,turns:t:5349", TURN_SECRET: "x", TRUST_PROXY: "true" });
     expect(c.turnUrls).toEqual(["turn:t:3478", "turns:t:5349"]);
-    expect(c.trustProxy).toBe(true);
+    expect(c.proxyIpHeader).toBe("x-real-ip");
     expect(c.turnProvider).toBe("secret");
+  });
+
+  test("PROXY_IP_HEADER counts only with TRUST_PROXY; keep-alive URL falls back to Render's /healthz", () => {
+    expect(loadConfig({ PROXY_IP_HEADER: "True-Client-IP" }).proxyIpHeader).toBeNull();
+    expect(loadConfig({ TRUST_PROXY: "true", PROXY_IP_HEADER: "True-Client-IP" }).proxyIpHeader).toBe("true-client-ip");
+    expect(loadConfig({ RENDER_EXTERNAL_URL: "https://chizzy-api.onrender.com/" }).keepaliveUrl).toBe(
+      "https://chizzy-api.onrender.com/healthz",
+    );
+    expect(loadConfig({ RENDER_EXTERNAL_URL: "https://x.onrender.com", KEEPALIVE_URL: "https://ping.example/up" }).keepaliveUrl).toBe(
+      "https://ping.example/up",
+    );
+    expect(() => loadConfig({ KEEPALIVE_URL: "not a url" })).toThrow();
   });
 
   test("TURN provider and spend poller settings", () => {

@@ -72,7 +72,7 @@ export function createSessionRouter(deps: SessionRouterDeps): Router {
   router.post("/api/session", express.json({ limit: "8kb" }), async (req, res) => {
     res.set("Cache-Control", "no-store");
     const result = await service.create(req.body, {
-      ip: requestIp(req.headers, req.socket.remoteAddress, config.trustProxy),
+      ip: requestIp(req.headers, req.socket.remoteAddress, config.proxyIpHeader),
       country: requestCountry(req.headers, config.trustCloudflare),
     });
     res.status(result.status).json(result.body);

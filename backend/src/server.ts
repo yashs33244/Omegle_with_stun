@@ -93,7 +93,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     metricsToken: config.metricsToken,
     session: session.router,
     routes: (a) => {
-      a.use(publicApiRouter({ enforcement, trustProxy: config.trustProxy, logger }));
+      a.use(publicApiRouter({ enforcement, proxyIpHeader: config.proxyIpHeader, logger }));
       a.use(
         "/admin/api",
         adminApiRouter({
@@ -102,7 +102,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
           logger,
           adminToken: config.adminToken,
           adminAllowedIps: config.adminAllowedIps,
-          trustProxy: config.trustProxy,
+          proxyIpHeader: config.proxyIpHeader,
           corsOrigins: config.corsOrigins,
         }),
       );

@@ -29,6 +29,7 @@ import {
   type ServerToClientEvents,
 } from "../protocol";
 import { SocketRateLimiter, TokenBucket, type EventClass } from "../rateLimit";
+import { requestIp } from "../session/geo";
 import { handshakeSession } from "../session/handshake";
 import { limitedParser } from "./limitedParser";
 
@@ -36,16 +37,6 @@ export type AppServer = Server<ClientToServerEvents, ServerToClientEvents>;
 type AppSocket = Socket<ClientToServerEvents, ServerToClientEvents>;
 
 export const MAX_HTTP_BUFFER_SIZE = 256 * 1024;
-
-/** Client IP: X-Real-IP from our gateway when TRUST_PROXY is on, else the TCP peer. */
-export function clientIp(socket: Pick<AppSocket, "handshake">, trustProxy: boolean): string {
-  if (trustProxy) {
-    const header = socket.handshake.headers["x-real-ip"];
-    const value = Array.isArray(header) ? header[0] : header;
-    if (value && value.trim()) return value.trim();
-  }
-  return socket.handshake.address;
-}
 
 /**
  * Browsers do not apply CORS to WebSocket upgrades, so the allowlist is also
@@ -120,7 +111,7 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
 
   if (deps.handshake) io.use(deps.handshake);
   io.use((socket, next) => {
-    const ip = clientIp(socket, config.trustProxy);
+    const ip = requestIp(socket.handshake.headers, socket.handshake.address, config.proxyIpHeader);
     const count = perIp.get(ip) ?? 0;
     if (count >= config.maxConnectionsPerIp) {
       metrics.rateLimitedTotal.inc({ event: "connection" });
@@ -229,7 +220,7 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
       if (session && session.deviceId !== p.deviceId) {
         return reply({ ok: false, error: "invalid_payload", message: "deviceId does not match the session token" });
       }
-      return service.hello(socket.id, p, reply, clientIp(socket, config.trustProxy));
+      return service.hello(socket.id, p, reply, requestIp(socket.handshake.headers, socket.handshake.address, config.proxyIpHeader));
     });
     on("session:preferences", "preferences", updatePreferencesSchema, (p, reply) =>
       service.updatePreferences(socket.id, p, reply),

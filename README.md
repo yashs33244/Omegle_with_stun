@@ -5,7 +5,8 @@ age and Terms gate, pick a name, a few topics and (optionally) who you want to
 meet, and get matched with a stranger for a peer-to-peer WebRTC call with
 text chat on the side.
 
-Live: https://chizzy.itsyash.space (API and socket server: https://chizzyapi.itsyash.space)
+Live: https://chizzy.itsyash.space (API and socket server: https://chizzyapi.itsyash.space).
+Free-tier mirror: https://chizzy-chat.vercel.app (API: https://chizzy-api.onrender.com), see [Free hosting](#free-hosting-vercel--render).
 
 ## Features (v1 launch build)
 
@@ -116,7 +117,8 @@ flowchart LR
 | `deploy/` | gateway nginx configs, the Cloudflare IP script and the host deploy script |
 | `scripts/` | protocol sync, lockfile check, Redis backup and restore, `loadtest/` (load test and canary) |
 | `docs/` | runbooks, capacity, retention, risk assessment, safety decision log, launch checklist |
-| `.github/workflows/` | CI (`ci.yml`), the EC2 deploy (`deploy.yml`), the synthetic canary (`canary.yml`) |
+| `.github/workflows/` | CI (`ci.yml`), the EC2 deploy (`deploy.yml`), the synthetic canary (`canary.yml`), the free-tier pinger (`keepalive.yml`) |
+| `render.yaml`, `new-frontend/vercel.json` | the free-tier deployment: backend on Render, frontend on Vercel |
 
 ## Quick start (local development)
 
@@ -174,7 +176,9 @@ Empty values mean "use the default". Compose passes every variable below.
 | PORT | 3004 | |
 | CORS_ORIGINS | `*` outside production | comma list; REQUIRED in production, `*` rejected in production |
 | REDIS_URL | unset | set -> RedisStore + redis adapter + Redis feature stores |
-| TRUST_PROXY | false | true -> client IP from `X-Real-IP` (set by our gateway) |
+| TRUST_PROXY | false | true -> client IP from PROXY_IP_HEADER instead of the TCP peer |
+| PROXY_IP_HEADER | x-real-ip | header the trusted proxy sets: `X-Real-IP` from our gateway, `True-Client-IP` on Render |
+| KEEPALIVE_URL | unset (Render: `$RENDER_EXTERNAL_URL/healthz`) | GET every 10 min so a free host that idles out instances keeps this one running |
 | MAX_CONNECTIONS_PER_IP | 10 | per instance |
 | CONNECT_BURST_PER_IP / CONNECT_RATE_PER_IP_PER_SEC | 20 / 1 | new connections per client IP per instance (burst, then per second); raise for load tests |
 | MATCH_ACCEPT_TIMEOUT_MS | 30000 | Preview mode accept window |
@@ -237,6 +241,37 @@ address from `X-Forwarded-For` past private hops such as the host proxy; see
 DEPLOYMENT.md) and `REDIS_URL` pointing at the redis service. Backend,
 gateway and frontend run with `nofile` 65535; both nginx configs use
 `worker_connections 16384` and `worker_rlimit_nofile 65535`.
+
+### Free hosting: Vercel + Render
+
+The whole stack also runs for free, with the limits below: the SPA as a
+static site on Vercel (`new-frontend/vercel.json`: build, SPA rewrite and
+the same security headers nginx sends, with the Render origin in
+`connect-src`) and the backend as a Render Free web service built from
+`backend/Dockerfile` (`render.yaml`). Live at https://chizzy-chat.vercel.app
+and https://chizzy-api.onrender.com.
+
+- **Vercel** builds `new-frontend` with `VITE_API_URL=https://chizzy-api.onrender.com`
+  and `VITE_SITE_URL=https://chizzy-chat.vercel.app` (project environment
+  variables). Deploy with `cd new-frontend && vercel deploy --prod`.
+- **Render** runs one instance with the in-memory store, `TRUST_PROXY=true`
+  with `PROXY_IP_HEADER=true-client-ip` and `TRUST_CLOUDFLARE=true` (Render
+  sits behind Cloudflare, so the real IP and `CF-IPCountry` are available),
+  and `TURNSTILE_DISABLED=true` until Turnstile keys exist. `CORS_ORIGINS`
+  is the Vercel origin.
+- **Spin-down.** A Free web service sleeps after 15 minutes without inbound
+  traffic and takes about a minute to wake. Two things keep it warm: the
+  backend GETs its own `/healthz` every 10 minutes (`KEEPALIVE_URL`, which
+  defaults to Render's `RENDER_EXTERNAL_URL`), and `keepalive.yml` curls the
+  `KEEPALIVE_URL` repository variable every 10 minutes from GitHub, which also
+  wakes a service that already fell asleep. An always-on service uses ~744 of
+  the 750 free instance hours a month, so keep it the only running Free
+  service in the Render workspace.
+- **What you lose on the free tier**: one instance (no replicas), no Redis
+  (sessions, bans, flags and reports reset on every deploy or restart, and
+  evidence on the ephemeral disk goes with them unless `EVIDENCE_S3_*` is
+  set), no Cloudflare TURN until `TURN_PROVIDER=cloudflare` is configured,
+  no bot check until Turnstile keys are set.
 
 ## Operations
 

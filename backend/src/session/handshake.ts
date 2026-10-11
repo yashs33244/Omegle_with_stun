@@ -33,7 +33,7 @@ export interface HandshakeDeps {
   tokens: TokenSigner;
   flags: FlagsReader;
   trustCloudflare: boolean;
-  trustProxy: boolean;
+  proxyIpHeader: string | null;
   caps: MatchCaps;
   logger: Logger;
   onReject?: (code: RejectCode) => void;
@@ -56,7 +56,7 @@ export function sessionHandshake(deps: HandshakeDeps) {
 
     const session: HandshakeSession = { deviceId: token.deviceId, country: edgeCountry ?? token.country };
     (socket.data as { session?: HandshakeSession }).session = session;
-    const ip = requestIp(socket.handshake.headers, socket.handshake.address, deps.trustProxy);
+    const ip = requestIp(socket.handshake.headers, socket.handshake.address, deps.proxyIpHeader);
     deps.caps.bindIp(token.deviceId, ip).then(
       () => next(),
       (err: unknown) => {

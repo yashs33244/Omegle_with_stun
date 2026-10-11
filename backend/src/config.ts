@@ -28,6 +28,9 @@ const envSchema = z
     CORS_ORIGINS: z.string().optional(),
     REDIS_URL: z.string().url().optional(),
     TRUST_PROXY: bool.default("false"),
+    PROXY_IP_HEADER: z.string().min(1).default("x-real-ip"),
+    KEEPALIVE_URL: z.string().url().optional(),
+    RENDER_EXTERNAL_URL: z.string().url().optional(),
     MAX_CONNECTIONS_PER_IP: int(1).default(10),
     CONNECT_BURST_PER_IP: int(1).default(20),
     CONNECT_RATE_PER_IP_PER_SEC: int(1).default(1),
@@ -160,7 +163,19 @@ export interface Config extends MatchConfig {
   /** "*" allows any origin (never in production). */
   corsOrigins: string[] | "*";
   redisUrl?: string;
-  trustProxy: boolean;
+  /**
+   * Request header holding the client IP, or null to use the TCP peer.
+   * PROXY_IP_HEADER (default X-Real-IP, which our gateway sets) is trusted
+   * only when TRUST_PROXY is on; on Render it is True-Client-IP.
+   */
+  proxyIpHeader: string | null;
+  /**
+   * URL this process GETs every 10 minutes to count as inbound traffic for
+   * hosts that idle out free instances (Render spins down after 15 minutes
+   * without a request). KEEPALIVE_URL, or <RENDER_EXTERNAL_URL>/healthz when
+   * Render provides that; unset elsewhere.
+   */
+  keepaliveUrl?: string;
   maxConnectionsPerIp: number;
   /**
    * New connections per client IP (per instance): a burst, then a steady
@@ -285,7 +300,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     port: e.PORT,
     corsOrigins: origins.length === 0 || origins.includes("*") ? "*" : origins,
     redisUrl: e.REDIS_URL,
-    trustProxy: e.TRUST_PROXY,
+    proxyIpHeader: e.TRUST_PROXY ? e.PROXY_IP_HEADER.toLowerCase() : null,
+    keepaliveUrl: e.KEEPALIVE_URL ?? (e.RENDER_EXTERNAL_URL ? `${e.RENDER_EXTERNAL_URL.replace(/\/$/, "")}/healthz` : undefined),
     maxConnectionsPerIp: e.MAX_CONNECTIONS_PER_IP,
     connectRatePerIp: { capacity: e.CONNECT_BURST_PER_IP, refillPerSec: e.CONNECT_RATE_PER_IP_PER_SEC },
     stunUrls: csv(e.STUN_URLS),

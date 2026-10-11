@@ -88,7 +88,7 @@ export function createSessionFeature(deps: SessionFeatureDeps) {
       caps,
       logger,
       trustCloudflare: config.trustCloudflare,
-      trustProxy: config.trustProxy,
+      proxyIpHeader: config.proxyIpHeader,
       onReject: (code) => handshakeRejected.inc({ code }),
     }),
     gate: new SessionQueueGate(flags, deps.store, caps, logger),

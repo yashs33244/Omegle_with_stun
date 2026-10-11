@@ -23,3 +23,5 @@ dist-e2e
 *.njsproj
 *.sln
 *.sw?
+.env.local
+.vercel
