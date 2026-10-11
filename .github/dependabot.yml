@@ -2,7 +2,7 @@
 # `ignore` rules below cover runtime images whose major is pinned on purpose
 # (Node, nginx, Redis; ci.yml and scripts/check-pins.sh track them) and
 # libraries whose major needs a migration (zod 4, ioredis 6, react-router 7,
-# eslint 10, pino 10, jsdom 30, lucide 1.x, globals 17). A major is upgraded
+# eslint 10, pino 10, jsdom 30). A major is upgraded
 # deliberately: open an issue, do the migration on a branch, bump the pin and
 # the ignore rule in the same PR. See CONTRIBUTING.md "Dependencies".
 version: 2
@@ -29,10 +29,9 @@ updates:
         update-types: [version-update:semver-major]
       - dependency-name: jsdom
         update-types: [version-update:semver-major]
-      - dependency-name: lucide-react
-        update-types: [version-update:semver-major]
-      - dependency-name: globals
-        update-types: [version-update:semver-major]
+      # Pinned exactly: vite.config.ts fails the build unless the version
+      # matches src/moderation/modelAssets.ts. Bump both by hand.
+      - dependency-name: "@mediapipe/tasks-vision"
 
   - package-ecosystem: bun
     directory: /backend
@@ -53,8 +52,6 @@ updates:
       - dependency-name: eslint
         update-types: [version-update:semver-major]
       - dependency-name: pino
-        update-types: [version-update:semver-major]
-      - dependency-name: globals
         update-types: [version-update:semver-major]
 
   - package-ecosystem: github-actions
