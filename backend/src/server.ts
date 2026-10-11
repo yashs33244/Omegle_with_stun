@@ -5,6 +5,7 @@
 import { createServer as createHttpServer, type Server as HttpServer } from "node:http";
 import type Redis from "ioredis";
 import type { Config } from "./config";
+import { CaptionRelay } from "./captions/CaptionRelay";
 import { createEnforcement, type EnforcementOptions, type EnforcementService } from "./enforcement";
 import { FlagsReader, MemoryFlagsStore, type FlagsStore } from "./flags/flags";
 import { adminApiRouter } from "./http/admin";
@@ -18,6 +19,7 @@ import type { FetchFn } from "./turn/cloudflare";
 import { TurnSpendPoller, cloudflareEgressQuery } from "./turn/spendPoller";
 import { MemoryTurnStore, RedisTurnStore } from "./turn/store";
 import { TurnService } from "./turn/TurnService";
+import { SparkService } from "./spark/SparkService";
 import { attachHandlers, createEmitter, createSocketServer, type AppServer } from "./realtime/socket";
 import { createSessionFeature, sessionWarnings, type RestrictionChecker } from "./session";
 import type { MatchStore } from "./store/MatchStore";
@@ -142,6 +144,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
           }),
         })
       : undefined;
+  const emitter = createEmitter(io);
   const service = new MatchService({
     store,
     config,
@@ -151,12 +154,16 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     turn,
     safety,
     enforcement,
-    emitter: createEmitter(io),
+    emitter,
     gate: session.gate,
   });
+  const spark = new SparkService({ store, emitter, registry: metrics.registry });
+  const captions = new CaptionRelay({ store, emitter, metrics });
   const handlers = attachHandlers(io, {
     config,
     service,
+    spark,
+    captions,
     logger,
     metrics,
     handshake: config.requireSession ? session.handshake : undefined,
