@@ -7,7 +7,7 @@ import type Redis from "ioredis";
 import { Counter, type Registry } from "prom-client";
 import type { Config } from "../config";
 import type { FlagsReader } from "../flags/flags";
-import { createSessionRouter } from "../http/session";
+import { createSessionRouter, type SessionRouterDeps } from "../http/session";
 import type { Logger } from "../logger";
 import type { MatchStore } from "../store/MatchStore";
 import { startMatchingBroadcast } from "./broadcast";
@@ -35,6 +35,8 @@ export interface SessionFeatureDeps {
   redis?: Redis;
   fetch?: FetchLike;
   restrictions?: RestrictionChecker;
+  /** Instance-wide shedding in front of POST /api/session. */
+  shed: SessionRouterDeps["shed"];
 }
 
 export function createSessionFeature(deps: SessionFeatureDeps) {
@@ -84,7 +86,14 @@ export function createSessionFeature(deps: SessionFeatureDeps) {
     tokens,
     caps,
     service,
-    router: createSessionRouter({ config, flags, service, logger, onRateLimited: () => sessionRequests.inc({ result: "rate_limited" }) }),
+    router: createSessionRouter({
+      config,
+      flags,
+      service,
+      logger,
+      shed: deps.shed,
+      onRateLimited: () => sessionRequests.inc({ result: "rate_limited" }),
+    }),
     handshake: sessionHandshake({
       tokens,
       flags,

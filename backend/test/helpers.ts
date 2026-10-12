@@ -43,6 +43,9 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     requireSession: false,
     // Tests open many sockets from one address in quick succession.
     connectRatePerIp: { capacity: 1_000_000, refillPerSec: 1_000_000 },
+    sessionRateTotal: { capacity: 1_000_000, refillPerSec: 1_000_000 },
+    // A busy test runner must not trip overload shedding; shedding tests inject a sampler.
+    loadSampleIntervalMs: 0,
     matchAcceptTimeoutMs: 400,
     matchAcceptGraceMs: 50,
     sweepIntervalMs: 20,
@@ -85,7 +88,7 @@ export interface TestServer {
 export async function startServer(
   overrides: Partial<Config> = {},
   store?: MatchStore,
-  deps: Pick<ServerDeps, "configureIo" | "fetch" | "restrictions" | "redis" | "flags" | "enforcement" | "billing" | "photoBudgetBytes"> = {},
+  deps: Pick<ServerDeps, "configureIo" | "fetch" | "restrictions" | "redis" | "flags" | "enforcement" | "billing" | "photoBudgetBytes" | "loadSampler"> = {},
 ): Promise<TestServer> {
   // Each server gets its own evidence directory, removed on close.
   const evidenceDir = mkdtempSync(join(tmpdir(), "chizzy-evidence-"));

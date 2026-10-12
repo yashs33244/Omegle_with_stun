@@ -11,6 +11,8 @@ import type { Logger } from "../logger";
 import { TOS_VERSION, type PublicConfig } from "../protocol";
 import { requestCountry, requestIp } from "../session/geo";
 import type { SessionService } from "../session/SessionService";
+import { SHED_RETRY_AFTER_SEC } from "../shed/constants";
+import type { Shedder } from "../shed/Shedder";
 import { jsonBody } from "./body";
 import { SESSION_BODY_LIMIT_BYTES, SESSION_BURST_FACTOR } from "./constants";
 import { IpBuckets, requestIp as bucketIp } from "./public";
@@ -23,6 +25,8 @@ export function apiCors(
     const origin = req.get("origin");
     if (origin && (allowed === "*" || allowed.includes(origin))) {
       res.set("Access-Control-Allow-Origin", allowed === "*" ? "*" : origin);
+      // Retry-After is not CORS-safelisted; the SPA reads it on a 503.
+      res.set("Access-Control-Expose-Headers", "Retry-After");
       res.vary("Origin");
       if (req.method === "OPTIONS") {
         res.set({
@@ -63,6 +67,8 @@ export interface SessionRouterDeps {
   logger: Logger;
   /** Counts requests the per-instance burst cap refused (they never reach the service). */
   onRateLimited?: () => void;
+  /** Instance-wide shedding (shed/Shedder.ts). */
+  shed: Pick<Shedder, "admitSessionLoad" | "takeSession">;
 }
 
 export function createSessionRouter(deps: SessionRouterDeps): Router {
@@ -87,12 +93,26 @@ export function createSessionRouter(deps: SessionRouterDeps): Router {
     res.set("Cache-Control", "no-store").status(429).json({ ok: false, error: "rate_limited" });
   };
 
-  router.post("/api/session", burstCap, jsonBody(SESSION_BODY_LIMIT_BYTES), async (req, res) => {
+  // Instance-wide shedding: overload is checked before the per-IP bucket is
+  // charged, the instance-wide bucket after it, so one address cannot empty
+  // the shared bucket faster than its own burst allows.
+  const { shed } = deps;
+  const closed = (res: express.Response) =>
+    void res.set({ "Cache-Control": "no-store", "Retry-After": String(SHED_RETRY_AFTER_SEC) }).status(503).json({ ok: false, error: "closed" });
+  const shedLoad: RequestHandler = (_req, res, next) => (shed.admitSessionLoad() ? next() : closed(res));
+  const shedRate: RequestHandler = (_req, res, next) => (shed.takeSession() ? next() : closed(res));
+
+  router.post("/api/session", shedLoad, burstCap, shedRate, jsonBody(SESSION_BODY_LIMIT_BYTES), async (req, res) => {
     res.set("Cache-Control", "no-store");
     const result = await service.create(req.body, {
       ip: requestIp(req.headers, req.socket.remoteAddress, config.proxyIpHeader),
       country: requestCountry(req.headers, config.trustCloudflare),
     });
+    // `closed` with new sessions enabled is transient (Turnstile verification
+    // saturated): Retry-After tells the client to come back, unlike the kill switch.
+    if (!result.body.ok && result.body.error === "closed" && flags.current().new_sessions_enabled) {
+      res.set("Retry-After", String(SHED_RETRY_AFTER_SEC));
+    }
     res.status(result.status).json(result.body);
   });
 

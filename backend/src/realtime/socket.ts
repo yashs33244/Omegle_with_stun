@@ -1,6 +1,7 @@
 /**
- * Socket.IO server: transport limits, per-IP connection cap and connection
- * rate, per-session socket cap, the hello deadline, per-socket rate limits
+ * Socket.IO server: transport limits, instance-wide shedding, per-IP
+ * connection cap and connection rate, per-session socket cap, the hello
+ * deadline, per-socket rate limits
  * and the safe() wrapper that validates every payload and guarantees a
  * handler can never throw out of an event listener.
  */
@@ -36,6 +37,7 @@ import {
 import { MAX_SOCKETS_PER_SESSION, SocketRateLimiter, TokenBucket, type EventClass } from "../rateLimit";
 import { ipBuckets, requestIp, socketIp } from "../session/geo";
 import { handshakeSession } from "../session/handshake";
+import { refuseUpgrade, type Shedder } from "../shed/Shedder";
 import { limitedParser } from "./limitedParser";
 
 export type AppServer = Server<ClientToServerEvents, ServerToClientEvents>;
@@ -121,11 +123,24 @@ export class ConnectionGate {
   }
 }
 
-export function createSocketServer(httpServer: HttpServer, config: Config, gate: ConnectionGate): AppServer {
-  const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
+/**
+ * `shed` runs first: while the instance sheds (overload, MAX_CONNECTIONS_TOTAL)
+ * the upgrade is answered 503 before any per-IP bucket is charged. The
+ * instance-wide count is the engine's own clientsCount, which counts every
+ * open Engine.IO connection, with or without a Socket.IO session yet.
+ */
+export function createSocketServer(httpServer: HttpServer, config: Config, gate: ConnectionGate, shed: Shedder): AppServer {
+  const io: AppServer = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
     cors: { origin: config.corsOrigins === "*" ? "*" : config.corsOrigins, methods: ["GET", "POST"] },
     allowRequest: (req, callback) => {
       if (!originAllowed(req.headers.origin, config.corsOrigins)) return callback("origin not allowed", false);
+      const shedding = shed.admitSocket(io.engine.clientsCount);
+      if (shedding) {
+        // allowRequest only runs for a websocket handshake, so req.socket is
+        // the raw upgrade socket; the engine's own 400 then finds it destroyed.
+        refuseUpgrade(req.socket, shedding);
+        return callback(shedding, false);
+      }
       const refused = gate.admit(requestIp(req.headers, req.socket.remoteAddress, config.proxyIpHeader));
       callback(refused, refused === null);
     },

@@ -34,6 +34,8 @@ import { TurnService } from "./turn/TurnService";
 import { SparkService } from "./spark/SparkService";
 import { ConnectionGate, attachHandlers, createEmitter, createSocketServer, type AppServer } from "./realtime/socket";
 import { createSessionFeature, sessionWarnings, type RestrictionChecker } from "./session";
+import { LoadMonitor, ProcessLoadSampler, heapLimitBytes, type LoadSampler } from "./shed/LoadMonitor";
+import { Shedder } from "./shed/Shedder";
 import type { MatchStore } from "./store/MatchStore";
 
 export interface ServerDeps {
@@ -62,6 +64,8 @@ export interface ServerDeps {
   billing?: { gateway?: RazorpayGateway | null; walletStore?: WalletStore };
   /** Instance photo budget in bytes for tests (defaults to PHOTO_BUDGET_BYTES). */
   photoBudgetBytes?: number;
+  /** Overload signal source; tests inject one and step `ChizzyServer.load` with tick(). Defaults to the process sampler. */
+  loadSampler?: LoadSampler;
 }
 
 export interface ChizzyServer {
@@ -76,6 +80,8 @@ export interface ChizzyServer {
   billing: BillingService;
   /** The deps this server was built with, for feature modules that need the shared Redis client. */
   deps: ServerDeps;
+  /** Overload state (shed/LoadMonitor.ts); sampled every config.loadSampleIntervalMs unless that is 0. */
+  load: LoadMonitor;
   /**
    * Starts listening once the instance heartbeat is stored; resolves with the
    * bound port (use 0 for a random port). Rejects if the store is unreachable.
@@ -94,9 +100,24 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
   const { store, logger } = deps;
   const flags = new FlagsReader(deps.flags ?? new MemoryFlagsStore());
   const metrics = createMetrics(store);
+  const load = new LoadMonitor(deps.loadSampler ?? new ProcessLoadSampler(heapLimitBytes(config.shedHeapLimitMb)));
+  load.onChange((overloaded, sample) => {
+    metrics.overloaded.set(overloaded ? 1 : 0);
+    const facts = { loopDelayP99Ms: Math.round(sample.loopDelayP99Ms), heapUsedMb: Math.round(sample.heapUsedBytes / 2 ** 20) };
+    if (overloaded) logger.warn(facts, "overloaded: refusing new sockets and sessions");
+    else logger.info(facts, "load back to normal: admitting new sockets and sessions");
+  });
+  if (config.loadSampleIntervalMs > 0) load.start(config.loadSampleIntervalMs);
+  const shed = new Shedder({
+    maxConnectionsTotal: config.maxConnectionsTotal,
+    sessionRateTotal: config.sessionRateTotal,
+    load,
+    metrics,
+  });
   const enforcement = createEnforcement(config, { logger, redis: deps.redis }, deps.enforcement);
   const session = createSessionFeature({
     config,
+    shed,
     flags,
     store,
     logger,
@@ -129,6 +150,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     logger,
     metricsToken: config.metricsToken,
     metricsRequireToken: config.nodeEnv === "production",
+    overloaded: () => shed.overloaded,
     session: session.router,
     routes: (a) => {
       a.use(publicApiRouter({ enforcement, proxyIpHeader: config.proxyIpHeader, logger }));
@@ -157,7 +179,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
   httpServer.keepAliveTimeout = HTTP_KEEP_ALIVE_TIMEOUT_MS;
   httpServer.maxHeadersCount = HTTP_MAX_HEADERS_COUNT;
   httpServer.maxRequestsPerSocket = HTTP_MAX_REQUESTS_PER_SOCKET;
-  const io = createSocketServer(httpServer, config, new ConnectionGate(config, metrics));
+  const io = createSocketServer(httpServer, config, new ConnectionGate(config, metrics), shed);
   deps.configureIo?.(io);
   const emitter = createEmitter(io);
   live.emitter = emitter;
@@ -238,6 +260,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     enforcement,
     billing,
     deps,
+    load,
     async listen(port, host) {
       await started;
       return new Promise((resolve, reject) => {
@@ -252,6 +275,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     close() {
       closing ??= (async () => {
         flags.stop();
+        load.stop();
         stopBroadcast();
         spendPoller?.stop();
         await enforcement.stop();

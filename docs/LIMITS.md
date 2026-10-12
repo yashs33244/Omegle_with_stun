@@ -35,6 +35,7 @@ or Cloudflare Pages and talks to `https://chizzy-api.onrender.com`.
 | Free instance hours | 750 h/month; one always-on service uses about 744 | `render.yaml` header |
 | Self keep-alive | GET own `/healthz` every 10 min (`KEEPALIVE_INTERVAL_MS = 10 * 60 * 1000`) plus the `*/10 * * * *` GitHub cron | `backend/src/keepalive.ts:14`, `.github/workflows/keepalive.yml` |
 | Connections per IP | `MAX_CONNECTIONS_PER_IP` default 10 | `backend/src/config.ts:34` |
+| Instance-wide | `MAX_CONNECTIONS_TOTAL` 2,000 sockets, `SESSION_RATE_TOTAL_PER_SEC` 20; overload shedding on event-loop delay and heap | `backend/src/config.ts:51-53`, section 3 "Instance-wide limits and shedding" |
 | Session creation | `SESSION_RATE_PER_IP_PER_MIN` 10, `SESSION_RATE_PER_NETWORK_PER_MIN` 60 (per /24, or /48 for IPv6) | `backend/src/config.ts:54-55`, `docker-compose.yml` comment |
 | Matches per hour | `MATCH_CAP_PER_DEVICE_PER_HOUR` 200, `MATCH_CAP_PER_IP_PER_HOUR` 200 | `backend/src/config.ts:56-57` |
 | Queue size | flag `max_waiting` default 5,000; over it hello is refused with `matching_closed` | `backend/src/protocol.ts:666`, `backend/src/session/queueGate.ts:44-45` |
@@ -231,6 +232,46 @@ where the knob is: `env` (variable in `backend/.env.example`), `flag`
 | Gateway REST body | 64k default, 1m on the larger routes | `deploy/nginx/gateway.conf:165,185` |
 | Gateway rate and connection keys | one key per subscriber like the backend: an IPv4 address, an IPv6 /64 (`$chizzy_client_subscriber`); local peers exempt | `deploy/nginx/gateway.conf:115-148` (`scripts/test-gateway-limits.sh` "same IPv6 /64") | 429 | config | 413 | config |
 
+### Instance-wide limits and shedding
+
+Every limit above is per IP, session or socket. These bound what all
+clients together may start on one instance, so a crowd of addresses
+degrades new arrivals instead of the calls already running: open sockets,
+relayed `rtc:signal` and `chat:send`, and every other handler on an admitted
+socket are never shed. All checks run before the per-IP ones, so a refused
+attempt charges no per-IP bucket (`backend/src/shed/Shedder.ts`).
+
+| Limit | Value | Source | When exceeded | Change |
+|---|---|---|---|---|
+| Open sockets per instance | `MAX_CONNECTIONS_TOTAL` = 2,000 open Engine.IO connections (the engine's `clientsCount`), checked in `allowRequest` before the per-IP cap | `config.ts:51`, `shed/Shedder.ts:41-45`, `realtime/socket.ts:133-138` | upgrade answered HTTP 503 `server_full` with `Retry-After: 10`; `chizzy_shed_total{reason="connection_cap"}` (`shedding.test.ts` "MAX_CONNECTIONS_TOTAL refuses the next socket from any address") | env |
+| Session creation per instance | `SESSION_RATE_TOTAL_PER_SEC` = 20 per second, bucket of 5 s (`SESSION_TOTAL_BURST_SECONDS`, 100), charged after the per-IP burst cap so one address cannot drain it faster than its own burst | `config.ts:52,415-418`, `shed/constants.ts:46`, `http/session.ts:96-105` | `POST /api/session` 503 `closed` with `Retry-After: 10`; `chizzy_shed_total{reason="session_rate"}` (`shedding.test.ts` "the instance-wide session bucket refuses") | env |
+| Overload: event-loop delay | p99 over the last 1 s sample (`monitorEventLoopDelay`, 10 ms resolution) above `LOOP_DELAY_OVER_MS` = 200 ms for `OVER_SAMPLES` = 2 samples in a row | `shed/constants.ts:10-22`, `shed/LoadMonitor.ts:95-106` | instance overloaded (below) | code |
+| Overload: heap | `used_heap_size` above `HEAP_OVER_RATIO` = 80% of the heap budget, same 2-sample rule. Budget: `SHED_HEAP_LIMIT_MB`, else V8's `heap_size_limit` capped at `HEAP_SHARE_OF_MEMORY` = 60% of `process.constrainedMemory()` (V8 sizes its heap from the host, not the container): 307 MB in a 512 MB container, shedding from 246 MB | `config.ts:53`, `shed/constants.ts:20,40`, `shed/LoadMonitor.ts:45-50` | instance overloaded (below) | env `SHED_HEAP_LIMIT_MB` |
+| While overloaded | new upgrades answered HTTP 503 `overloaded` with `Retry-After: 10` (`reason="overload_socket"`); `POST /api/session` 503 `closed` with `Retry-After: 10` before the per-IP bucket is charged (`reason="overload_session"`); `/readyz` 503 `{ status: "overloaded" }`; `/healthz` stays 200 so Render does not restart a busy instance under its calls; gauge `chizzy_overloaded` 1 and a warn log | `realtime/socket.ts:133-138`, `http/session.ts:102`, `http/app.ts:75`, `server.ts` (`load.onChange`) | `shedding.test.ts` "while overloaded new upgrades and sessions are refused, a live call keeps relaying" | code |
+| Hysteresis | back to normal only after `CLEAR_SAMPLES` = 5 samples in a row with loop delay p99 under `LOOP_DELAY_CLEAR_MS` = 100 ms and heap under `HEAP_CLEAR_RATIO` = 70%; any sample outside restarts the count, so refusals do not flap around one threshold | `shed/constants.ts:29-31`, `shed/LoadMonitor.ts:95-106` | `shedding.test.ts` (same test), `unit/shed.test.ts` | code |
+| Queue size | flag `max_waiting` (default 5,000) is checked on `session:hello` only, inside the match lock after the restriction, ban, IP and wallet lookups; refused with `matching_closed` | `session/queueGate.ts:58-59`, `match/MatchService.ts:290` | `matching_closed` | flag |
+
+Why 2,000 sockets. Measured per waiting socket (connected, `session:hello`
+done, no photo, unmatchable so it stays in the queue), heap after a forced
+GC, 2026-10-12, Apple M3 Pro:
+
+- Node 22.23 (the production runtime), server process only, clients in a
+  separate process: 17.3 KiB of heap at 2,000 sockets, 16.5 KiB at 4,000;
+  RSS grows 28 to 36 KiB per socket; base process 14 MB heap, 84 MB RSS.
+- Bun 1.4, in-process with native WebSocket clients
+  (`test/integration/capacity.test.ts`, 500 sockets): about 21 KiB. The
+  test fails if a socket ever costs 32 KiB or the default cap times the
+  measured cost reaches 64 MiB.
+
+So 2,000 idle sockets cost about 35 MB of heap and 70 MB of RSS on top of
+the 84 MB base, well under 512 MB. The headroom is for what a socket can
+add: a profile photo of up to 150,000 characters (the SPA sends a 256 px
+JPEG, about 20 to 35 KB), calls in progress, chat and bursts. A crowd that
+all sends maximal photos (2,000 x 150 KB = 300 MB) is caught by the heap
+check before the instance runs out of memory. On Render Free the CPU (0.1
+vCPU) runs out long before 2,000 sockets (section 1a estimates 200 to 500);
+the event-loop check sheds that case.
+
 ### Per-event rate classes (token bucket per socket)
 
 Each socket has one bucket per class; an empty bucket answers
@@ -291,7 +332,7 @@ prepend to them.
 | Enforcement reads / writes per IP | 30 burst, 0.5/s; 10 burst, 0.1/s (per instance) | `http/public.ts:77-78` | 429 `rate_limited` | code |
 | Admin bodies, requests | `ADMIN_BODY_LIMIT_BYTES` 16 KiB; 120 burst, 2/s per IP after auth; 10 bad tokens per 15 min | `http/constants.ts`, `http/admin.ts:55-56,82` | 413, 429 | code |
 | Per-IP bucket maps | `IP_BUCKETS_MAX_KEYS` 50,000 per map (about 5 MB), keyed per subscriber (IPv4 address, IPv6 /64); at the cap a new key evicts a refilled bucket, else the fullest of the 64 least recently used (`evictOne`). Admin auth failures: `ADMIN_FAILURES_MAX_KEYS` 10,000, expired windows first, then the fewest failures; a locked-out address goes last | `http/constants.ts:50,52`, `http/public.ts:30-52`, `http/admin.ts:93-120`, `rateLimit.ts:84-110` | a limited client keeps its limit (`rateLimit.test.ts` "filling the map to its cap", `adminAuth.test.ts` "a full failure map") | code |
-| `/readyz` | one `store.ping()` in flight at a time (concurrent hits share it); 1 s timeout | `http/app.ts` | 503 `unavailable` | code |
+| `/readyz` | one `store.ping()` in flight at a time (concurrent hits share it); 1 s timeout; no ping while the instance is overloaded | `http/app.ts` | 503 `unavailable`; 503 `overloaded` while shedding | code |
 | `/metrics` | `METRICS_TOKEN` bearer; in production an unset token answers 404 (the route is closed, not open); `/healthz` does no I/O | `http/app.ts`, `server.ts` | 401 / 404 | env `METRICS_TOKEN` |
 
 ### Matching

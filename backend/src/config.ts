@@ -6,6 +6,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { MATCH_ENV, matchConfigFromEnv, refineMatchEnv, type MatchConfig } from "./match/matchConfig";
+import { LOAD_SAMPLE_INTERVAL_MS, SESSION_TOTAL_BURST_SECONDS } from "./shed/constants";
 
 const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace", "silent"] as const;
 
@@ -47,6 +48,9 @@ const envSchema = z
     MAX_CONNECTIONS_PER_IP: int(1).default(10),
     CONNECT_BURST_PER_IP: int(1).default(20),
     CONNECT_RATE_PER_IP_PER_SEC: int(1).default(1),
+    MAX_CONNECTIONS_TOTAL: int(1).default(2000),
+    SESSION_RATE_TOTAL_PER_SEC: int(1).default(20),
+    SHED_HEAP_LIMIT_MB: int(64).optional(),
     MATCH_ACCEPT_TIMEOUT_MS: int(1000).default(30000),
     STUN_URLS: z.string().default("stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302"),
     TURN_URLS: z.string().optional(),
@@ -250,6 +254,24 @@ export interface Config extends MatchConfig {
    */
   connectRatePerIp: { capacity: number; refillPerSec: number };
   /**
+   * Open Engine.IO connections on this instance, all clients together
+   * (shed/Shedder.ts). MAX_CONNECTIONS_TOTAL; the default leaves headroom on
+   * a 512 MB instance (docs/LIMITS.md, "Instance-wide limits and shedding").
+   */
+  maxConnectionsTotal: number;
+  /**
+   * POST /api/session per second on this instance, all clients together: a
+   * bucket of SESSION_TOTAL_BURST_SECONDS of SESSION_RATE_TOTAL_PER_SEC.
+   */
+  sessionRateTotal: { capacity: number; refillPerSec: number };
+  /** Heap budget for overload shedding (SHED_HEAP_LIMIT_MB); unset: derived, see shed/LoadMonitor.ts heapLimitBytes. */
+  shedHeapLimitMb?: number;
+  /**
+   * How often LoadMonitor samples; 0 never samples, so the instance never
+   * counts as overloaded. Not an env var; tests set 0 and inject a sampler.
+   */
+  loadSampleIntervalMs: number;
+  /**
    * A socket that has not sent a well-formed session:hello this long after
    * connecting is disconnected (realtime/socket.ts). Not an env var; the SPA
    * sends hello on connect, tests shrink it.
@@ -389,6 +411,13 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     keepaliveUrl: e.KEEPALIVE_URL ?? (e.RENDER_EXTERNAL_URL ? `${e.RENDER_EXTERNAL_URL.replace(/\/$/, "")}/healthz` : undefined),
     maxConnectionsPerIp: e.MAX_CONNECTIONS_PER_IP,
     connectRatePerIp: { capacity: e.CONNECT_BURST_PER_IP, refillPerSec: e.CONNECT_RATE_PER_IP_PER_SEC },
+    maxConnectionsTotal: e.MAX_CONNECTIONS_TOTAL,
+    sessionRateTotal: {
+      capacity: e.SESSION_RATE_TOTAL_PER_SEC * SESSION_TOTAL_BURST_SECONDS,
+      refillPerSec: e.SESSION_RATE_TOTAL_PER_SEC,
+    },
+    shedHeapLimitMb: e.SHED_HEAP_LIMIT_MB,
+    loadSampleIntervalMs: LOAD_SAMPLE_INTERVAL_MS,
     helloTimeoutMs: 30_000,
     stunUrls: csv(e.STUN_URLS),
     turnUrls: csv(e.TURN_URLS),

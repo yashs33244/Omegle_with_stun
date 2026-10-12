@@ -15,6 +15,7 @@ import {
   SESSION_BURST_FACTOR,
 } from "../../src/http/constants";
 import { TURNSTILE_MAX_INFLIGHT } from "../../src/session/constants";
+import { SHED_RETRY_AFTER_SEC } from "../../src/shed/constants";
 import { MemoryStore } from "../../src/store/MemoryStore";
 import type { FetchFn } from "../../src/turn/cloudflare";
 import { delay, postSession, sessionBody, startServer, type TestServer } from "../helpers";
@@ -174,8 +175,15 @@ describe("cheap and closed endpoints", () => {
     );
     const inflight = Array.from({ length: TURNSTILE_MAX_INFLIGHT }, () => postSession(ts, sessionBody()));
     await siteverify.reached;
-    const overflow = await postSession(ts, sessionBody());
-    expect(overflow).toEqual({ status: 503, body: { ok: false, error: "closed" } });
+    const overflow = await fetch(`${ts.url}/api/session`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(sessionBody()),
+    });
+    expect(overflow.status).toBe(503);
+    expect(await overflow.json()).toEqual({ ok: false, error: "closed" });
+    // Transient, unlike the kill switch: the client is told when to come back.
+    expect(overflow.headers.get("retry-after")).toBe(String(SHED_RETRY_AFTER_SEC));
     expect(siteverify.calls()).toBe(TURNSTILE_MAX_INFLIGHT);
     siteverify.release(() => Response.json({ success: true }));
     for (const r of await Promise.all(inflight)) expect(r.status).toBe(200);

@@ -15,6 +15,9 @@ export interface Metrics extends MatchMetrics {
   invalidPayloadTotal: Counter<"event">;
   handlerErrorsTotal: Counter<"event">;
   captionsRedactedTotal: Counter;
+  /** 1 while LoadMonitor refuses new sockets and sessions (shed/LoadMonitor.ts). */
+  overloaded: Gauge;
+  shedTotal: Counter<"reason">;
 }
 
 export function createMetrics(store: MatchStore): Metrics {
@@ -77,6 +80,17 @@ export function createMetrics(store: MatchStore): Metrics {
     captionsRedactedTotal: new Counter({
       name: "chizzy_captions_redacted_total",
       help: "Caption segments with links, handles or phone numbers hidden by the guard",
+      registers: [registry],
+    }),
+    overloaded: new Gauge({
+      name: "chizzy_overloaded",
+      help: "1 while this instance sheds new sockets and sessions (event-loop delay or heap over threshold)",
+      registers: [registry],
+    }),
+    shedTotal: new Counter({
+      name: "chizzy_shed_total",
+      help: "New sockets and sessions refused by instance-wide limits or overload shedding, by reason",
+      labelNames: ["reason"],
       registers: [registry],
     }),
     ...createMatchMetrics(registry),

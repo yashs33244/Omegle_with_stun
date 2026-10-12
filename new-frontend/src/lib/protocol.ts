@@ -512,7 +512,7 @@ export type SessionError =
   | "turnstile_failed"
   | "age_token_invalid" // ask for the date of birth again
   | "tos_outdated" // show the new Terms and ask again
-  | "closed" // new sessions are disabled by the kill switch
+  | "closed" // 503. Without Retry-After: the kill switch (paused). With Retry-After (seconds): the instance is busy, retry then
   | "banned"
   | "rate_limited";
 
