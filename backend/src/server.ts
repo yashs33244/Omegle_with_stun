@@ -26,6 +26,7 @@ import { publicApiRouter } from "./http/public";
 import type { Logger } from "./logger";
 import { MatchService, type Emitter } from "./match/MatchService";
 import { createMetrics, type Metrics } from "./metrics";
+import type { SocketRateLimiter } from "./rateLimit";
 import { MemorySignalStore, RedisSignalStore, SafetySignals } from "./safety/signals";
 import type { FetchFn } from "./turn/cloudflare";
 import { TurnSpendPoller, cloudflareEgressQuery } from "./turn/spendPoller";
@@ -68,6 +69,8 @@ export interface ServerDeps {
   loadSampler?: LoadSampler;
   /** Clock for session tokens, the handshake and the socket session-expiry timer; tests inject one. */
   now?: () => number;
+  /** Per-socket event buckets for tests (property tests lift them so payloads reach validation); defaults to RATE_LIMITS. */
+  newRateLimiter?: () => SocketRateLimiter;
 }
 
 export interface ChizzyServer {
@@ -243,6 +246,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     metrics,
     handshake: config.requireSession ? session.handshake : undefined,
     now: deps.now,
+    newRateLimiter: deps.newRateLimiter,
   });
   const stopBroadcast = session.startBroadcast(io);
   // listen() waits for this, so no client connects before the first heartbeat.

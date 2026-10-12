@@ -94,8 +94,8 @@ export const CAPTIONS = {
 /* Shared value schemas                                                */
 /* ------------------------------------------------------------------ */
 
-const languageCode = z.string().regex(/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/);
-const countryCode = z.string().regex(/^[A-Z]{2}$/);
+const languageCode = z.string().max(12).regex(/^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/);
+const countryCode = z.string().max(2).regex(/^[A-Z]{2}$/);
 const roomId = z.string().uuid();
 
 /** Only inline images. Remote URLs would leak the partner's IP to a third party. */
@@ -258,7 +258,7 @@ const utf8Bytes = (text: string): number => new TextEncoder().encode(text).lengt
  */
 export const captionSegmentSchema = z.object({
   roomId,
-  id: z.string().regex(/^[A-Za-z0-9_-]{1,64}$/),
+  id: z.string().max(64).regex(/^[A-Za-z0-9_-]{1,64}$/),
   text: z
     .string()
     .trim()
@@ -484,8 +484,8 @@ export interface ClientToServerEvents {
 /** Bumped when the Terms change; older acceptances must be renewed. */
 export const TOS_VERSION = "2026-10-draft";
 
-const isoDate = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
-const sha256Hex = z.string().regex(/^[a-f0-9]{64}$/);
+const isoDate = z.string().max(10).regex(/^\d{4}-\d{2}-\d{2}$/);
+const sha256Hex = z.string().max(64).regex(/^[a-f0-9]{64}$/);
 
 /**
  * POST /api/session. Every call needs a Turnstile token (unless the server runs without one in dev).
@@ -594,7 +594,7 @@ export type UnlockDays = (typeof UNLOCK_DAYS)[number];
 
 /** One purchasable coin pack (flag `coin_packs`). `inr` is the price in whole rupees. */
 export const coinPackSchema = z.object({
-  id: z.string().regex(/^[a-z0-9_-]{1,32}$/),
+  id: z.string().max(32).regex(/^[a-z0-9_-]{1,32}$/),
   coins: z.number().int().min(1).max(1_000_000),
   inr: z.number().int().min(1).max(100_000),
 });
@@ -706,8 +706,8 @@ export const flagsSchema = z.object({
   video_max_kbps: z.number().int().min(100).max(10_000),
   relay_video_max_kbps: z.number().int().min(100).max(10_000),
   banner_message: z.string().max(280),
-  blocked_countries: z.string().regex(/^([A-Z]{2}(,[A-Z]{2})*)?$/),
-  staffed_hours: z.string().regex(/^(\d{2}:\d{2}-\d{2}:\d{2} [A-Za-z_]+\/[A-Za-z_]+)?$/),
+  blocked_countries: z.string().max(750).regex(/^([A-Z]{2}(,[A-Z]{2})*)?$/), // 750: every ISO 3166-1 code (249 x 3 chars)
+  staffed_hours: z.string().max(64).regex(/^(\d{2}:\d{2}-\d{2}:\d{2} [A-Za-z_]+\/[A-Za-z_]+)?$/),
   default_mode: z.enum(MATCH_MODES),
   online_count_threshold: z.number().int().min(0).max(1_000_000),
   premium_filters_enabled: z.boolean(),
