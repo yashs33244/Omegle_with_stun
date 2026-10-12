@@ -162,7 +162,7 @@ describe("TurnSpendPoller", () => {
     // A new outage needs a full hour again before anything changes.
     for (let i = 0; i < 3; i++) expect(await p.poll()).toEqual({ status: "error" });
     expect(flags.current().private_mode_enabled).toBe(true);
-    expect((await p.poll()).applied).toEqual(["relay-bitrate", "private-mode-off"]);
+    expect(await p.poll()).toEqual({ status: "error", applied: ["relay-bitrate", "private-mode-off"] });
     expect(await failsafeCount()).toBe(2);
   });
 

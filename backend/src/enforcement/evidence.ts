@@ -116,7 +116,7 @@ export class FsEvidenceStore implements EvidenceStore {
       await writeFile(path, bytes, { mode: EVIDENCE_FILE_MODE, flag: "wx" });
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
-      if (!Buffer.from(await readFile(path)).equals(bytes)) throw err;
+      if (!(await readFile(path)).equals(bytes)) throw err;
     }
   }
 
