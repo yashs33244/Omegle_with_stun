@@ -2,7 +2,7 @@
  * In-process MatchStore for a single instance (local dev and tests).
  * Values are deep-copied in and out so behavior matches a serializing store.
  */
-import { PRUNE_EVERY_WRITES, REPORT_LOG_MAX } from "./constants";
+import { PRUNE_EVERY_WRITES, REPORTS_AGAINST_TTL_MS, REPORT_LOG_MAX } from "./constants";
 import {
   pairKey,
   type MatchStore,
@@ -30,6 +30,7 @@ export class MemoryStore implements MatchStore {
   /** instanceId -> heartbeat expiry (epoch ms). */
   private readonly instances = new Map<string, number>();
   private blockWrites = 0;
+  private reportWrites = 0;
   private lockTail: Promise<void> = Promise.resolve();
   private closed = false;
 
@@ -172,6 +173,14 @@ export class MemoryStore implements MatchStore {
       this.reportsAgainst.set(report.reportedDevice, against);
     }
     against.set(report.reporterDevice, Math.max(against.get(report.reporterDevice) ?? 0, report.ts));
+    // Same retention as the Redis index: a device's reporters are forgotten
+    // REPORTS_AGAINST_TTL_MS after its last report (checked every so often).
+    if (++this.reportWrites % PRUNE_EVERY_WRITES === 0) {
+      const cutoff = Date.now() - REPORTS_AGAINST_TTL_MS;
+      for (const [device, reporters] of this.reportsAgainst) {
+        if (Math.max(...reporters.values()) < cutoff) this.reportsAgainst.delete(device);
+      }
+    }
   }
 
   async countReporters(deviceId: string, since: number): Promise<number> {
@@ -197,7 +206,8 @@ export class MemoryStore implements MatchStore {
   }
 
   async setBan(deviceId: string, until: number): Promise<void> {
-    this.bans.set(deviceId, until);
+    if (until <= Date.now()) this.bans.delete(deviceId);
+    else this.bans.set(deviceId, until);
   }
 
   async heartbeat(instanceId: string, ttlMs: number): Promise<void> {
