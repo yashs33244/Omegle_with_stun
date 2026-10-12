@@ -39,4 +39,23 @@ describe("keep-alive", () => {
     await flush();
     expect(calls).toHaveLength(3);
   });
+
+  test("releases each response body instead of leaving the connection to the garbage collector", async () => {
+    vi.useFakeTimers();
+    let cancelled = 0;
+    const fetch = (async () =>
+      new Response(
+        new ReadableStream({
+          pull: (c) => c.enqueue(new TextEncoder().encode("ok")),
+          cancel: () => {
+            cancelled++;
+          },
+        }),
+      )) as unknown as typeof globalThis.fetch;
+    const stop = startKeepalive({ url: "https://api.example/healthz", logger, intervalMs: 1000, fetch });
+    vi.advanceTimersByTime(2000);
+    await flush();
+    stop();
+    expect(cancelled).toBe(2);
+  });
 });
