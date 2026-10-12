@@ -7,6 +7,7 @@ import { ChatPanel, PartnerTyping } from "@/components/room/ChatPanel";
 import { ChatSheet, ChatToast } from "@/components/room/ChatSheet";
 import { HideIpToggle } from "@/components/room/HideIpToggle";
 import { MatchPrompt } from "@/components/room/MatchPrompt";
+import { PrivateUnavailableSheet } from "@/components/room/PrivateUnavailableSheet";
 import { RoomHeader } from "@/components/room/RoomHeader";
 import { ShortcutHint } from "@/components/room/ShortcutHint";
 import { VideoTile } from "@/components/room/VideoTile";
@@ -238,6 +239,8 @@ const RoomSession: React.FC<RoomProps> = ({
     subscribeSignals: signaling.subscribeSignals,
     onCallFailed: (roomId, reason) => send("call:failed", { roomId, reason }),
     onTelemetry: (payload) => send("call:telemetry", payload),
+    // The partner gave up waiting for us by now: leave the match like Next does.
+    onPrivateUnavailableExpired: () => signaling.skip(),
   });
 
   const roomGate = useRoomGate(signaling, { onLeave: onBackToHome, connected: peer.connectionState === "connected" });
@@ -522,7 +525,7 @@ const RoomSession: React.FC<RoomProps> = ({
                 {t("privacy.ipHidden")}
               </StatusChip>
             )}
-            {inCall && peer.privateRequested && !peer.privateMode && (
+            {inCall && peer.privateRequested && !peer.privateMode && !peer.privateBlocked && (
               <StatusChip tone="warn" testId="private-unavailable">
                 {t("privacy.unavailable")}
               </StatusChip>
@@ -697,6 +700,7 @@ const RoomSession: React.FC<RoomProps> = ({
           onDismiss={safety.dismissPostCall}
         />
       )}
+      {inCall && peer.privateBlocked && <PrivateUnavailableSheet onSkip={signaling.skip} onContinue={peer.continueWithoutPrivate} />}
       {safety.nudge && (
         <NudgeToast
           nudge={safety.nudge}

@@ -54,6 +54,20 @@ async function allowPrivateMode(context: BrowserContext) {
   });
 }
 
+/** Counts the rtc:signal frames this browser sends that carry an ICE candidate. */
+async function countSentCandidates(context: BrowserContext): Promise<{ candidates: () => number }> {
+  let candidates = 0;
+  await context.routeWebSocket(/\/socket\.io\//, (ws) => {
+    const server = ws.connectToServer();
+    ws.onMessage((message) => {
+      if (typeof message === "string" && message.startsWith('42["rtc:signal"') && message.includes('"candidate"')) candidates += 1;
+      server.send(message);
+    });
+    server.onMessage((message) => ws.send(message));
+  });
+  return { candidates: () => candidates };
+}
+
 test("instant mode starts the call without an accept card, unblurs the partner after the check, and Next works", async ({
   openStranger,
 }) => {
@@ -97,12 +111,13 @@ test("Esc means Next during a call, but not while typing in the chat", async ({ 
   await expectWaiting(di.page, "partner-skipped");
 });
 
-test("Hide my IP is offered in the call when the server allows it, and says so when it cannot apply", async ({
+test("Hide my IP is offered in the call when the server allows it, and fails closed when it cannot apply", async ({
   openStranger,
 }) => {
   const eve = await openStranger("Eve");
   const fay = await openStranger("Fay");
   await allowPrivateMode(eve.context);
+  const fayUplink = await countSentCandidates(fay.context);
   // Fay asks for Hide my IP in the start screen's settings sheet; this e2e backend has no TURN relay to use.
   await passGate(fay);
   await fay.page.getByTestId("open-settings").click();
@@ -110,9 +125,28 @@ test("Hide my IP is offered in the call when the server allows it, and says so w
   await expect(fay.page.getByTestId("hide-ip-toggle")).toHaveAttribute("aria-checked", "true");
   await fay.page.getByTestId("settings-done").click();
   await expect(fay.page.getByTestId("start-settings")).toBeHidden();
-  await startInstantCall(eve, fay);
-  await expect(fay.page.getByTestId("private-unavailable")).toBeVisible();
+  await watchForAcceptCard(eve.page);
+  await watchForAcceptCard(fay.page);
+  await onboard(eve, { mode: "instant" });
+  await onboard(fay, { mode: "instant" });
+
+  // No connection exists on Fay's side until she decides: no candidate has left her browser.
+  const sheet = fay.page.getByTestId("private-unavailable-sheet");
+  await expect(sheet).toBeVisible();
+  await expect(sheet).toContainText("Hide my IP is not available for this call");
+  await expect(fay.page.getByTestId("private-unavailable")).toHaveCount(0);
   await expect(fay.page.getByTestId("private-badge")).toHaveCount(0);
+  await fay.page.waitForTimeout(1_000);
+  expect(fayUplink.candidates()).toBe(0);
+
+  await fay.page.getByTestId("private-unavailable-continue").click();
+  await expect(sheet).toBeHidden();
+  await expect(fay.page.getByTestId("private-unavailable")).toBeVisible();
+  for (const s of [eve, fay]) {
+    await expect(s.page.getByTestId("remote-video")).toBeVisible();
+    await expect(s.page.getByTestId("next-button")).toBeVisible();
+  }
+  await expect.poll(() => fayUplink.candidates()).toBeGreaterThan(0);
 
   const toggle = eve.page.getByTestId("hide-ip-toggle");
   await expect(toggle).toBeVisible();
@@ -123,6 +157,24 @@ test("Hide my IP is offered in the call when the server allows it, and says so w
   await expect(eve.page.getByTestId("hide-ip")).toContainText("Applies from your next call.");
   // This call keeps its direct path; nothing breaks.
   await expectRemoteVideoPlaying(eve.page);
+});
+
+test("Skip on the Hide my IP sheet leaves the match without ever connecting", async ({ openStranger }) => {
+  const ian = await openStranger("Ian");
+  const jo = await openStranger("Jo");
+  const joUplink = await countSentCandidates(jo.context);
+  await passGate(jo);
+  await jo.page.getByTestId("open-settings").click();
+  await jo.page.getByTestId("hide-ip-toggle").click();
+  await jo.page.getByTestId("settings-done").click();
+  await onboard(ian, { mode: "instant" });
+  await onboard(jo, { mode: "instant" });
+  await expect(jo.page.getByTestId("private-unavailable-sheet")).toBeVisible();
+  await jo.page.getByTestId("private-unavailable-skip").click();
+  await expect(jo.page.getByTestId("private-unavailable-sheet")).toBeHidden();
+  await expectWaiting(jo.page, "skipped");
+  await expectWaiting(ian.page, "partner-skipped");
+  expect(joUplink.candidates()).toBe(0);
 });
 
 test("the face gate pauses the video when no face is in frame and the partner gets the placeholder", async ({

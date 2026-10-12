@@ -65,7 +65,16 @@ vi.mock("@/hooks/useMediaQuery", async (importOriginal) => {
 const { Room } = await import("./Room");
 
 /** The media lane's peer fields, for a call that is neither private nor degraded. */
-const PEER_EXTRAS = { failure: null, privateMode: false, privateRequested: false, relayed: false, lowBandwidth: false };
+const continueWithoutPrivate = vi.fn();
+const PEER_EXTRAS = {
+  failure: null,
+  privateMode: false,
+  privateRequested: false,
+  privateBlocked: false,
+  continueWithoutPrivate,
+  relayed: false,
+  lowBandwidth: false,
+};
 /** A premium context with nothing unlocked, for the gender filter notice. */
 const PREMIUM_OFF: PremiumValue = {
   catalogue: null,
@@ -418,5 +427,47 @@ describe("Room gender filter downgrade", () => {
     );
     expect(onPreferencesChange).not.toHaveBeenCalled();
     expect(screen.queryByTestId("gender-filter-off")).not.toBeInTheDocument();
+  });
+});
+
+describe("Room Hide my IP fail-closed sheet", () => {
+  beforeEach(() => {
+    signalingState = inCall();
+    peerState = {
+      remoteStream: null,
+      remoteAudioTrack: null,
+      connectionState: "idle",
+      connectedAt: null,
+      quality: "GOOD",
+      ...PEER_EXTRAS,
+      privateRequested: true,
+      privateBlocked: true,
+    };
+  });
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("blocks the call behind a sheet whose Skip leaves and whose Continue connects directly", () => {
+    renderRoom();
+    const sheet = screen.getByTestId("private-unavailable-sheet");
+    expect(sheet).toHaveAttribute("aria-modal", "true");
+    expect(sheet).toHaveTextContent("Hide my IP is not available for this call");
+    expect(screen.queryByTestId("private-unavailable")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("private-badge")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("private-unavailable-continue"));
+    expect(continueWithoutPrivate).toHaveBeenCalledTimes(1);
+    expect(skip).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByTestId("private-unavailable-skip"));
+    expect(skip).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the direct-connection chip once the user continued", () => {
+    peerState = { ...peerState, privateBlocked: false };
+    renderRoom();
+    expect(screen.queryByTestId("private-unavailable-sheet")).not.toBeInTheDocument();
+    expect(screen.getByTestId("private-unavailable")).toHaveTextContent("You chose to continue without Hide my IP");
   });
 });
