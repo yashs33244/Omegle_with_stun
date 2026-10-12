@@ -10,7 +10,15 @@
  * chizzy_turn_spend_steps_total. Steps never undo themselves: an operator
  * restores the flags from the admin API once the spike is understood.
  *
- * With several instances only the one holding a short Redis lock polls.
+ * Fails closed: after SPEND_FAILSAFE_AFTER_FAILURES polls in a row fail (1 h
+ * at the 15 min interval) the spend is unknown, so the poller applies the
+ * failsafe steps (1 and 2: relay bitrate down, Hide my IP off; TURN itself
+ * stays on, calls behind strict NATs still connect) on every failed poll
+ * until one succeeds. Entering that state logs an error and increments
+ * chizzy_turn_spend_failsafe_total.
+ *
+ * With several instances only the one holding a short Redis lock polls; the
+ * failure streak is shared through Redis so it counts polls, not instances.
  */
 import { randomUUID } from "node:crypto";
 import type Redis from "ioredis";
@@ -26,6 +34,8 @@ import {
   CLOUDFLARE_GRAPHQL_URL,
   DAY_MS,
   RELAY_STEP_DOWN_KBPS,
+  SPEND_FAILSAFE_AFTER_FAILURES,
+  SPEND_FAILURES_KEY,
   SPEND_LOCK_KEY,
   SPEND_LOCK_LEASE_SHARE,
   SPEND_LOCK_MIN_TTL_MS,
@@ -97,6 +107,8 @@ interface Step {
   /** True when the flags already reflect this step. */
   applied(f: Flags): boolean;
   patch: Partial<Flags>;
+  /** Applied blind when the analytics have been failing for an hour. */
+  failsafe: boolean;
 }
 
 const STEPS: Step[] = [
@@ -104,9 +116,15 @@ const STEPS: Step[] = [
     name: SPEND_STEP.relayBitrate,
     applied: (f) => f.relay_video_max_kbps <= RELAY_STEP_DOWN_KBPS,
     patch: { relay_video_max_kbps: RELAY_STEP_DOWN_KBPS },
+    failsafe: true,
   },
-  { name: SPEND_STEP.privateModeOff, applied: (f) => !f.private_mode_enabled, patch: { private_mode_enabled: false } },
-  { name: SPEND_STEP.turnOff, applied: (f) => !f.turn_enabled, patch: { turn_enabled: false } },
+  {
+    name: SPEND_STEP.privateModeOff,
+    applied: (f) => !f.private_mode_enabled,
+    patch: { private_mode_enabled: false },
+    failsafe: true,
+  },
+  { name: SPEND_STEP.turnOff, applied: (f) => !f.turn_enabled, patch: { turn_enabled: false }, failsafe: false },
 ];
 
 export interface SpendPollerDeps {
@@ -116,22 +134,32 @@ export interface SpendPollerDeps {
   thresholdsGb: [number, number, number];
   intervalMs: number;
   logger: Logger;
-  metrics: Pick<MatchMetrics, "turnSpendStepsTotal" | "turnSpendPollErrorsTotal" | "turnEgressGbToday">;
+  metrics: Pick<
+    MatchMetrics,
+    "turnSpendStepsTotal" | "turnSpendPollErrorsTotal" | "turnSpendFailsafeTotal" | "turnEgressGbToday"
+  >;
   /** Shared Redis client; when present only the lock holder polls. */
   redis?: Redis;
   lockKey?: string;
+  /** Redis key of the shared failure streak. */
+  failuresKey?: string;
   now?: () => number;
 }
 
 export type PollResult =
   | { status: "skipped" }
-  | { status: "error" }
+  /** `applied`: failsafe steps taken on this poll, present once the failure streak reached the failsafe. */
+  | { status: "error"; applied?: string[] }
   | { status: "ok"; gb: number; applied: string[] };
 
 export class TurnSpendPoller {
   private timer?: ReturnType<typeof setInterval>;
   private running?: Promise<PollResult>;
   private readonly now: () => number;
+  /** Failed polls in a row on this instance (the fallback when Redis is unreachable). */
+  private failures = 0;
+  /** The failsafe has engaged during the current failure streak. */
+  private failsafeEngaged = false;
 
   constructor(private readonly deps: SpendPollerDeps) {
     this.now = deps.now ?? Date.now;
@@ -165,6 +193,7 @@ export class TurnSpendPoller {
       const dayStart = new Date(now - (now % DAY_MS));
       const bytes = await deps.query(dayStart, new Date(now));
       const gb = bytes / BYTES_PER_GB;
+      await this.recovered();
       deps.metrics.turnEgressGbToday.set(gb);
       const applied: SpendStep[] = [];
       for (let i = 0; i < STEPS.length; i++) {
@@ -184,8 +213,64 @@ export class TurnSpendPoller {
     } catch (err) {
       deps.metrics.turnSpendPollErrorsTotal.inc();
       deps.logger.error({ err }, "TURN spend poll failed");
-      return { status: "error" };
+      const streak = await this.failureStreak();
+      if (streak < SPEND_FAILSAFE_AFTER_FAILURES) return { status: "error" };
+      return { status: "error", applied: await this.failsafe(streak) };
     }
+  }
+
+  /** Counts one failed poll; returns the longer of the shared and the local streak. */
+  private async failureStreak(): Promise<number> {
+    this.failures++;
+    const { redis } = this.deps;
+    if (!redis) return this.failures;
+    try {
+      const key = this.deps.failuresKey ?? SPEND_FAILURES_KEY;
+      // Outlives a few missed polls, so a streak from last week never counts.
+      const ttl = (SPEND_FAILSAFE_AFTER_FAILURES + 1) * this.deps.intervalMs;
+      const res = await redis.multi().incr(key).pexpire(key, ttl).exec();
+      const shared = Number(res?.[0]?.[1]);
+      return Number.isFinite(shared) ? Math.max(shared, this.failures) : this.failures;
+    } catch {
+      return this.failures;
+    }
+  }
+
+  /** A poll succeeded: the streak ends (steps already taken stay, like threshold steps). */
+  private async recovered(): Promise<void> {
+    if (this.failsafeEngaged) {
+      this.deps.logger.warn("TURN spend poll recovered; failsafe step-downs stay until an operator restores them");
+    }
+    this.failures = 0;
+    this.failsafeEngaged = false;
+    if (!this.deps.redis) return;
+    // A leftover shared streak only makes the next outage engage the failsafe sooner.
+    await this.deps.redis.del(this.deps.failuresKey ?? SPEND_FAILURES_KEY).catch((err: unknown) => {
+      this.deps.logger.warn({ err }, "could not reset the TURN spend failure streak");
+    });
+  }
+
+  /** Spend unknown for too long: apply the failsafe steps. Never throws. */
+  private async failsafe(streak: number): Promise<SpendStep[]> {
+    const { deps } = this;
+    if (!this.failsafeEngaged) {
+      this.failsafeEngaged = true;
+      deps.metrics.turnSpendFailsafeTotal.inc();
+      deps.logger.error({ failedPolls: streak }, "TURN spend unknown; applying the failsafe step-downs until a poll succeeds");
+    }
+    const applied: SpendStep[] = [];
+    try {
+      for (const step of STEPS) {
+        if (!step.failsafe || step.applied(deps.flags.current())) continue;
+        await deps.flags.set(step.patch);
+        applied.push(step.name);
+        deps.metrics.turnSpendStepsTotal.inc({ step: step.name });
+        deps.logger.error({ step: step.name, failedPolls: streak }, "TURN spend unknown; stepping down");
+      }
+    } catch (err) {
+      deps.logger.error({ err }, "TURN spend failsafe could not update the flags");
+    }
+    return applied;
   }
 
   /** A lease just under the poll interval, never released, so one instance polls per interval. */

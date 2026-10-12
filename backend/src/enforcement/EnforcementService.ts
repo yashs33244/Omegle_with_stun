@@ -33,6 +33,7 @@ import type {
 import { toDataUrl, type EvidenceFrame, type EvidenceStore } from "./evidence";
 import {
   ADMIN_ERRORS,
+  ADMIN_IDEMPOTENCY_TTL_MS,
   ADMIN_LIST_LIMIT,
   ADMIT_RESULTS,
   APPEALS_PER_DEVICE_PER_DAY,
@@ -325,6 +326,8 @@ export class EnforcementService {
     const otherUnderageReporters = await this.underageReporters(input.reportedDevice, reporterNetwork ?? input.reporterDevice, now);
     const minorSignal = reportedStats.minorFlag || otherUnderageReporters > 0;
     const restricted = routeRestricted({ reason: input.reason, scores, minorSignal });
+    // Read before the frame is stored, so nothing can fail between storing it and saving the record.
+    const reportedNetwork = restricted ? await this.store.getValue<DeviceNetwork>(KEY.network(input.reportedDevice)) : null;
 
     let evidenceId: string | null = null;
     if (input.frame) {
@@ -362,9 +365,19 @@ export class EnforcementService {
       acknowledgedAt: null,
       decidedAt: null,
       restrictionId: null,
-      reportedNetwork: restricted ? await this.store.getValue<DeviceNetwork>(KEY.network(input.reportedDevice)) : null,
+      reportedNetwork,
     };
-    await this.store.put("report", id, report, now);
+    try {
+      await this.store.put("report", id, report, now);
+    } catch (err) {
+      // Without the record nothing would ever point at (or delete) the stored frame.
+      if (evidenceId) {
+        await this.evidence.delete(evidenceId, { restricted }).catch((cleanup: unknown) => {
+          this.log.error({ err: cleanup, restricted }, "could not delete the evidence of an unsaved report");
+        });
+      }
+      throw err;
+    }
     await this.store.addToIndex(KEY.reportsAgainst(input.reportedDevice), id, now);
     await this.store.addToIndex(INDEX.openReports, id, now);
     this.log.info({ reportId: id, reason: input.reason, restricted }, "report stored");
@@ -586,6 +599,11 @@ export class EnforcementService {
   async audit(action: string, target: string, note: string | null, ip: string | null): Promise<void> {
     const entry: AdminAuditEntry = { id: randomUUID(), ts: this.now(), action, target, note, ip };
     await this.store.put("audit", entry.id, entry, entry.ts);
+  }
+
+  /** Idempotency for admin writes: true the first time `key` is seen within ADMIN_IDEMPOTENCY_TTL_MS. */
+  async claimAdminRequest(key: string): Promise<boolean> {
+    return this.store.claim(KEY.adminRequest(key), ADMIN_IDEMPOTENCY_TTL_MS);
   }
 
   async listAudit(limit: number, before?: number): Promise<AdminAuditEntry[]> {
@@ -871,16 +889,34 @@ export class EnforcementService {
   /**
    * Deletes reports and their evidence older than 1 year (legal-hold items are
    * kept), restriction records 1 year after they ended (with their appeals),
-   * and takedown tickets resolved over a year ago. Idempotent.
+   * takedown tickets resolved over a year ago and audit entries older than a
+   * year (except those about a report on legal hold). Idempotent. A report
+   * whose evidence cannot be deleted keeps its record (the only pointer to
+   * the file) for the next day's sweep; the rest of the sweep goes on.
    */
-  async sweepRetention(): Promise<{ reports: number; restrictions: number; appeals: number; takedowns: number }> {
+  async sweepRetention(): Promise<{
+    reports: number;
+    restrictions: number;
+    appeals: number;
+    takedowns: number;
+    audit: number;
+    evidenceErrors: number;
+  }> {
     const cutoff = this.now() - RETENTION_MS;
-    const counts = { reports: 0, restrictions: 0, appeals: 0, takedowns: 0 };
+    const counts = { reports: 0, restrictions: 0, appeals: 0, takedowns: 0, audit: 0, evidenceErrors: 0 };
 
     for (const id of await this.store.range("report", { max: cutoff })) {
       const r = await this.store.get<StoredReport>("report", id);
       if (r?.legalHold) continue;
-      if (r?.evidenceId) await this.evidence.delete(r.evidenceId, { restricted: r.restricted });
+      if (r?.evidenceId) {
+        try {
+          await this.evidence.delete(r.evidenceId, { restricted: r.restricted });
+        } catch (err) {
+          counts.evidenceErrors++;
+          this.log.error({ err, reportId: id }, "retention: could not delete evidence; the report is kept for the next sweep");
+          continue;
+        }
+      }
       if (r) await this.store.removeFromIndex(KEY.reportsAgainst(r.reportedDevice), id);
       await this.store.removeFromIndex(INDEX.openReports, id);
       await this.store.delete("report", id);
@@ -910,6 +946,14 @@ export class EnforcementService {
       if (t && (t.resolvedAt === null || t.resolvedAt > cutoff)) continue;
       await this.store.delete("takedown", id);
       counts.takedowns++;
+    }
+
+    for (const id of await this.store.range("audit", { max: cutoff })) {
+      const entry = await this.store.get<AdminAuditEntry>("audit", id);
+      // The trail of a report frozen for a legal process stays with it.
+      if (entry && (await this.store.get<StoredReport>("report", entry.target))?.legalHold) continue;
+      await this.store.delete("audit", id);
+      counts.audit++;
     }
     return counts;
   }

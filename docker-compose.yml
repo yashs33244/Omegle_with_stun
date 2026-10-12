@@ -259,8 +259,14 @@ services:
         target: /etc/nginx/conf.d
         tmpfs:
           mode: 01777
+      # The gateway's Cloudflare ranges (deploy/cloudflare-ips.sh), for the
+      # per-client connection limit key in new-frontend/nginx.conf.
+      - ./deploy/nginx:/etc/nginx/chizzy:ro
     tmpfs:
       - /tmp
+    # Recreated with the gateway when deploy/nginx/ changes (see the gateway).
+    labels:
+      chizzy.gateway-conf-version: ${GATEWAY_CONF_VERSION:-local}
     # Static files only: it talks to nothing, so it shares no network with
     # the backend or Redis.
     networks:

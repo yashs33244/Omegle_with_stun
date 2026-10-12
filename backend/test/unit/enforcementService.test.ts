@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
-import { rmSync } from "node:fs";
+import { readdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import type { ReportInput } from "../../src/enforcement/EnforcementService";
 import { parseEvidenceFrame } from "../../src/enforcement/evidence";
 import { ADMIN_LIST_LIMIT, APPEALS_PER_IP_PER_HOUR, AUTO_PAUSE_MS, DAY, MINUTE, YEAR } from "../../src/enforcement/constants";
@@ -574,7 +575,8 @@ describe("retention sweep", () => {
     await h.service.resolveTakedown(takedown.ticketId, "done", actor);
 
     h.clock.now = start + YEAR - DAY;
-    expect(await h.service.sweepRetention()).toEqual({ reports: 0, restrictions: 0, appeals: 0, takedowns: 0 });
+    const none = { reports: 0, restrictions: 0, appeals: 0, takedowns: 0, audit: 0, evidenceErrors: 0 };
+    expect(await h.service.sweepRetention()).toEqual(none);
 
     h.clock.now = start + YEAR + 11 * MINUTE;
     const counts = await h.service.sweepRetention();
@@ -586,6 +588,66 @@ describe("retention sweep", () => {
     expect(await h.evidence.inner.get(oldEvidence, { restricted: false })).toBeNull();
     expect(await h.store.get("report", held.reportId)).not.toBeNull();
     expect(await h.store.get("restriction", shortId)).toBeNull();
-    expect(await h.service.sweepRetention()).toEqual({ reports: 0, restrictions: 0, appeals: 0, takedowns: 0 });
+    // The audit log ages out too, except the trail of the report on legal hold.
+    expect(counts.audit).toBe(2);
+    expect((await h.service.listAudit(10)).map((e) => [e.action, e.target])).toEqual([["report.escalate_csam", held.reportId]]);
+    expect(await h.service.sweepRetention()).toEqual(none);
+  });
+
+  test("evidence that cannot be deleted keeps its report for the next sweep; the rest of the sweep goes on", async () => {
+    h = harness();
+    const start = h.clock.now;
+    const stuck = await report(randomUUID(), "spam", { frame: parseEvidenceFrame(jpegDataUrl()) });
+    const fine = await report(randomUUID(), "spam", { frame: parseEvidenceFrame(jpegDataUrl()) });
+    const stuckEvidence = (await h.store.get<StoredReport>("report", stuck.reportId))!.evidenceId!;
+    const fineEvidence = (await h.store.get<StoredReport>("report", fine.reportId))!.evidenceId!;
+    const remove = h.evidence.delete.bind(h.evidence);
+    let down = true;
+    h.evidence.delete = async (id, where) => {
+      if (down && id === stuckEvidence) throw new Error("bucket unavailable");
+      return remove(id, where);
+    };
+
+    h.clock.now = start + YEAR + DAY;
+    expect(await h.service.sweepRetention()).toMatchObject({ reports: 1, evidenceErrors: 1 });
+    expect(await h.store.get("report", fine.reportId)).toBeNull();
+    expect(await h.evidence.inner.get(fineEvidence, { restricted: false })).toBeNull();
+    // Still pointing at its file, so the next sweep can finish the job.
+    expect(await h.store.get("report", stuck.reportId)).not.toBeNull();
+
+    down = false;
+    expect(await h.service.sweepRetention()).toMatchObject({ reports: 1, evidenceErrors: 0 });
+    expect(await h.evidence.inner.get(stuckEvidence, { restricted: false })).toBeNull();
+  });
+});
+
+describe("evidence lifecycle", () => {
+  const storedFrames = () => readdirSync(join(h.dir, "general")).length + readdirSync(join(h.dir, "restricted")).length;
+
+  test("a report the store fails to save takes its stored frame with it", async () => {
+    h = harness();
+    const put = h.store.put.bind(h.store);
+    h.store.put = async (col, id, doc, score) => {
+      if (col === "report") throw new Error("store down");
+      return put(col, id, doc, score);
+    };
+    await expect(report(randomUUID(), "spam", { frame: parseEvidenceFrame(jpegDataUrl()) })).rejects.toThrow("store down");
+    expect(storedFrames()).toBe(0);
+  });
+
+  test("an escalation that failed half way (frame copied, original not deleted) succeeds when retried", async () => {
+    h = harness();
+    const { reportId } = await report(randomUUID(), "harassment", { frame: parseEvidenceFrame(jpegDataUrl()) });
+    const evidenceId = (await h.store.get<StoredReport>("report", reportId))!.evidenceId!;
+    const remove = h.evidence.delete.bind(h.evidence);
+    h.evidence.delete = async () => {
+      throw new Error("disk busy");
+    };
+    await expect(h.service.escalate(reportId, actor)).rejects.toThrow("disk busy");
+    h.evidence.delete = remove;
+    expect((await h.service.escalate(reportId, actor)).ok).toBe(true);
+    expect(await h.evidence.inner.get(evidenceId, { restricted: false })).toBeNull();
+    expect(await h.evidence.inner.get(evidenceId, { restricted: true })).not.toBeNull();
+    expect((await h.store.get<StoredReport>("report", reportId))!.restricted).toBe(true);
   });
 });

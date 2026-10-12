@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EVIDENCE_MAX_BYTES } from "../../src/enforcement/constants";
@@ -68,6 +68,30 @@ describe("FsEvidenceStore", () => {
     await expect(store.put("../../etc/passwd", jpegBytes(8), { restricted: false })).rejects.toThrow("invalid evidence id");
     await expect(store.get("abc", { restricted: false })).rejects.toThrow("invalid evidence id");
   });
+
+  test("writing the same bytes twice succeeds, different bytes under the same id never overwrite", async () => {
+    dir = mkdtempSync(join(tmpdir(), "chizzy-ev-"));
+    const store = new FsEvidenceStore(dir);
+    const id = randomUUID();
+    const bytes = jpegBytes(64);
+    await store.put(id, bytes, { restricted: true });
+    await store.put(id, bytes, { restricted: true });
+    await expect(store.put(id, jpegBytes(64), { restricted: true })).rejects.toThrow(/EEXIST/);
+    expect([...(await store.get(id, { restricted: true }))!]).toEqual([...bytes]);
+  });
+
+  test("reads are capped and must still be a JPEG (the admin route serves them as image/jpeg)", async () => {
+    dir = mkdtempSync(join(tmpdir(), "chizzy-ev-"));
+    const store = new FsEvidenceStore(dir);
+    const [big, html] = [randomUUID(), randomUUID()];
+    await store.put(big, jpegBytes(16), { restricted: false });
+    await store.put(html, jpegBytes(16), { restricted: false });
+    // Files replaced behind the server's back (a tampered volume or a bad restore).
+    writeFileSync(join(dir, "general", `${big}.jpg`), jpegBytes(EVIDENCE_MAX_BYTES + 1));
+    writeFileSync(join(dir, "general", `${html}.jpg`), "<script>alert(1)</script>");
+    await expect(store.get(big, { restricted: false })).rejects.toThrow("size cap");
+    await expect(store.get(html, { restricted: false })).rejects.toThrow("not a JPEG");
+  });
 });
 
 describe("S3EvidenceStore", () => {
@@ -98,14 +122,17 @@ describe("S3EvidenceStore", () => {
   function fakeS3() {
     const objects = new Map<string, Uint8Array>();
     const sent: Cmd[] = [];
+    const ranges: string[] = [];
     return {
       sent,
       objects,
+      ranges,
       async send(command: unknown) {
         const c = command as Cmd;
         sent.push(c);
         const key = c.input.Key as string;
         if (c.kind === "put") objects.set(key, c.input.Body as Uint8Array);
+        if (c.kind === "get") ranges.push(c.input.Range as string);
         if (c.kind === "delete") objects.delete(key);
         if (c.kind === "get") {
           const body = objects.get(key);
@@ -152,6 +179,19 @@ describe("S3EvidenceStore", () => {
       { bucket: "ev", commands },
     );
     await expect(store.get(randomUUID(), { restricted: false })).rejects.toThrow("denied");
+  });
+
+  test("downloads at most one byte past the cap, and refuses what is over it or not a JPEG", async () => {
+    const s3 = fakeS3();
+    const store = new S3EvidenceStore(s3, { bucket: "ev", commands });
+    const id = randomUUID();
+    await store.put(id, jpegBytes(16), { restricted: false });
+    expect(await store.get(id, { restricted: false })).not.toBeNull();
+    expect(s3.ranges).toEqual([`bytes=0-${EVIDENCE_MAX_BYTES}`]);
+    s3.objects.set(`general/${id}.jpg`, jpegBytes(EVIDENCE_MAX_BYTES + 1));
+    await expect(store.get(id, { restricted: false })).rejects.toThrow("size cap");
+    s3.objects.set(`general/${id}.jpg`, new TextEncoder().encode("<html></html>"));
+    await expect(store.get(id, { restricted: false })).rejects.toThrow("not a JPEG");
   });
 });
 

@@ -122,6 +122,8 @@ export const TAKEDOWNS_PER_IP_PER_HOUR = 5;
 
 /** Most recent records returned by the admin list endpoints. */
 export const ADMIN_LIST_LIMIT = 500;
+/** An admin Idempotency-Key is remembered this long (ms); a repeat inside it is refused, not applied. */
+export const ADMIN_IDEMPOTENCY_TTL_MS = DAY;
 
 /** Records (and evidence) are deleted this long (ms) after they stopped mattering. */
 export const RETENTION_MS = YEAR;
@@ -171,6 +173,8 @@ export const KEY = {
   appealClaim: (restrictionId: string) => `appeal:${restrictionId}`,
   takedownIpRate: (network: string) => `takedown-ip:${network}`,
   retentionClaim: (day: number) => `retention:${day}`,
+  /** Admin Idempotency-Key claims (`<action>:<target>:<key>`). */
+  adminRequest: (key: string) => `admin-req:${key}`,
   /** Reports against a device, scored by creation time. */
   reportsAgainst: (deviceId: string) => `against:${deviceId}`,
   /** Restrictions of a device, scored by creation time. */
@@ -213,3 +217,5 @@ export const EVIDENCE_AREA = { general: "general", restricted: "restricted" } as
 export const EVIDENCE_DIR_MODE = 0o700;
 export const EVIDENCE_FILE_MODE = 0o600;
 export const EVIDENCE_EXTENSION = ".jpg";
+/** The only type evidence is stored and served as (S3 ContentType, the admin download route). */
+export const EVIDENCE_CONTENT_TYPE = "image/jpeg";

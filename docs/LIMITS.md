@@ -72,7 +72,8 @@ transport only so no stickiness; `deploy/nginx/gateway.conf:31`), `frontend`
 | nofile | 65535 for backend, gateway, frontend containers; `worker_rlimit_nofile 65535` | `docker-compose.yml` `ulimits`, `deploy/nginx/nginx.conf:11` |
 | Websocket idle | `proxy_read_timeout 5m` on `/socket.io/`; Socket.IO pings every 20 s (`pingInterval: 20_000`, `pingTimeout: 20_000`) | `deploy/nginx/gateway.conf` `/socket.io/`, `backend/src/realtime/socket.ts:133-134` |
 | Gateway per-client rate limits (429 past them; health checks and the compose network are exempt) | `/socket.io/` handshakes 5/s burst 20; `POST /api/session` 1/s burst 20; other `/api/` and health 20/s burst 40; `/admin/api/` 5/s burst 10; open connections per client 32 (`/admin/api/` 16). All above the backend's own per-IP limits, so the backend still decides for normal traffic | `deploy/nginx/gateway.conf` `limit_req_zone`, `limit_conn_zone` |
-| Slow clients | request headers and body must arrive within 10 s (`client_header_timeout`, `client_body_timeout`), 30 s between two writes of a response (`send_timeout`); REST bodies 64 KB | `deploy/nginx/nginx.conf`, `deploy/nginx/gateway.conf` `client_max_body_size` |
+| Slow clients | request headers and body must arrive within 10 s (`client_header_timeout`, `client_body_timeout`), 30 s between two writes of a response (`send_timeout`); REST bodies 64 KB. The frontend container has the same timeouts | `deploy/nginx/nginx.conf`, `deploy/nginx/gateway.conf` `client_max_body_size`, `new-frontend/nginx-main.conf:42-49` |
+| Frontend per-client connections | 32 open connections per client address (keyed like the gateway: X-Forwarded-For from private hops, then CF-Connecting-IP from a Cloudflare edge; the image alone, without the compose mount of `deploy/nginx`, keys on the edge address); 429 past it; health checks exempt | `new-frontend/nginx.conf:5-54`, `docker-compose.yml` `frontend.volumes` |
 | Container limits | memory: backend 768 MB per replica, redis 512 MB, gateway 256 MB, frontend 128 MB; pids: 512 / 128 / 256 / 256. A container over its limit is killed and restarted | `docker-compose.yml` `deploy.resources.limits` |
 | Replica loss detection | heartbeat every 5 s (`heartbeatIntervalMs: 5_000`); sessions of an instance silent for 15 s (`instanceTtlMs: 15_000`) are removed by the others and their partners get `partner-unavailable` | `backend/src/config.ts:382-383`, `backend/src/match/MatchService.ts:733-745` |
 | Match lock | one Redis lock for the whole queue: `LOCK_TTL_MS 3_000`, `LOCK_WAIT_MS 10_000`, backoff 4 to 50 ms | `backend/src/store/constants.ts:28-33` |
@@ -107,6 +108,11 @@ code says about where it would stop:
   Hide my IP, then switches TURN off entirely (STUN only)
   (`backend/src/match/matchConfig.ts:26,108`, `backend/src/turn/constants.ts:67`,
   `backend/src/turn/spendPoller.ts:4-11`). Steps never undo themselves.
+  When the analytics query fails 4 polls in a row (1 h,
+  `SPEND_FAILSAFE_AFTER_FAILURES`, `backend/src/turn/constants.ts:74-80`) the
+  spend is unknown and the poller applies steps 1 and 2 blind on every
+  failed poll until one succeeds (TURN stays on); the streak is shared
+  through Redis key `chizzy:turn-spend:failures`.
 
 ### Per-user caps that apply in both topologies
 
@@ -314,7 +320,8 @@ prepend to them.
 | Chat message | 500 chars (`LIMITS.chatMax`); 10 burst, 2/s | `protocol.ts:56`, `rateLimit.ts:26` | `invalid_payload` / `rate_limited` | code |
 | SDP / ICE candidate | 20,000 / 2,000 chars | `protocol.ts:58-59` | `invalid_payload` | code |
 | Report details | 500 chars; evidence frame data URL 120,000 chars; up to 20 chat lines | `protocol.ts:57,61-62` | `invalid_payload` | code |
-| Evidence decoded size | 4 B to 96 KiB JPEG (`EVIDENCE_MAX_BYTES = 96 * 1024`), must start with the JPEG magic | `enforcement/constants.ts:194-196`, `safety/evidence.ts:41-42` | frame silently dropped from the report | code |
+| Evidence decoded size | 4 B to 96 KiB JPEG (`EVIDENCE_MAX_BYTES = 96 * 1024`), must start with the JPEG magic | `enforcement/constants.ts:206-208`, `enforcement/evidence.ts:37-56` | frame silently dropped from the report | code |
+| Evidence reads (admin download, restriction page) | a stored object over 96 KiB or without the JPEG magic is refused (the file size is checked before reading; S3 reads ask for at most 96 KiB + 1 byte); the admin download is `image/jpeg` (`EVIDENCE_CONTENT_TYPE`), `Content-Disposition: attachment`, `nosniff`, `no-store`; ids are server UUIDs checked against `EVIDENCE_ID_PATTERN` before any path or key is built | `enforcement/evidence.ts` `checkStored`, `FsEvidenceStore.get`, `S3EvidenceStore.get`, `http/admin.ts` `/reports/:id/evidence`, `enforcement/constants.ts:213,221` | 500 (error logged), nothing served | code |
 | Reports per reporter | 5 per hour per device (`REPORTS_PER_HOUR`), 30 per hour per client IP across devices (`REPORTS_PER_IP_PER_HOUR`, wide because of CGNAT), one per room per reporter (claim kept 1 day) | `enforcement/constants.ts:34-40`, `EnforcementService.ts:admitReport` | `rate_limited`, duplicate ignored | code |
 | Report after the call | allowed for 60 s after the room ended (`reportAfterEndMs: 60_000`) plus 5 s skew grace | `config.ts:380`, `enforcement/constants.ts:102` | `not_in_room` | code |
 | Automatic action | a 10 min pause when the weights of distinct reporters in 24 h reach `AUTO_PAUSE_THRESHOLD` 1.6 (a reporter weighs 0.05 to 1: fresh device about 0.23, halved for calls under 2 s, so at least 2 established or 8 fresh reporters); reporters on one address (IPv4 address or IPv6 /64, stored as a salted hash) count once at their highest weight; everything else is human (ladder: warning, 10 min, 24 h, 7 d, permanent) | `enforcement/constants.ts:28-45`, `EnforcementService.ts:autoAction` | `banned` / restriction page | code |
@@ -323,10 +330,10 @@ prepend to them.
 | Takedowns | 5 per IP per hour; description 20 to 2,000 chars | `enforcement/constants.ts:115`, `protocol.ts:556-563` | `rate_limited` | code |
 | Report log (memory store) | newest 10,000 | `store/constants.ts:14` | oldest dropped | code |
 | Reporter index (who reported a device) | kept 30 days after the device's last report (`REPORTS_AGAINST_TTL_MS`): a Redis TTL, and the memory store prunes every 1,000 report writes | `store/constants.ts:41`, `store/MemoryStore.ts` `addReport` | older reporters no longer count toward the auto-pause threshold | code |
-| Retention | records and evidence deleted 1 year after they stop mattering; CSAM evidence frozen at least 1 year; hourly check | `enforcement/constants.ts:121-125` | n/a | code |
+| Retention | records and evidence deleted 1 year after they stop mattering, audit entries 1 year after they were written (except those about a report on legal hold); CSAM evidence frozen at least 1 year; hourly check for a daily claim. A report whose evidence cannot be deleted keeps its record for the next day's sweep (counted as `evidenceErrors`), the rest of the sweep goes on | `enforcement/constants.ts:128-133`, `EnforcementService.ts` `sweepRetention` | n/a | code |
 | Admin lists | 500 most recent (`ADMIN_LIST_LIMIT`), including the open-report queue (oldest 500 by creation, then sorted by severity and due clock); audit `limit` 1 to 500, default 100 | `enforcement/constants.ts:118`, `EnforcementService.ts:queue`, `http/admin.ts:67` | truncated | code |
 | Enforcement memory store | expiring entries (room grace values, report claims, counters, device stats) are swept every 1,000 writes (`SWEEP_EVERY_WRITES`) once expired | `enforcement/MemoryEnforcementStore.ts` | n/a (bounded) | code |
-| Admin wallet adjust | delta -1,000,000 to 1,000,000, non-zero; note 1 to 500 chars | `protocol.ts:802-805` | 400 | code |
+| Admin wallet adjust | delta -1,000,000 to 1,000,000, non-zero; note 1 to 500 chars; optional `Idempotency-Key` header (8 to 64 of `[A-Za-z0-9_-]`) remembered 24 h (`ADMIN_IDEMPOTENCY_TTL_MS`): a repeat is refused, not applied | `protocol.ts:802-805`, `http/admin.ts` `idempotencyKey`, `enforcement/constants.ts:125-126` | 400; 409 `duplicate` | code |
 | Admin notes | 2,000 chars | `protocol.ts:766,772,775` | 400 | code |
 
 ### TURN and media
@@ -337,7 +344,7 @@ prepend to them.
 | Credential cache | one set per device for `TURN_CACHE_SECONDS` 300 | `matchConfig.ts:20` | n/a | env |
 | New credential sets | `TURN_MAX_PER_DEVICE_HOUR` 20, `TURN_MAX_PER_IP_HOUR` 100 | `matchConfig.ts:21-22` | STUN only, `privateModeAllowed: false` | env |
 | Video bitrate | flag `video_max_kbps` 900, `relay_video_max_kbps` 500 (schema 100 to 10,000); the SPA defaults to the same | `protocol.ts:669-670,693-694`, `usePeerConnection.ts:26` | sender caps `setParameters` | flag |
-| Spend thresholds | 35 / 50 / 70 GB per UTC day: relay to 300 kbps, Hide my IP off, TURN off; polled every 15 min, one poller per cluster via `chizzy:lock:turn-spend` | `matchConfig.ts:26,108`, `turn/constants.ts:67-69`, `spendPoller.ts` | flags stepped down, error logged; operator restores | env `TURN_SPEND_DAILY_GB` |
+| Spend thresholds | 35 / 50 / 70 GB per UTC day: relay to 300 kbps, Hide my IP off, TURN off; polled every 15 min, one poller per cluster via `chizzy:lock:turn-spend`. 4 failed polls in a row (`SPEND_FAILSAFE_AFTER_FAILURES`): relay to 300 kbps and Hide my IP off until a poll succeeds | `matchConfig.ts:26,108`, `turn/constants.ts:67-80`, `spendPoller.ts` | flags stepped down, error logged, `chizzy_turn_spend_failsafe_total`; operator restores | env `TURN_SPEND_DAILY_GB` |
 | Peer connect | 10 s connect timeout, one ICE restart | `usePeerConnection.ts:45` | `call:failed`, pair blocked 30 s | code |
 
 ### Spark, captions, billing
@@ -363,6 +370,7 @@ prepend to them.
 | Redis timeouts | connect 5 s, command 5 s (also while queued during an outage), 2 retries; one option set for the store, adapter and feature-store clients | `store/constants.ts:21-25`, `store/RedisStore.ts` `REDIS_CLIENT_OPTIONS` | `/readyz` 503; handlers fail | code |
 | Redis key parts | ids embedded in match-store keys must match `[A-Za-z0-9_.-]{1,128}` (UUIDs, Socket.IO ids, instance ids) | `store/RedisStore.ts` `KEY_PART_RE` | the call rejects (`internal`) before anything reaches Redis | code |
 | Matching status (staffed hours) | computed at most once per minute per flag set; outside the window the search for the next opening scans up to 1,440 minutes (about 2 ms with the cached formatter, 60 ms before) | `flags/flags.ts` `FlagsReader.status` | n/a | code |
+| Sentry events | at most 30 per minute and process (`SENTRY_MAX_EVENTS_PER_WINDOW`, `SENTRY_BUDGET_WINDOW_MS`); past it errors are only logged and the next window's first event reports how many were dropped. IDs, addresses, emails and data URLs in error messages are masked | `observability/constants.ts:7-14`, `observability/sentry.ts` `captureError`, `scrubMessage` | dropped (logged locally) | code |
 | Shutdown grace | `SHUTDOWN_GRACE_MS` 10,000; compose `stop_grace_period: 15s` | `config.ts:46`, `docker-compose.yml` | process killed | env |
 | Keep-alive | every 10 min to `KEEPALIVE_URL` (default `RENDER_EXTERNAL_URL/healthz`), 10 s request timeout | `keepalive.ts:14-15`, `config.ts:337` | warning logged | env |
 | Container logs | json-file 10 MB x 3 | `docker-compose.yml` `x-logging` | oldest rotated out | config |

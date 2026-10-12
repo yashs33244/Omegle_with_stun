@@ -107,6 +107,8 @@ describe("report v2 over the socket", () => {
     expect(image.status).toBe(200);
     expect(image.headers.get("content-type")).toBe("image/jpeg");
     expect(image.headers.get("cache-control")).toBe("no-store");
+    expect(image.headers.get("content-disposition")).toBe(`attachment; filename="evidence-${ack.reportId}.jpg"`);
+    expect(image.headers.get("x-content-type-options")).toBe("nosniff");
     expect([...new Uint8Array(await image.arrayBuffer())]).toEqual([...bytes]);
     const audit = await adminJson<{ action: string; target: string; ip: string | null }[]>("/audit");
     expect(audit[0]).toMatchObject({ action: "report.view_evidence", target: ack.reportId });

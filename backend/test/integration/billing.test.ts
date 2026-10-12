@@ -117,6 +117,29 @@ describe("premium gender filter", () => {
     expect((view.body.ledger as unknown[]).length).toBe(2);
   });
 
+  test("an admin adjust with an Idempotency-Key applies once, however often it is submitted", async () => {
+    ts = await boot();
+    const { deviceId } = await connectWithSession(ts);
+    const adjust = (key: string | null) =>
+      admin(`/wallets/${deviceId}/adjust`, {
+        method: "POST",
+        body: JSON.stringify({ delta: 50, note: "refund" }),
+        headers: key === null ? {} : { "idempotency-key": key },
+      });
+    const key = crypto.randomUUID();
+    const results = await Promise.all([adjust(key), adjust(key), adjust(key)]);
+    expect(results.map((r) => r.status).sort()).toEqual([200, 409, 409]);
+    expect(results.find((r) => r.status === 409)!.body).toEqual({ error: "duplicate" });
+    expect((await admin(`/wallets/${deviceId}`)).body).toMatchObject({ coins: 50 });
+    // A new key, or no key at all, is a separate request.
+    expect((await adjust(crypto.randomUUID())).body).toMatchObject({ coins: 100 });
+    expect((await adjust(null)).body).toMatchObject({ coins: 150 });
+    expect((await adjust("x")).status).toBe(400);
+    expect((await adjust("../../etc/passwd")).status).toBe(400);
+    const audit = (await admin("/audit")).body as unknown as { action: string }[];
+    expect(audit.filter((e) => e.action === "wallet.adjust")).toHaveLength(3);
+  });
+
   test("an unlock that lapses mid-session stops applying at the next queue entry", async () => {
     const walletStore = new MemoryWalletStore(new MemoryStore());
     ts = await startServer({ requireSession: true, razorpayFake: true, razorpayWebhookSecret: WEBHOOK_SECRET, adminToken: ADMIN }, undefined, {
