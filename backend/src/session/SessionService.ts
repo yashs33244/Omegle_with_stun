@@ -15,18 +15,21 @@ import {
   type SessionResponse,
 } from "../protocol";
 import { ageInYears } from "./age";
-import { ADULT_AGE, AGE_TOKEN_TTL_MS, SESSION_ERROR_STATUS, SESSION_TOKEN_TTL_MS } from "./constants";
+import { ADULT_AGE, AGE_TOKEN_TTL_MS, SESSION_ERROR_STATUS, SESSION_TOKEN_TTL_MS, UNKNOWN_IP } from "./constants";
 import { isCountryBlocked } from "./geo";
 import type { Lockout, SessionRateLimiter } from "./limits";
 import type { TokenSigner } from "./tokens";
 import { verifyTurnstile, type FetchLike } from "./turnstile";
 
 /**
- * Implemented by the enforcement lane. `fingerprint` is the client's SHA-256
- * fingerprint as sent (salt it before storing).
+ * Implemented by the enforcement lane (EnforcementService). `fingerprint` is
+ * the client's SHA-256 fingerprint as sent: the lane links it to the device so
+ * a restriction follows the browser to a fresh device id.
  */
 export interface RestrictionChecker {
   activeForDevice(deviceId: string, fingerprint: string): Promise<Restriction | null>;
+  /** Network facts of a device that just passed the gate (kept briefly for CSAM packets). */
+  noteDeviceNetwork(deviceId: string, ip: string | null, country: string | null): Promise<void>;
 }
 
 export interface SessionRequestContext {
@@ -127,6 +130,7 @@ export class SessionService {
 
     const restriction = await deps.restrictions?.activeForDevice(req.deviceId, req.fingerprint);
     if (restriction) return fail("banned", restriction);
+    await deps.restrictions?.noteDeviceNetwork(req.deviceId, ctx.ip === UNKNOWN_IP ? null : ctx.ip, ctx.country);
 
     const sessionExpiresAt = now + SESSION_TOKEN_TTL_MS;
     const sessionToken = deps.tokens.sign({

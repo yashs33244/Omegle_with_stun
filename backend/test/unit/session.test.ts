@@ -142,12 +142,25 @@ describe("geo", () => {
     expect(isCountryBlocked("GB", { ...flags, blocked_countries: "" })).toBe(false);
   });
 
-  test("only the configured proxy header is believed, and only behind the trusted proxy", () => {
+  test("only the configured proxy header is believed, only behind the trusted proxy, and only as one IP literal", () => {
     const headers = { "x-real-ip": "1.2.3.4", "true-client-ip": "5.6.7.8", "x-forwarded-for": "9.9.9.9" };
     expect(requestIp(headers, "10.0.0.1", null)).toBe("10.0.0.1");
     expect(requestIp(headers, "10.0.0.1", "x-real-ip")).toBe("1.2.3.4");
     expect(requestIp(headers, "10.0.0.1", "true-client-ip")).toBe("5.6.7.8");
     expect(requestIp({ "x-real-ip": " " }, "10.0.0.1", "x-real-ip")).toBe("10.0.0.1");
+    // Not an address: a list, a hostname, junk, an address with a port. The TCP peer is the identity instead.
+    for (const bad of ["9.9.9.9, 10.0.0.1", "evil.example", "not-an-ip-7f3a", "1.2.3.4:443", "1.2.3", "::ffff:1.2.3"]) {
+      expect(requestIp({ "x-real-ip": bad }, "10.0.0.1", "x-real-ip")).toBe("10.0.0.1");
+    }
+    // A zone id is not part of the identity, so it cannot mint fresh ones.
+    expect(requestIp({ "x-real-ip": "FE80::1%eth0" }, "10.0.0.1", "x-real-ip")).toBe("fe80::1");
+    expect(requestIp({ "x-real-ip": ["7.7.7.7", "8.8.8.8"] }, "10.0.0.1", "x-real-ip")).toBe("7.7.7.7");
+    // IPv4-mapped addresses are unwrapped wherever they come from.
+    expect(requestIp({ "x-real-ip": "::ffff:203.0.113.9" }, "10.0.0.1", "x-real-ip")).toBe("203.0.113.9");
+    expect(requestIp({}, "::ffff:203.0.113.9", "x-real-ip")).toBe("203.0.113.9");
+    expect(requestIp({ "x-real-ip": "2001:db8::1" }, "10.0.0.1", "x-real-ip")).toBe("2001:db8::1");
+    expect(requestIp({}, undefined, null)).toBe("unknown");
+    expect(requestIp({}, "garbage", null)).toBe("unknown");
   });
 
   test("ip and network buckets", () => {

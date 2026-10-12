@@ -253,14 +253,16 @@ export class EnforcementService {
 
   /**
    * The restriction that blocks this device now, or null. With a fingerprint it
-   * also checks restrictions recorded against that fingerprint, and remembers
-   * the device-fingerprint link (180 days) so later restrictions cover both.
+   * remembers the device-fingerprint link (180 days); with or without one it
+   * also checks restrictions recorded against the linked fingerprint, so a
+   * restriction placed on another device of the same browser counts here too.
    */
   async activeForDevice(deviceId: string, fingerprintHash?: string | null): Promise<Restriction | null> {
     if (fingerprintHash) await this.store.setValue(KEY.fingerprint(deviceId), fingerprintHash, FINGERPRINT_TTL_MS);
+    const fingerprint = fingerprintHash ?? (await this.store.getValue<string>(KEY.fingerprint(deviceId)));
     const ids = new Set(await this.store.indexRange(KEY.restrictions(deviceId)));
-    if (fingerprintHash) {
-      for (const id of await this.store.indexRange(KEY.restrictionsByFingerprint(fingerprintHash))) ids.add(id);
+    if (fingerprint) {
+      for (const id of await this.store.indexRange(KEY.restrictionsByFingerprint(fingerprint))) ids.add(id);
     }
     const found = await this.activeOf([...ids]);
     return found ? toPublic(found) : null;

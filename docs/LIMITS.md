@@ -229,6 +229,9 @@ Each socket has one bucket per class; an empty bucket answers
 | Queue size | flag `max_waiting` 5,000 (schema max 1,000,000) | `protocol.ts:664,688` | hello `matching_closed` "full" | flag |
 | Matches per device / IP per hour | 200 / 200 (fixed 1 h window; device-IP binding kept 24 h) | `config.ts:55-56`, `session/constants.ts:57,59` | `rate_limited` on hello or re-queue | env `MATCH_CAP_PER_*_PER_HOUR` |
 | Kill switch, staffed hours | flags `matching_enabled`, `staffed_hours`, `new_sessions_enabled` | `protocol.ts:663-683`, `flags/flags.ts:141` | `matching_closed` with the banner, or 503 `closed` | flag |
+| Client identity for every per-IP limit | `PROXY_IP_HEADER` only when `TRUST_PROXY=true` and the header is one IP literal (IPv4-mapped prefix and zone id dropped), else the TCP peer; list headers (`x-forwarded-for`, `forwarded`, `via`) refused at boot | `session/geo.ts` `requestIp`, `config.ts` superRefine | a junk header counts against the proxy's own address, never as a fresh identity | env |
+| Active restriction | by device id and by fingerprint (device-fingerprint link 180 days); device IP and edge country noted 24 h for CSAM packets | `SessionService.ts`, `EnforcementService.activeForDevice`, `enforcement/constants.ts:98,100` | 403 `banned` with the restriction | code |
+| Production secrets | `SESSION_SECRET` >= 32 chars, `ADMIN_TOKEN` >= 24 chars, each with >= 8 distinct characters | `config.ts` superRefine | the process refuses to start | env |
 
 ### Matching
 

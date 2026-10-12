@@ -12,9 +12,12 @@
 #   (no REDIS_URL), so sessions, bans and report evidence are lost on every
 #   deploy or restart. Set EVIDENCE_S3_* and a Redis URL to keep them. Coin
 #   purchases are refused on the memory store (see RAZORPAY_* below).
-# - Render sits behind Cloudflare, so True-Client-IP and CF-IPCountry are
-#   trustworthy: TRUST_PROXY + PROXY_IP_HEADER give real per-IP limits and
-#   TRUST_CLOUDFLARE enables the country blocklist.
+# - Render sits behind Cloudflare, which overwrites a client-supplied
+#   True-Client-IP and CF-IPCountry and rejects a client-supplied
+#   CF-Connecting-IP (verified 2026-10-11 against a Render service that echoes
+#   its headers; X-Forwarded-For is append-only, so never use it here):
+#   TRUST_PROXY + PROXY_IP_HEADER give real per-IP limits and TRUST_CLOUDFLARE
+#   enables the country blocklist.
 services:
   - type: web
     name: chizzy-api

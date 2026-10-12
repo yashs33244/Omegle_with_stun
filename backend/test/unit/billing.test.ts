@@ -316,9 +316,9 @@ describe("createBilling", () => {
   const prod = {
     NODE_ENV: "production",
     CORS_ORIGINS: "https://a.com",
-    SESSION_SECRET: "s".repeat(32),
+    SESSION_SECRET: "0123456789abcdef0123456789abcdef",
     TURNSTILE_DISABLED: "true",
-    ADMIN_TOKEN: "a".repeat(24),
+    ADMIN_TOKEN: "admin-token-admin-token-admin",
     RAZORPAY_KEY_ID: "rzp_live_x",
     RAZORPAY_KEY_SECRET: "secret",
     RAZORPAY_WEBHOOK_SECRET: "whsec",
