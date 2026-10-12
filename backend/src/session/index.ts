@@ -46,6 +46,7 @@ export function createSessionFeature(deps: SessionFeatureDeps) {
   const caps = new MatchCaps(kv, salt, {
     perDevicePerHour: config.matchCapPerDevicePerHour,
     perIpPerHour: config.matchCapPerIpPerHour,
+    perDevicePerMinute: config.matchCapPerDevicePerMin,
   });
 
   const sessionRequests = new Counter({

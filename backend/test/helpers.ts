@@ -2,7 +2,8 @@
  * Shared test helpers: a fast config, a real server on port 0 and typed
  * socket.io clients with small await helpers.
  */
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import { connect } from "node:net";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -223,6 +224,45 @@ export function sendHello(client: Client, payload: HelloPayload): Promise<HelloA
 }
 
 export const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Opens a raw WebSocket upgrade to the server and resolves with the HTTP
+ * status line and body the server answered. A refused upgrade (per-IP cap,
+ * connect rate, origin) is a 400 whose body names the reason; the Socket.IO
+ * client only ever reports "websocket error" for it. On success the socket
+ * is closed at once (the connection is counted and released server-side).
+ */
+export function rawUpgrade(ts: Pick<TestServer, "url">, headers: Record<string, string> = {}): Promise<{ status: number; body: string }> {
+  const { hostname, port } = new URL(ts.url);
+  return new Promise((resolve, reject) => {
+    const socket = connect({ host: hostname, port: Number(port) });
+    let text = "";
+    socket.on("error", reject);
+    socket.on("data", (chunk: Buffer) => {
+      text += chunk.toString();
+      const status = Number(text.slice(9, 12));
+      if (status === 101) {
+        socket.destroy();
+        resolve({ status, body: "" });
+        return;
+      }
+      const split = text.indexOf("\r\n\r\n");
+      if (split < 0) return;
+      const length = Number(/content-length: (\d+)/i.exec(text)?.[1] ?? 0);
+      const body = text.slice(split + 4);
+      if (body.length < length) return;
+      socket.destroy();
+      resolve({ status, body });
+    });
+    const extra = Object.entries(headers)
+      .map(([k, v]) => `${k}: ${v}\r\n`)
+      .join("");
+    socket.write(
+      `GET /socket.io/?EIO=4&transport=websocket HTTP/1.1\r\nHost: ${hostname}:${port}\r\nConnection: Upgrade\r\nUpgrade: websocket\r\n` +
+        `Sec-WebSocket-Version: 13\r\nSec-WebSocket-Key: ${randomBytes(16).toString("base64")}\r\n${extra}\r\n`,
+    );
+  });
+}
 
 /** Two clients that said hello and both received match:found. */
 export async function matchedPair(

@@ -7,7 +7,7 @@
 import { describeStaffedHours, type FlagsReader } from "../flags/flags";
 import type { Logger } from "../logger";
 import type { MatchStore } from "../store/MatchStore";
-import { CAP_MESSAGE, CLOSED_MESSAGE, FULL_MESSAGE } from "./constants";
+import { CAP_MESSAGE, CLOSED_MESSAGE, FULL_MESSAGE, MINUTE_CAP_MESSAGE } from "./constants";
 import type { MatchCaps } from "./limits";
 
 export interface QueueRefusal {
@@ -48,7 +48,8 @@ export class SessionQueueGate implements QueueGate {
 
   async requeue(deviceId: string): Promise<QueueRefusal | null> {
     try {
-      if (await this.caps.overCap(deviceId)) return { error: "rate_limited", message: CAP_MESSAGE };
+      const hit = await this.caps.overCap(deviceId);
+      if (hit) return { error: "rate_limited", message: hit === "minute" ? MINUTE_CAP_MESSAGE : CAP_MESSAGE };
     } catch (err) {
       this.logger.warn({ err }, "match cap check failed; allowing");
     }

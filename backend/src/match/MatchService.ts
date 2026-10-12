@@ -41,6 +41,7 @@ import type {
 import type { MatchStore, Room, Session, SessionProfile } from "../store/MatchStore";
 import { guardChat, guardName } from "../safety/guard";
 import { NUDGE_RISK, type SafetySignals } from "../safety/signals";
+import { ACCEPT_TIMEOUT_STRIKES } from "../safety/constants";
 import type { TurnService } from "../turn/TurnService";
 import { isCompatible } from "./compatibility";
 import { HELD, MAX_STEP, meetsPreferences, pairStep, relaxStep } from "./relax";
@@ -278,6 +279,14 @@ export class MatchService implements RestrictionSink {
       }
       // Gate only hellos that would join the queue; a re-hello mid-call just updates the profile.
       if (!session || session.state === "idle") {
+        const cooldownMs = await this.safety.acceptCooldownMs(deviceId);
+        if (cooldownMs > 0) {
+          return reply({
+            ok: false,
+            error: "rate_limited",
+            message: `You let ${ACCEPT_TIMEOUT_STRIKES} matches expire. You can search again in ${Math.ceil(cooldownMs / 1000)} s.`,
+          });
+        }
         const refused = await this.gate?.admit(deviceId);
         if (refused) return reply({ ok: false, ...refused });
       }
@@ -316,14 +325,24 @@ export class MatchService implements RestrictionSink {
     });
   }
 
+  /**
+   * session:preferences. An unchanged preference set is acknowledged without
+   * touching the queue: a match pass loads every waiting session, and the
+   * event may arrive once a second per socket.
+   */
   async updatePreferences(socketId: string, payload: UpdatePreferencesPayload, reply: Reply<SimpleAck>): Promise<void> {
     await this.store.withLock(async () => {
       const session = await this.store.getSession(socketId);
       if (!session) return reply({ ok: false, error: "bad_state", message: "send session:hello first" });
-      if (payload.preferences.genderFilter !== "all" && !(await this.billing.mayUseGenderFilter(session.deviceId))) {
+      const { preferences } = payload;
+      if (preferences.genderFilter !== "all" && !(await this.billing.mayUseGenderFilter(session.deviceId))) {
         return reply({ ok: false, error: "premium_required", message: "unlock the gender filter to use it" });
       }
-      session.preferences = payload.preferences;
+      const same =
+        session.preferences.genderFilter === preferences.genderFilter &&
+        session.preferences.languageFilter === preferences.languageFilter;
+      if (same) return reply({ ok: true });
+      session.preferences = preferences;
       await this.store.putSession(session);
       reply({ ok: true });
       if (session.state === "waiting") {
@@ -675,7 +694,8 @@ export class MatchService implements RestrictionSink {
           if (!room || room.state !== "pending") continue;
           await this.blockPairLocked(room, this.config.declineBlockMs, false);
           // Whoever accepted waited on the other and searches again; whoever
-          // never pressed Accept goes idle and is told so.
+          // never pressed Accept goes idle, is told so, and gets a strike.
+          for (let i = 0; i < 2; i++) if (!room.accepted[i]) this.safety.acceptTimedOut(room.devices[i]!);
           await this.endRoomLocked(room, "timeout", {
             [room.members[0]]: room.accepted[0] ? "timeout" : "accept-timeout",
             [room.members[1]]: room.accepted[1] ? "timeout" : "accept-timeout",

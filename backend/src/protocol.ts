@@ -257,6 +257,8 @@ export const captionSegmentSchema = z.object({
     .string()
     .trim()
     .min(1)
+    // UTF-16 units never exceed UTF-8 bytes, so this is a free upper bound before encoding.
+    .max(CAPTIONS.maxBytes)
     .refine((text) => utf8Bytes(text) <= CAPTIONS.maxBytes, { message: `text must be at most ${CAPTIONS.maxBytes} bytes` }),
   final: z.boolean(),
   /** Language the sender's recogniser ran in; the receiver translates from it. */

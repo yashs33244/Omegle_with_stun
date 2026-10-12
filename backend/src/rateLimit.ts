@@ -1,14 +1,31 @@
 /**
  * Per-socket token buckets, one bucket per event class, plus the per-IP
- * connection rate bucket (see realtime/socket.ts).
+ * connection rate bucket and the per-session socket cap (see realtime/socket.ts).
  * A bucket holds up to `capacity` tokens and refills continuously at
  * `refillPerSec`. Each event takes one token; an empty bucket rejects.
  */
+
+/**
+ * Open sockets one session token may hold on an instance. A browser profile
+ * has a few tabs at most; every hello replaces the previous socket's session,
+ * so more sockets than this only ever hold slots.
+ */
+export const MAX_SOCKETS_PER_SESSION = 3;
 
 export interface BucketSpec {
   capacity: number;
   refillPerSec: number;
 }
+
+/**
+ * Packets one connection may send, before any event handler or per-event
+ * bucket sees them (realtime/limitedParser.ts); the connection is closed
+ * when a budget runs out. Above the sum of every per-event class below
+ * (about 260 burst, 60 per second) and the largest legitimate payloads: a
+ * hello with a 150 KB photo, a 20 KB SDP.
+ */
+export const PACKET_RATE_PER_CONNECTION: BucketSpec = { capacity: 400, refillPerSec: 100 };
+export const PACKET_BYTES_PER_CONNECTION: BucketSpec = { capacity: 1024 * 1024, refillPerSec: 128 * 1024 };
 
 /** Event classes, one bucket each. socket.ts maps every event name to one of these. */
 export const EVENT_CLASSES = ["hello", "preferences", "control", "signal", "chat", "typing", "report", "telemetry"] as const;
@@ -42,12 +59,13 @@ export class TokenBucket {
     this.last = now;
   }
 
-  take(now: number): boolean {
+  /** Takes `cost` tokens (one event, or one byte each) if the bucket holds that many. */
+  take(now: number, cost = 1): boolean {
     const elapsedSec = Math.max(0, now - this.last) / MS_PER_SECOND;
     this.tokens = Math.min(this.spec.capacity, this.tokens + elapsedSec * this.spec.refillPerSec);
     this.last = now;
-    if (this.tokens < 1) return false;
-    this.tokens -= 1;
+    if (this.tokens < cost) return false;
+    this.tokens -= cost;
     return true;
   }
 

@@ -55,6 +55,14 @@ export const FINGERPRINT_LOCKOUT_MS = 30 * DAY_MS;
 export const SESSION_RATE_WINDOW_MS = MINUTE_MS;
 /** Match caps use fixed windows of this length (ms). */
 export const MATCH_CAP_WINDOW_MS = HOUR_MS;
+/**
+ * Matches per device per fixed one-minute window. The hourly cap is a
+ * harvesting ceiling; this one stops a skip bot from spending it in the
+ * first minutes, sending every waiter a match:found that ends at once.
+ * Pressing Next every 3 s for a whole minute reaches it; nobody does that.
+ */
+export const MATCH_CAP_PER_DEVICE_PER_MIN = 20;
+export const MATCH_CAP_MINUTE_WINDOW_MS = MINUTE_MS;
 /** The device -> IP-hash binding made at the handshake lives this long (ms). */
 export const MATCH_CAP_IP_BINDING_TTL_MS = DAY_MS;
 /** Domain separator for salts derived from SESSION_SECRET. */
@@ -74,6 +82,7 @@ export const KEY = {
   networkRate: (networkHash: string, window: number) => `rl:net:${networkHash}:${window}`,
   capIpOf: (deviceId: string) => `cap:ipof:${deviceId}`,
   capDevice: (deviceId: string, hour: number) => `cap:d:${deviceId}:${hour}`,
+  capDeviceMinute: (deviceId: string, minute: number) => `cap:dm:${deviceId}:${minute}`,
   capIp: (ipHash: string, hour: number) => `cap:i:${ipHash}:${hour}`,
 } as const;
 
@@ -137,5 +146,6 @@ export const HANDSHAKE_REJECT_CODES = ["session_required", "region_blocked"] as 
 /* ------------------------------------------------------------------ */
 
 export const CAP_MESSAGE = "You have had a lot of matches this hour. Take a break and try again later.";
+export const MINUTE_CAP_MESSAGE = "You are skipping very fast. Wait a minute and try again.";
 export const FULL_MESSAGE = "A lot of people are waiting right now. Try again in a few minutes.";
 export const CLOSED_MESSAGE = "Matching is closed right now.";
