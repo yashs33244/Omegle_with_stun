@@ -170,6 +170,19 @@ else
   fail "503 retry: want 10 x 200 and at least one 503 at the full replica, got: $(printf '%s' "$got" | tr '\n' ' ')/ $refused refused"
 fi
 
+# The 503s above mark the full replica down for new handshakes only
+# (upstream backend_ws). REST and health requests sent right after, inside its
+# fail_timeout, still reach both replicas, including the full one.
+codes 10 -H 'X-Forwarded-For: 198.51.100.13' "$base/socket.io/?EIO=4&transport=websocket" >/dev/null
+api=$(codes 10 -H 'X-Forwarded-For: 198.51.100.14' "$base/api/config?probe=ws503")
+health=$(codes 10 -H 'X-Forwarded-For: 198.51.100.14' "$base/healthz?probe=ws503")
+reached=$(docker compose -p "$project" -f "$dir/docker-compose.yml" logs --no-color full 2>/dev/null | grep -c 'probe=ws503[^"]*" 200 ' || true)
+if [ "$(count "$api" 200)" = 10 ] && [ "$(count "$health" 200)" = 10 ] && [ "${reached:-0}" -ge 1 ]; then
+  ok "REST still reaches a replica that shed handshakes ($reached of 20 at the full replica)"
+else
+  fail "REST after shed handshakes: want 20 x 200 with some at the full replica, got: $(printf '%s' "$api $health" | tr '\n' ' ')/ $reached at full"
+fi
+
 # Only the backend's routes are proxied.
 for path in /foo /admin /metrics /.env; do
   code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Forwarded-For: 198.51.100.11' "$base$path")
