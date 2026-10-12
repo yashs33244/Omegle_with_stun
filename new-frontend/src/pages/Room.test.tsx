@@ -1,6 +1,6 @@
 import React, { useCallback, useState } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import type { Preferences, Profile } from "@/lib/protocol";
 import { initialSignalingState, type SignalingState } from "@/hooks/useSignaling";
 import type { PeerConnectionState } from "@/hooks/usePeerConnection";
@@ -427,6 +427,41 @@ describe("Room gender filter downgrade", () => {
     );
     expect(onPreferencesChange).not.toHaveBeenCalled();
     expect(screen.queryByTestId("gender-filter-off")).not.toBeInTheDocument();
+  });
+});
+
+describe("Room while the server is busy", () => {
+  beforeEach(() => {
+    peerState = { remoteStream: null, remoteAudioTrack: null, connectionState: "new", connectedAt: null, quality: "GOOD", ...PEER_EXTRAS };
+  });
+
+  it("says busy, retrying with a countdown instead of the connection error", () => {
+    vi.useFakeTimers();
+    signalingState = {
+      ...initialSignalingState,
+      status: "connecting",
+      reconnecting: true,
+      error: "Cannot reach the server. Retrying...",
+      busyRetryAt: Date.now() + 8_000,
+    };
+    render(
+      <Room
+        profile={profile}
+        preferences={{ genderFilter: "all", languageFilter: "any" }}
+        localStream={null}
+        micEnabled
+        onMicEnabledChange={vi.fn()}
+        onCameraEnabledChange={vi.fn()}
+        onBackToHome={vi.fn()}
+      />,
+    );
+    const busy = screen.getByTestId("server-busy");
+    expect(within(busy).getByRole("status")).toHaveTextContent("Chizzy is busy right now. Retrying automatically.");
+    expect(busy).toHaveTextContent("Next try in 8 s");
+    act(() => vi.advanceTimersByTime(3_000));
+    expect(busy).toHaveTextContent("Next try in 5 s");
+    expect(screen.queryByText("Cannot reach the server. Retrying...")).not.toBeInTheDocument();
+    vi.useRealTimers();
   });
 });
 

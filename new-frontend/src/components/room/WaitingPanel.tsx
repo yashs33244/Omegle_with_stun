@@ -1,6 +1,7 @@
 import React from "react";
 import { Hourglass, Loader, MonitorSmartphone, ShieldAlert, Users, WifiOff, X } from "lucide-react";
 import { useTranslation } from "react-i18next";
+import { ServerBusy } from "@/components/ServerBusy";
 import { formatTopics } from "@/lib/utils";
 import type { MatchEndReason } from "@/lib/protocol";
 import type { SignalingStatus } from "@/hooks/useSignaling";
@@ -16,6 +17,8 @@ interface WaitingPanelProps {
   relaxStep: number;
   /** People online, when the server shares the real count. */
   online: number | null;
+  /** Local time of the next connection attempt while the server is busy; null otherwise. */
+  busyRetryAt: number | null;
   onRetry: () => void;
   /** Join the queue again after the server left us idle. */
   onSearch: () => void;
@@ -56,6 +59,7 @@ export const WaitingPanel: React.FC<WaitingPanelProps> = ({
   topics,
   relaxStep,
   online,
+  busyRetryAt,
   onRetry,
   onSearch,
   onHome,
@@ -126,7 +130,11 @@ export const WaitingPanel: React.FC<WaitingPanelProps> = ({
         <div className="space-y-2">
           <p className="text-xl font-semibold">{reconnecting ? t("waiting.reconnecting") : t("waiting.connecting")}</p>
           {reconnecting && <p className="text-sm text-gray-300">{t("waiting.connectionLost")}</p>}
-          {error && <p className="text-sm text-orange-300">{error}</p>}
+          {busyRetryAt !== null ? (
+            <ServerBusy retryAt={busyRetryAt} className="space-y-1 text-orange-300" />
+          ) : (
+            error && <p className="text-sm text-orange-300">{error}</p>
+          )}
         </div>
       </Shell>
     );
