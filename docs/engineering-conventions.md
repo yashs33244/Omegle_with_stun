@@ -130,13 +130,19 @@ store wants one atomic method instead.
 |---|---|---|---|
 | unit | `backend/test/unit/*.test.ts` | pure functions, services with fakes, store contracts (memory and, when `REDIS_URL` is set, Redis) | `bun test` |
 | integration | `backend/test/integration/*.test.ts` | a real server on port 0 with socket.io clients, memory store | `bun test`; `TEST_STORE=redis bun test` re-runs them on Redis |
+| property | `backend/test/property/*.test.ts` | fast-check with a fixed seed (`arbitraries.ts` `SEED`): every protocol.ts schema (string/array bounds, parse time), every client -> server event from every session state, every REST route of `docs/PROTOCOL.md` section 4 | `bun test` (about 10 s); `TEST_STORE=redis bun test test/property` on Redis |
 | node | `backend/test-node/*.mjs` | the built `dist/` under Node 22 (what production runs) | `bun run build && bun run test:node` |
 | e2e | `new-frontend/e2e/**` (Playwright) | the real frontend against the real backend | `npm run test:e2e` |
 | stack | CI "Compose stack" job | the docker-compose production stack | CI only |
 
 New rules get a unit test next to the rule; new socket or HTTP behaviour
 gets an integration test; a store method gets a contract case so both
-backends prove it.
+backends prove it. A new client -> server event goes into `EVENTS` in
+`test/property/socketEvents.test.ts` (the type check fails until it does), a
+new REST route into `ROUTES` in `test/property/rest.test.ts`; new schemas in
+`protocol.ts` are picked up by `test/property/schemas.test.ts` on their own.
+A property failure prints the seed and the offending packet or request; fix
+the module and pin the case with a plain test next to its existing tests.
 
 ## How to add a feature
 

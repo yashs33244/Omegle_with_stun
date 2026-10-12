@@ -26,6 +26,7 @@ import { publicApiRouter } from "./http/public";
 import type { Logger } from "./logger";
 import { MatchService, type Emitter } from "./match/MatchService";
 import { createMetrics, type Metrics } from "./metrics";
+import type { SocketRateLimiter } from "./rateLimit";
 import { MemorySignalStore, RedisSignalStore, SafetySignals } from "./safety/signals";
 import type { FetchFn } from "./turn/cloudflare";
 import { TurnSpendPoller, cloudflareEgressQuery } from "./turn/spendPoller";
@@ -60,6 +61,8 @@ export interface ServerDeps {
   enforcement?: EnforcementOptions;
   /** Billing overrides for tests: a fake gateway (null = disabled) or a prepared wallet store. */
   billing?: { gateway?: RazorpayGateway | null; walletStore?: WalletStore };
+  /** Per-socket event buckets for tests (property tests lift them so payloads reach validation); defaults to RATE_LIMITS. */
+  newRateLimiter?: () => SocketRateLimiter;
 }
 
 export interface ChizzyServer {
@@ -213,6 +216,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     logger,
     metrics,
     handshake: config.requireSession ? session.handshake : undefined,
+    newRateLimiter: deps.newRateLimiter,
   });
   const stopBroadcast = session.startBroadcast(io);
   // listen() waits for this, so no client connects before the first heartbeat.
