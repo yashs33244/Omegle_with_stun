@@ -51,6 +51,22 @@ cost, SLOs) is in [docs/OPERATIONS.md](docs/OPERATIONS.md); step-by-step
 pages are [docs/runbooks/rollback.md](docs/runbooks/rollback.md) and
 [docs/runbooks/release.md](docs/runbooks/release.md).
 
+### Repository settings the workflows rely on
+
+The jobs that publish something run in a GitHub deployment environment:
+`production` (deploy.yml: the Docker Hub push and the EC2 deploy) and
+`release` (release.yml: versioned images and the GitHub Release). Both are
+created automatically on first use with no rules; the point of them is that
+Settings -> Environments can add required reviewers or restrict them to the
+production branch and `v*` tags, which is the only thing standing between
+"has write access" and "can publish images and releases". Pushing a `v*`
+tag is otherwise enough to start release.yml, so also add a tag ruleset that
+limits `v*` creation to administrators (Settings -> Rules -> Rulesets, or
+`gh api repos/{owner}/{repo}/rulesets`). The production branch should be
+protected (pull request required, the `CI` checks required, force pushes
+off) and secret scanning with push protection, Dependabot alerts and code
+scanning should be on; `gh api repos/{owner}/{repo}` shows what is enabled.
+
 ## GitHub secrets
 
 Settings -> Secrets and variables -> Actions. Values are never printed by the
@@ -108,7 +124,7 @@ launch build"); the backend itself also refuses to start without them.
 | `VITE_SITE_URL` | `https://chizzy.itsyash.space` | public URL of the site, baked into the frontend build: canonical and link preview URLs, `sitemap.xml` and `robots.txt` |
 | `CORS_ORIGINS` | `https://chizzy.itsyash.space` | comma list of allowed browser origins (the frontend URL). The backend refuses to start in production without it |
 | `BACKEND_REPLICAS` | `2` | number of backend containers |
-| `BIND_ADDRESS` | `0.0.0.0` | host address the gateway (3004) and frontend (5173) ports bind to. Set `127.0.0.1` when the host proxy runs on the same host and connects via localhost, so the ports are not reachable around it |
+| `BIND_ADDRESS` | `127.0.0.1` | host address the gateway (3004) and frontend (5173) ports bind to. The default keeps them reachable only from the host proxy on the same machine; the gateway believes `X-Forwarded-For` from private hops, so a port published on `0.0.0.0` lets a direct IPv6 or hairpin connection (which Docker relays from a private address) pick its own client IP. Set `0.0.0.0` only for a stack that is reached directly, without TLS |
 | `BACKEND_PORT`, `FRONTEND_PORT` | `3004`, `5173` | host ports of the gateway and the frontend (the host proxy must point at them) |
 | `REDIS_PASSWORD` | unset | optional Redis password, URL safe (`openssl rand -hex 32`) |
 | `METRICS_TOKEN` | unset | bearer token for `GET /metrics` on the replicas |
@@ -157,8 +173,8 @@ reviewers to the `production` environment if deploys should need approval.
     uses that last hop to tell Cloudflare from everyone else.
 - Security group: 443 (and 80) open to Cloudflare's ranges only once
   Cloudflare is in front (to the world before that), 22 to where you deploy
-  from (or use SSM). Ports 3004 and 5173 do not need to be public (set
-  `BIND_ADDRESS=127.0.0.1`). No TURN ports: TURN is Cloudflare's.
+  from (or use SSM). Ports 3004 and 5173 are published on loopback only
+  (`BIND_ADDRESS`, default `127.0.0.1`). No TURN ports: TURN is Cloudflare's.
 - For backups: the AWS CLI on the host, and an instance role with
   `s3:PutObject` on the backup prefix (docs/redis-backup.md). For S3
   evidence: the role also needs access to `EVIDENCE_S3_BUCKET`, and the
