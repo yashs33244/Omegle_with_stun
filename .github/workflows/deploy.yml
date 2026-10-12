@@ -37,8 +37,13 @@ jobs:
     if: vars.EC2_DEPLOY_ENABLED == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # Same environment as the deploy job: a required reviewer or a branch
+    # rule on `production` gates the Docker Hub push as well.
+    environment: production
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -80,6 +85,8 @@ jobs:
       PROJECT_PATH: ${{ secrets.PROJECT_PATH || 'Omegle_with_stun' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # The host always runs the compose file and deploy/ from this commit. They
       # land in .incoming/ and deploy.sh installs them (keeping the previous
