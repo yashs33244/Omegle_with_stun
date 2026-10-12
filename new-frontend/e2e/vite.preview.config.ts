@@ -34,7 +34,7 @@ function allowTurnstile(csp: string): string {
     .filter(Boolean);
   const hasFrameSrc = directives.some((d) => d.startsWith("frame-src "));
   const patched = directives.map((d) =>
-    (d.startsWith("script-src ") || d.startsWith("frame-src ")) && !d.includes(origin) ? `${d} ${origin}` : d,
+    (d.startsWith("script-src ") || d.startsWith("frame-src ")) && !d.split(/\s+/).includes(origin) ? `${d} ${origin}` : d,
   );
   if (!hasFrameSrc) patched.push(`frame-src ${origin}`);
   return patched.join("; ");

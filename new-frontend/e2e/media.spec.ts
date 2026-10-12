@@ -40,7 +40,7 @@ async function startInstantCall(a: Stranger, b: Stranger) {
 
 /** Rewrites call:start so the server appears to allow Hide my IP. */
 async function allowPrivateMode(context: BrowserContext) {
-  await context.routeWebSocket(/\/socket\.io\//, (ws) => {
+  await context.routeWebSocket(/^wss?:\/\/[^/]+\/socket\.io\//, (ws) => {
     const server = ws.connectToServer();
     ws.onMessage((message) => server.send(message));
     server.onMessage((message) => {
@@ -57,7 +57,7 @@ async function allowPrivateMode(context: BrowserContext) {
 /** Counts the rtc:signal frames this browser sends that carry an ICE candidate. */
 async function countSentCandidates(context: BrowserContext): Promise<{ candidates: () => number }> {
   let candidates = 0;
-  await context.routeWebSocket(/\/socket\.io\//, (ws) => {
+  await context.routeWebSocket(/^wss?:\/\/[^/]+\/socket\.io\//, (ws) => {
     const server = ws.connectToServer();
     ws.onMessage((message) => {
       if (typeof message === "string" && message.startsWith('42["rtc:signal"') && message.includes('"candidate"')) candidates += 1;
