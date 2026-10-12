@@ -402,7 +402,12 @@ describe("REST routes under arbitrary requests", () => {
         }),
         { seed: SEED, numRuns: 1_000, endOnFailure: true },
       );
-      expect(logLines.filter((l) => (JSON.parse(l) as { level: number }).level >= 50)).toEqual([]);
+      const errors = logLines.map((l) => JSON.parse(l) as { level: number; event?: string }).filter((l) => l.level >= 50);
+      // The one documented error-level line: the operator alert when the run's bad admin tokens spend the
+      // instance-wide budget (docs/PROTOCOL.md 4.5, logged once per window). Anything else is a failure.
+      const alerts = errors.filter((l) => l.event === "admin_auth_budget_exhausted");
+      expect(alerts.length).toBeLessThanOrEqual(1);
+      expect(errors.filter((l) => l.event !== "admin_auth_budget_exhausted")).toEqual([]);
       const health = await fetch(`${ts.url}/healthz`);
       expect(health.status).toBe(200);
       // From an address the run never used: requests with a refused IP header share the "unknown" buckets.

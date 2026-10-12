@@ -78,6 +78,7 @@ const ERROR_CODES: Record<ErrorCode, true> = {
   banned: true,
   matching_closed: true,
   session_required: true,
+  session_expired: true,
   region_blocked: true,
   premium_required: true,
   internal: true,
