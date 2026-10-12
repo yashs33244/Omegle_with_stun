@@ -70,6 +70,11 @@ describe("loadConfig", () => {
   test("production requires a long ADMIN_TOKEN", () => {
     expect(() => loadConfig({ ...PROD, ADMIN_TOKEN: undefined })).toThrow(/ADMIN_TOKEN/);
     expect(() => loadConfig({ ...PROD, ADMIN_TOKEN: "short" })).toThrow(/ADMIN_TOKEN: must be at least 24 characters/);
+    // 31 random-looking characters: fine outside production, refused in it.
+    const thirtyOne = "0123456789abcdefghijklmnopqrstu";
+    expect(() => loadConfig({ ...PROD, ADMIN_TOKEN: thirtyOne })).toThrow(/ADMIN_TOKEN: must be at least 32 characters in production/);
+    expect(loadConfig({ ADMIN_TOKEN: thirtyOne }).adminToken).toBe(thirtyOne);
+    expect(loadConfig({ ...PROD, ADMIN_TOKEN: `${thirtyOne}v` }).adminToken).toBe(`${thirtyOne}v`);
     expect(loadConfig({}).adminToken).toBeUndefined();
   });
 

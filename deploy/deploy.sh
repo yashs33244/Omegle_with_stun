@@ -87,7 +87,7 @@ setting() {
 check_production_secrets() {
   local missing="" key min val
   # Minimum lengths match backend/src/config.ts.
-  for key in CORS_ORIGINS:1 SESSION_SECRET:32 ADMIN_TOKEN:24; do
+  for key in CORS_ORIGINS:1 SESSION_SECRET:32 ADMIN_TOKEN:32; do
     min=${key#*:}
     key=${key%%:*}
     val=$(setting "$key")

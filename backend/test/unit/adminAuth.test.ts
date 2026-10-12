@@ -148,30 +148,41 @@ describe("admin router auth", () => {
     expect((await fetch(`${base}/queue`, { headers: { authorization: `Bearer ${TOKEN}` } })).status).toBe(500);
   });
 
-  test("bad tokens from many IPs share one instance-wide budget; once spent, every admin request is 429 until the window ends", async () => {
+  test("once the instance-wide budget is spent, one bad token locks an address out; the owner on a clean address still gets in", async () => {
     let now = 1_000_000;
     const lines: { level: number; event?: string }[] = [];
     const logger = pino({ level: "info" }, { write: (l: string) => lines.push(JSON.parse(l) as { level: number; event?: string }) });
-    const base = await listen(build({ clock: () => now, proxyIpHeader: "x-real-ip", logger }));
-    const from = (n: number) => ({ "x-real-ip": `10.${Math.floor(n / 250)}.${n % 250}.1` });
-    // One failure per address: no per-IP lockout is ever reached.
-    for (let n = 0; n < ADMIN_MAX_AUTH_FAILURES_GLOBAL; n++) {
-      expect((await fetch(`${base}/queue`, { headers: { ...from(n), authorization: "Bearer nope" } })).status).toBe(401);
-    }
-    now += 60_000;
-    const locked = await fetch(`${base}/queue`, { headers: { ...from(9_999), authorization: `Bearer ${TOKEN}` } });
-    expect(locked.status).toBe(429);
-    expect(Number(locked.headers.get("retry-after"))).toBe((ADMIN_GLOBAL_FAILURE_WINDOW_MS - 60_000) / 1000);
-    // Further guesses are not even compared, and are not logged one by one.
-    expect((await fetch(`${base}/queue`, { headers: { ...from(9_998), authorization: "Bearer nope" } })).status).toBe(429);
+    const flags = { store: { get: async () => ({ banner_message: "" }) } } as unknown as FlagsReader;
+    const base = await listen(build({ clock: () => now, proxyIpHeader: "x-real-ip", logger, flags }));
+    const get = (ip: string, token: string) => fetch(`${base}/flags`, { headers: { "x-real-ip": ip, authorization: `Bearer ${token}` } });
+    const from = (n: number) => `10.${Math.floor(n / 250)}.${n % 250}.1`;
+    // One failure per address: no per-address lockout (10) is ever reached.
+    for (let n = 0; n < ADMIN_MAX_AUTH_FAILURES_GLOBAL; n++) expect((await get(from(n), "nope")).status).toBe(401);
     const exhausted = lines.filter((l) => l.event === "admin_auth_budget_exhausted");
     expect(exhausted).toHaveLength(1);
     expect(exhausted[0]!.level).toBe(50); // pino error
-    expect(lines.filter((l) => l.event === "admin_auth_failed")).toHaveLength(ADMIN_MAX_AUTH_FAILURES_GLOBAL);
+    now += 60_000;
+
+    // The owner, from an address with no failure, is judged by the token alone.
+    expect((await get("203.0.113.50", TOKEN)).status).toBe(200);
+    // Any address with a failure in this window is locked out, right token included.
+    const locked = await get(from(7), TOKEN);
+    expect(locked.status).toBe(429);
+    expect(Number(locked.headers.get("retry-after"))).toBe((ADMIN_GLOBAL_FAILURE_WINDOW_MS - 60_000) / 1000);
+    // A fresh address gets one guess, then it is locked out too (the threshold is now 1, not 10).
+    expect((await get("198.51.100.9", "nope")).status).toBe(401);
+    expect((await get("198.51.100.9", TOKEN)).status).toBe(429);
+    // Addresses are subscribers: another host of a failed IPv6 /64 is the same address.
+    expect((await get("2001:db8:7:7::1", "nope")).status).toBe(401);
+    expect((await get("2001:db8:7:7::2", TOKEN)).status).toBe(429);
+    expect((await get("2001:db8:7:8::1", TOKEN)).status).toBe(200);
+    expect(lines.filter((l) => l.event === "admin_auth_budget_exhausted")).toHaveLength(1);
+
+    // The window started at the first failure; after it every address is judged afresh.
     now += ADMIN_GLOBAL_FAILURE_WINDOW_MS;
-    // The window started at the first failure; after it the right token reaches the route body (tripwire: 500).
-    expect((await fetch(`${base}/queue`, { headers: { ...from(9_999), authorization: `Bearer ${TOKEN}` } })).status).toBe(500);
-    expect((await fetch(`${base}/queue`, { headers: { ...from(9_997), authorization: "Bearer nope" } })).status).toBe(401);
+    expect((await get(from(7), TOKEN)).status).toBe(200);
+    expect((await get("198.51.100.9", "nope")).status).toBe(401);
+    expect((await get("198.51.100.9", TOKEN)).status).toBe(200);
   });
 
   test("ADMIN_ALLOWED_IPS takes addresses and CIDR blocks, IPv4 and IPv6", async () => {

@@ -94,7 +94,7 @@ new_project() {
 
 # Test values for the secrets a production backend needs. Never real secrets.
 SESSION_TEST_SECRET=test-session-secret-0123456789abcdef
-ADMIN_TEST_TOKEN=test-admin-token-0123456789
+ADMIN_TEST_TOKEN=test-admin-token-0123456789abcdefghij
 REQUIRED_SECRETS=(
   CORS_ORIGINS=https://app.example.com SESSION_SECRET="$SESSION_TEST_SECRET" ADMIN_TOKEN="$ADMIN_TEST_TOKEN"
   TURNSTILE_SECRET=test-turnstile-secret TURNSTILE_SITE_KEY=test-site-key PSEUDONYM_SALT=test-pseudonym-salt-0123

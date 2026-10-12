@@ -52,6 +52,12 @@ const LIST_IP_HEADERS: Record<string, true> = { "x-forwarded-for": true, forward
  * them reach this floor with overwhelming probability.
  */
 const MIN_DISTINCT_SECRET_CHARS = 8;
+/**
+ * ADMIN_TOKEN length floor in production (characters): the admin API is open
+ * to the internet on Render, guarded by this token and the failure limits in
+ * http/constants.ts. 24 stays the floor elsewhere.
+ */
+const MIN_PRODUCTION_ADMIN_TOKEN_CHARS = 32;
 
 const envSchema = z
   .object({
@@ -113,6 +119,12 @@ const envSchema = z
         code: z.ZodIssueCode.custom,
         path: ["ADMIN_TOKEN"],
         message: "is required in production (the admin API stays closed without it)",
+      });
+    } else if (env.NODE_ENV === "production" && env.ADMIN_TOKEN && env.ADMIN_TOKEN.length < MIN_PRODUCTION_ADMIN_TOKEN_CHARS) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ADMIN_TOKEN"],
+        message: `must be at least ${MIN_PRODUCTION_ADMIN_TOKEN_CHARS} characters in production (openssl rand -hex 32)`,
       });
     }
     if (env.NODE_ENV === "production") {

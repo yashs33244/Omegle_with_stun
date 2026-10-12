@@ -92,7 +92,7 @@ launch build"); the backend itself also refuses to start without them.
 |---|---|
 | `SESSION_SECRET` | HMAC key for session and age tokens (`openssl rand -hex 32`, at least 32 characters) |
 | `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET` | Cloudflare Turnstile widget for the SPA hostname. The secret verifies both the session gate and the takedown form; the site key is public (served by `/api/config`) |
-| `ADMIN_TOKEN` | bearer token for `/admin/api/*` (`openssl rand -hex 32`, at least 24 characters) |
+| `ADMIN_TOKEN` | bearer token for `/admin/api/*` (`openssl rand -hex 32`; at least 32 characters in production, the backend and the deploy refuse shorter) |
 | `PSEUDONYM_SALT` | salt for the pseudonymous device ids the admin console shows (`openssl rand -hex 32`). Strongly recommended: without it they are derived from `ADMIN_TOKEN` and all change when the token is rotated. Set it once and never change it; the deploy warns while it is empty |
 | `TURN_PROVIDER` | `cloudflare` |
 | `CF_TURN_KEY_ID`, `CF_TURN_API_TOKEN` | Cloudflare Realtime TURN key; the backend mints per-call credentials with it |
@@ -237,13 +237,17 @@ though it also needs `ADMIN_TOKEN`.
 
 Without Access or `ADMIN_ALLOWED_IPS` (the Render service today), the admin
 API is guarded by `ADMIN_TOKEN` and two failure limits per instance
-(`backend/src/http/constants.ts`): 10 bad tokens per IP lock that IP out for
-15 minutes, and 100 bad tokens across all IPs lock every admin request out
-(the right token too, 429 with `Retry-After`) for the rest of that hour,
-logged once at error as `admin_auth_budget_exhausted`. That bounds a
-distributed guesser to 2,400 guesses a day against a 64-character token; the
-price is that the owner can be locked out for up to an hour during an
-attack. What to do then is in docs/OPERATIONS.md "Admin API".
+(`backend/src/http/constants.ts`), counted per subscriber address (an IPv4
+address or an IPv6 /64): 10 bad tokens lock an address out for 15 minutes,
+and once 100 bad tokens from all addresses together fall within an hour
+(logged once at error as `admin_auth_budget_exhausted`), one bad token is
+enough for the rest of that hour: every address with a failure in the window
+gets 429 with `Retry-After`, right token included, so each further guess
+costs the attacker a fresh address. An address without a failure (the owner)
+is still judged by its token alone, so guessers cannot lock the owner out;
+only failures from 50,000 addresses in one hour fill the records, after which
+unrecorded addresses wait for the window too. What to do when the console
+answers 429 is in docs/OPERATIONS.md "Admin API".
 
 ## Cloudflare Pages (free, commercial use allowed)
 

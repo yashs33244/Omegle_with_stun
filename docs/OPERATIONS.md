@@ -167,24 +167,31 @@ Render's API key and the Vercel token live in each founder's own CLI login
 On Render there is no Cloudflare Access in front of `/admin/api` and
 `ADMIN_ALLOWED_IPS` is unset, so the backend logs `ADMIN API WARNING:
 ADMIN_ALLOWED_IPS is empty` at every start. The API is then guarded by
-`ADMIN_TOKEN` and two in-memory failure limits (`backend/src/http/constants.ts`,
-reset by a restart or deploy):
+`ADMIN_TOKEN` (at least 32 characters in production) and two in-memory
+failure limits per subscriber address, an IPv4 address or an IPv6 /64
+(`backend/src/http/constants.ts`, reset by a restart or deploy):
 
 | limit | value | answer |
 |---|---|---|
-| bad tokens per IP | 10 per 15 min from that IP's first failure | 429 for that IP, right token included |
-| bad tokens across all IPs | 100 per hour from the first failure | 429 with `Retry-After` for every admin request, right token included; logged once at error, `event: "admin_auth_budget_exhausted"` |
+| bad tokens per address | 10 per 15 min from that address's first failure | 429 with `Retry-After` for that address, right token included |
+| bad tokens across all addresses | 100 per hour from the first failure; once spent, 1 bad token per address for the rest of the hour | 429 with `Retry-After` for every address that had a bad token this hour, right token included; logged once at error, `event: "admin_auth_budget_exhausted"`. An address without a failure still gets in with the right token |
 
-When the console answers 429 and you did not mistype the token yourself:
+When the console answers 429:
 
-1. `render logs -r srv-db5nnass728c738ek0o0 --tail` and look for
-   `admin_auth_budget_exhausted` (someone is guessing from many IPs) or
+1. You most likely sent a bad token yourself from this address (a stale
+   saved token, a typo) after someone else spent the budget. Try from
+   another network (phone hotspot): an address with no failure is judged by
+   the token alone.
+2. `render logs -r srv-db5nnass728c738ek0o0 --tail` and look for
+   `admin_auth_budget_exhausted` (someone is guessing from many addresses) or
    repeated `admin_auth_failed`.
-2. Either wait for `Retry-After`, or lock the API to yourself: set
+3. Either wait for `Retry-After`, or lock the API to yourself: set
    `ADMIN_ALLOWED_IPS` in the Render env to your address or block (CIDR is
    accepted, e.g. `203.0.113.0/24` or `2001:db8:1::/48`); saving the env
-   restarts the service, which also clears the counters.
-3. If the token may have leaked (successful requests you did not make in the
+   restarts the service, which also clears the counters. Only failures from
+   50,000 addresses in one hour (`ADMIN_FAILURE_MAP_MAX`) make a clean
+   address wait too.
+4. If the token may have leaked (successful requests you did not make in the
    audit log), rotate `ADMIN_TOKEN` (Secrets inventory above).
 
 ## Session gate limits worth knowing on a bad day
