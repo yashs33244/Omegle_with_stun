@@ -31,8 +31,13 @@ export interface StoredReport {
   shortCall: boolean;
   /** An admin opened the evidence image. */
   humanViewed: boolean;
-  /** Frozen for a legal process: the retention sweep keeps it. */
+  /**
+   * Frozen for a legal process: the retention sweep keeps it until
+   * `preservedUntil` (renewed by escalating again). POST
+   * /admin/api/reports/:id/release-hold ends it early.
+   */
   legalHold: boolean;
+  /** End of the legal hold (epoch ms); null when not held. */
   preservedUntil: number | null;
   acknowledgedAt: number | null;
   decidedAt: number | null;

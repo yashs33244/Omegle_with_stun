@@ -16,6 +16,7 @@
  *   GET  /reports/:id/evidence     evidence JPEG download (never restricted items; audited)
  *   POST /reports/:id/action       adminReportActionSchema
  *   POST /reports/:id/escalate     CSAM escalation; returns the report packet
+ *   POST /reports/:id/release-hold ends a legal hold (normal retention applies again); audited
  *   GET  /appeals                  POST /appeals/:id/decision
  *   GET  /takedowns                POST /takedowns/:id/resolve
  *   GET  /flags                    PUT /flags (partial, validated by flagsSchema)
@@ -237,6 +238,14 @@ export function adminApiRouter(deps: AdminApiDeps): Router {
     const body = z.object({ note: z.string().max(2_000).optional() }).safeParse(req.body ?? {});
     if (!body.success) return void res.status(400).json({ error: "invalid" });
     send(res, await deps.enforcement.escalate(id, actor(req), body.data.note));
+  });
+
+  router.post("/reports/:id/release-hold", json, async (req, res) => {
+    const id = idParam(req, res);
+    if (!id) return;
+    const body = z.object({ note: z.string().max(2_000).optional() }).safeParse(req.body ?? {});
+    if (!body.success) return void res.status(400).json({ error: "invalid" });
+    send(res, await deps.enforcement.releaseHold(id, actor(req), body.data.note));
   });
 
   router.get("/appeals", async (_req, res) => {

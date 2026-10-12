@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
 import { readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { ReportInput } from "../../src/enforcement/EnforcementService";
 import { parseEvidenceFrame } from "../../src/enforcement/evidence";
-import { ADMIN_LIST_LIMIT, APPEALS_PER_IP_PER_HOUR, AUTO_PAUSE_MS, DAY, MINUTE, NETWORK_BAN_TTL_MS, YEAR } from "../../src/enforcement/constants";
+import { ADMIN_LIST_LIMIT, APPEALS_PER_IP_PER_HOUR, AUTO_PAUSE_MS, DAY, INDEX, MINUTE, NETWORK_BAN_TTL_MS, YEAR } from "../../src/enforcement/constants";
 import type { StoredReport, StoredRestriction } from "../../src/enforcement/types";
 import { RESTRICTION_DURATIONS_MS, type AdminReportAction, type ReportReason } from "../../src/protocol";
 import { harness, jpegDataUrl, type Harness } from "../enforcementFixtures";
@@ -333,6 +333,31 @@ describe("admin review", () => {
     expect((await h.service.queue("all")).length).toBe(ADMIN_LIST_LIMIT);
   });
 
+  test("prior reports are counted in the store, never loaded per queue entry", async () => {
+    h = harness();
+    const target = randomUUID();
+    const ids: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      h.clock.now += 1000;
+      ids.push((await report(target, "spam")).reportId);
+    }
+    const other = await report(randomUUID(), "spam");
+    const counted = spyOn(h.store, "indexCount");
+    const loaded = spyOn(h.store, "indexRange");
+    try {
+      const queue = await h.service.queue();
+      const prior = Object.fromEntries(queue.map((r) => [r.id, r.priorReportsAgainst]));
+      expect(prior).toEqual({ [ids[0]!]: 0, [ids[1]!]: 1, [ids[2]!]: 2, [ids[3]!]: 3, [other.reportId]: 0 });
+      expect((await h.service.report(ids[3]!))?.priorReportsAgainst).toBe(3);
+      expect(counted).toHaveBeenCalledTimes(6);
+      // The only index read is the open-report queue itself.
+      expect(loaded.mock.calls.map(([index]) => index)).toEqual([INDEX.openReports]);
+    } finally {
+      counted.mockRestore();
+      loaded.mockRestore();
+    }
+  });
+
   test("evidence access is audited and marks the report as viewed; restricted access is refused and audited", async () => {
     h = harness();
     const res = await report(randomUUID(), "harassment", { frame: parseEvidenceFrame(jpegDataUrl()) });
@@ -618,6 +643,11 @@ describe("retention sweep", () => {
     if (!takedown.ok || !appeal.ok) throw new Error("setup failed");
     await h.service.resolveTakedown(takedown.ticketId, "done", actor);
 
+    // Escalating again a month later renews the hold for a year from then.
+    h.clock.now = start + 30 * DAY;
+    await h.service.escalate(held.reportId, actor);
+    const heldEvidence = (await h.store.get<StoredReport>("report", held.reportId))!.evidenceId!;
+
     h.clock.now = start + YEAR - DAY;
     const none = { reports: 0, restrictions: 0, appeals: 0, takedowns: 0, audit: 0, evidenceErrors: 0 };
     expect(await h.service.sweepRetention()).toEqual(none);
@@ -634,8 +664,43 @@ describe("retention sweep", () => {
     expect(await h.store.get("restriction", shortId)).toBeNull();
     // The audit log ages out too, except the trail of the report on legal hold.
     expect(counts.audit).toBe(2);
-    expect((await h.service.listAudit(10)).map((e) => [e.action, e.target])).toEqual([["report.escalate_csam", held.reportId]]);
+    expect((await h.service.listAudit(10)).map((e) => [e.action, e.target])).toEqual([
+      ["report.escalate_csam", held.reportId],
+      ["report.escalate_csam", held.reportId],
+    ]);
     expect(await h.service.sweepRetention()).toEqual(none);
+
+    // Once the renewed hold has passed, the report, its frozen evidence and its trail go.
+    h.clock.now = start + 30 * DAY + YEAR - MINUTE;
+    expect(await h.service.sweepRetention()).toEqual(none);
+    h.clock.now = start + 30 * DAY + YEAR + MINUTE;
+    expect(await h.service.sweepRetention()).toEqual({ ...none, reports: 1, audit: 2 });
+    expect(await h.store.get("report", held.reportId)).toBeNull();
+    expect(await h.evidence.inner.get(heldEvidence, { restricted: true })).toBeNull();
+    expect(await h.service.listAudit(10)).toEqual([]);
+  });
+
+  test("releasing a legal hold is audited and hands the report back to normal retention", async () => {
+    h = harness();
+    const start = h.clock.now;
+    const held = await report(randomUUID(), "underage", { frame: parseEvidenceFrame(jpegDataUrl()) });
+    await h.service.escalate(held.reportId, actor);
+    const plain = await report(randomUUID(), "spam");
+
+    expect(await h.service.releaseHold(plain.reportId, actor)).toEqual({ ok: false, error: "conflict" });
+    expect(await h.service.releaseHold(randomUUID(), actor)).toEqual({ ok: false, error: "not_found" });
+    h.clock.now = start + DAY;
+    const released = await h.service.releaseHold(held.reportId, actor, "case closed");
+    expect(released).toMatchObject({ ok: true, value: { id: held.reportId, status: "escalated" } });
+    expect(await h.store.get<StoredReport>("report", held.reportId)).toMatchObject({ legalHold: false, preservedUntil: null });
+    expect(await h.service.releaseHold(held.reportId, actor)).toEqual({ ok: false, error: "conflict" });
+    const [entry] = await h.service.listAudit(1);
+    expect(entry).toMatchObject({ action: "report.release_hold", target: held.reportId, note: "case closed", ip: actor.ip });
+
+    // Normal retention: a year after the report, not after the hold.
+    h.clock.now = start + YEAR + MINUTE;
+    expect(await h.service.sweepRetention()).toMatchObject({ reports: 2, evidenceErrors: 0 });
+    expect(await h.store.get("report", held.reportId)).toBeNull();
   });
 
   test("evidence that cannot be deleted keeps its report for the next sweep; the rest of the sweep goes on", async () => {

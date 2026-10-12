@@ -434,7 +434,8 @@ Guard, in order: 503 `admin_disabled` when `ADMIN_TOKEN` is unset (required in p
 | `GET /reports/:id` | — | `AdminReport` |
 | `GET /reports/:id/evidence` | — | `image/jpeg` bytes as a download (`Content-Disposition: attachment; filename="evidence-<id>.jpg"`, `X-Content-Type-Options: nosniff`, `Cache-Control: no-store`); 403 `restricted` for CSAM-routed reports (never served); 500 when the stored object is over 96 KiB or not a JPEG |
 | `POST /reports/:id/action` | `AdminReportAction`: `{ action: "acknowledge" \| "dismiss" \| "warn" \| "restrict" \| "escalate_csam", reason?: RestrictionReason, durationMs?: 600000 \| 86400000 \| 604800000 \| null (`RESTRICTION_DURATIONS_MS`; null = permanent; omitted = next ladder rung), note?<=2000 }` | result of the action |
-| `POST /reports/:id/escalate` | `{ note?<=2000 }` | result |
+| `POST /reports/:id/escalate` | `{ note?<=2000 }` | result; puts the report on legal hold for 1 year from now (`evidencePreservedUntil`), renewing an existing hold |
+| `POST /reports/:id/release-hold` | `{ note?<=2000 }` | `AdminReport`; ends the legal hold so the report follows normal retention again (deleted at the next sweep if over a year old); audited as `report.release_hold`; 409 `conflict` when the report is not on hold, 404 `not_found` for an unknown id. An unreleased hold ends by itself when `preservedUntil` passes (docs/retention.md) |
 | `GET /appeals` | — | `AdminAppeal[]` |
 | `POST /appeals/:id/decision` | `{ decision: "uphold" \| "overturn", note? }` | result |
 | `GET /takedowns` | — | `AdminTakedown[]` |

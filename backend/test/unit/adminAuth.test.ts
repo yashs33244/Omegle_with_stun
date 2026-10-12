@@ -23,6 +23,7 @@ const ROUTES: [method: string, path: string][] = [
   ["GET", "/reports/:id/evidence"],
   ["POST", "/reports/:id/action"],
   ["POST", "/reports/:id/escalate"],
+  ["POST", "/reports/:id/release-hold"],
   ["GET", "/appeals"],
   ["POST", "/appeals/:id/decision"],
   ["GET", "/takedowns"],

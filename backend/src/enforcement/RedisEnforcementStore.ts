@@ -85,6 +85,11 @@ export class RedisEnforcementStore implements EnforcementStore {
     return this.zrange(`${this.prefix}ix:${index}`, opts);
   }
 
+  indexCount(index: string, opts: Pick<RangeOptions, "min" | "max"> = {}): Promise<number> {
+    const [min, max] = bounds(opts);
+    return this.redis.zcount(`${this.prefix}ix:${index}`, min, max);
+  }
+
   async claim(key: string, ttlMs: number): Promise<boolean> {
     return (await this.redis.set(`${this.prefix}claim:${key}`, "1", "PX", ttlMs, "NX")) === "OK";
   }

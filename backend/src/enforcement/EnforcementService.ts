@@ -646,7 +646,8 @@ export class EnforcementService {
   }
 
   private async toAdmin(r: StoredReport): Promise<AdminReport> {
-    const prior = await this.store.indexRange(KEY.reportsAgainst(r.reportedDevice), { max: r.createdAt - 1 });
+    // A count, not the ids: the queue builds up to ADMIN_LIST_LIMIT of these.
+    const prior = await this.store.indexCount(KEY.reportsAgainst(r.reportedDevice), { max: r.createdAt - 1 });
     return {
       id: r.id,
       createdAt: r.createdAt,
@@ -663,7 +664,7 @@ export class EnforcementService {
       restricted: r.restricted,
       nsfwScore: r.nsfwScore,
       ...reportSla(r.reason, r.restricted, r.createdAt),
-      priorReportsAgainst: prior.length,
+      priorReportsAgainst: prior,
     };
   }
 
@@ -835,6 +836,22 @@ export class EnforcementService {
     return ok({ packet, restriction });
   }
 
+  /**
+   * Ends a legal hold early (the legal process is closed): the report and its
+   * audit trail fall back to normal retention, so a report older than
+   * RETENTION_MS goes at the next sweep. The evidence stays on the restricted path.
+   */
+  async releaseHold(id: string, actor: Actor, note?: string): Promise<AdminResult<AdminReport>> {
+    const r = await this.store.get<StoredReport>("report", id);
+    if (!r) return fail("not_found");
+    if (!r.legalHold) return fail("conflict");
+    r.legalHold = false;
+    r.preservedUntil = null;
+    await this.store.put("report", r.id, r, r.createdAt);
+    await this.audit(AUDIT_ACTION.releaseHold, id, note ?? null, actor.ip);
+    return ok(await this.toAdmin(r));
+  }
+
   async listAppeals(): Promise<AdminAppeal[]> {
     const ids = await this.store.range("appeal", { reverse: true, limit: ADMIN_LIST_LIMIT });
     const appeals = (await this.store.getMany<StoredAppeal>("appeal", ids)).filter(
@@ -917,12 +934,14 @@ export class EnforcementService {
   /* ---------------------------------------------------------------- */
 
   /**
-   * Deletes reports and their evidence older than 1 year (legal-hold items are
-   * kept), restriction records 1 year after they ended (with their appeals),
-   * takedown tickets resolved over a year ago and audit entries older than a
-   * year (except those about a report on legal hold). Idempotent. A report
-   * whose evidence cannot be deleted keeps its record (the only pointer to
-   * the file) for the next day's sweep; the rest of the sweep goes on.
+   * Deletes reports and their evidence older than 1 year, restriction records
+   * 1 year after they ended (with their appeals), takedown tickets resolved
+   * over a year ago and audit entries older than a year (except those about
+   * a report on legal hold). A report on legal hold is kept until its
+   * `preservedUntil` passes (escalating again renews it); an expired hold no
+   * longer protects it. Idempotent. A report whose evidence cannot be deleted
+   * keeps its record (the only pointer to the file) for the next day's sweep;
+   * the rest of the sweep goes on.
    */
   async sweepRetention(): Promise<{
     reports: number;
@@ -932,12 +951,14 @@ export class EnforcementService {
     audit: number;
     evidenceErrors: number;
   }> {
-    const cutoff = this.now() - RETENTION_MS;
+    const now = this.now();
+    const cutoff = now - RETENTION_MS;
     const counts = { reports: 0, restrictions: 0, appeals: 0, takedowns: 0, audit: 0, evidenceErrors: 0 };
+    const held = (r: StoredReport | null) => r !== null && r.legalHold && (r.preservedUntil === null || r.preservedUntil > now);
 
     for (const id of await this.store.range("report", { max: cutoff })) {
       const r = await this.store.get<StoredReport>("report", id);
-      if (r?.legalHold) continue;
+      if (held(r)) continue;
       if (r?.evidenceId) {
         try {
           await this.evidence.delete(r.evidenceId, { restricted: r.restricted });
@@ -981,7 +1002,7 @@ export class EnforcementService {
     for (const id of await this.store.range("audit", { max: cutoff })) {
       const entry = await this.store.get<AdminAuditEntry>("audit", id);
       // The trail of a report frozen for a legal process stays with it.
-      if (entry && (await this.store.get<StoredReport>("report", entry.target))?.legalHold) continue;
+      if (entry && held(await this.store.get<StoredReport>("report", entry.target))) continue;
       await this.store.delete("audit", id);
       counts.audit++;
     }

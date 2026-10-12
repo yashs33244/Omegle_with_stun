@@ -10,7 +10,7 @@ not by someone remembering to delete.
 |---|---|---|---|---|
 | ICT and application logs (connections, IPs, matches) | 180 days rolling, stored in India; 1 year from DPDP phase 3 (May 2027) | CERT-In Directions 2022; DPDP Rule 8(3) | Container logs on the host (JSON, pino) and the gateway access log | **Gap**: Docker rotates logs at 10 MB x 3 files per container, far short of 180 days, and nothing ships them to an India-region store yet. Launch checklist item. |
 | Reports and non-CSAM evidence (frame, chat lines) | 1 year, then automatic delete | DPDP Rule 8(3); IT Rules 3(1)(g) (180 days minimum) | Redis (report metadata); `evidence-data` volume or the S3 evidence bucket | Backend enforcement lane (expiry on write); S3 lifecycle rule when `EVIDENCE_S3_BUCKET` is used. Verify at integration. |
-| CSAM-suspected evidence and report metadata | 1 year after the report; restricted store; legal hold possible | REPORT Act (US); POCSO | Restricted part of the evidence store | Frozen by the `escalate_csam` action; S3 Object Lock recommended for the S3 store. Verify at integration. |
+| CSAM-suspected evidence and report metadata | 1 year after the report, or until the legal hold ends if later; restricted store | REPORT Act (US); POCSO | Restricted part of the evidence store | The `escalate_csam` action puts the report on legal hold until 1 year after the escalation (`preservedUntil`); escalating again renews it. The daily sweep (`EnforcementService.sweepRetention`) keeps a held report until `preservedUntil` has passed, then deletes it with its evidence and audit trail like any other report older than a year. `POST /admin/api/reports/:id/release-hold` ends a hold early (audited as `report.release_hold`). S3 Object Lock recommended for the S3 store. Verify at integration. |
 | Ban and restriction records (hashed device keys) | Ban duration + 1 year | Legitimate interest, security | Redis | Expiry set when the restriction is written. Verify at integration. |
 | Admin audit log (action, target id, note, admin IP) | 1 year after the entry, then automatic delete; entries about a report on legal hold stay with it | Security; accountability for moderator actions | Redis (`audit` collection) | Daily retention sweep (`EnforcementService.sweepRetention`). |
 | Age-gate outcome (over 18, ToS version, time) | While the device is active + 180 days | IT Rules 3(1)(h) | Signed age token in the browser (180 days); server record as built by the session lane | Token expiry. Verify at integration. |
@@ -32,5 +32,10 @@ not by someone remembering to delete.
   disclosure the Privacy Policy must state, with "Hide my IP" as the way to
   avoid it (LB-1).
 - **Legal holds**: an order or a CSAM escalation suspends deletion for the
-  records it names. Record the hold in the request log
-  (docs/runbooks/law-enforcement-requests.md).
+  records it names. A CSAM escalation holds the report for 1 year from the
+  escalation; for a longer order, escalate again before `preservedUntil`
+  (each escalation renews the year and is audited). When the process is
+  closed, release the hold with `POST /admin/api/reports/:id/release-hold`
+  (optional `{ note }`, audited); the report then follows normal retention
+  and goes at the next sweep if it is over a year old. Record the hold and
+  its release in the request log (docs/runbooks/law-enforcement-requests.md).
