@@ -33,6 +33,9 @@ COPY nginx-main.conf /etc/nginx/nginx.conf
 # The image entrypoint renders /etc/nginx/templates/*.template with envsubst.
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 COPY nginx-security-headers.conf /etc/nginx/templates/security-headers.inc.template
+# Empty Cloudflare range list for the limit key in nginx.conf; docker-compose.yml
+# mounts deploy/nginx (the real list) over this directory.
+COPY nginx-cloudflare-ips.conf /etc/nginx/chizzy/cloudflare-ips.conf
 COPY --chmod=755 nginx-api-origin.envsh /docker-entrypoint.d/18-api-origin.envsh
 COPY --from=build /app/dist /usr/share/nginx/html
 EXPOSE 8080
