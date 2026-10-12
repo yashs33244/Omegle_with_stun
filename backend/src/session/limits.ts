@@ -92,14 +92,16 @@ export interface MatchCapLimits {
   perDevicePerMinute: number;
 }
 
-/** Which cap a device is over: the hourly ones (device or its IP) or the per-minute one. */
+/** Which cap a device is over: the hourly ones (device or its IP) or the per-minute skip cap. */
 export type MatchCapHit = "hour" | "minute";
 
 /**
  * Hourly match caps (LB-10): a level no human reaches, so scripted clients
  * cannot harvest faces and IPs. The handshake binds each device to its IP;
- * every match then counts against both. The per-minute device cap stops a
- * skip bot from spending the hourly one in a burst.
+ * every match then counts against both. The per-minute cap counts only the
+ * rooms a device ended itself (call:skip, match:decline), so a skip bot
+ * cannot spend the hourly cap in a burst while the people it skips are
+ * re-queued unharmed.
  */
 export class MatchCaps {
   constructor(
@@ -121,21 +123,27 @@ export class MatchCaps {
     await this.kv.set(KEY.capIpOf(deviceId), saltedHash(this.salt, ipBuckets(rawIp).ip), MATCH_CAP_IP_BINDING_TTL_MS);
   }
 
-  async overCap(deviceId: string): Promise<MatchCapHit | null> {
+  /** `skips` false skips the per-minute check (a re-queue the device did not cause). */
+  async overCap(deviceId: string, skips = true): Promise<MatchCapHit | null> {
     const hour = this.hour();
     const ipHash = await this.kv.get(KEY.capIpOf(deviceId));
     const keys = [KEY.capDevice(deviceId, hour), KEY.capDeviceMinute(deviceId, this.minute())];
     if (ipHash) keys.push(KEY.capIp(ipHash, hour));
     const [byDevice, byMinute, byIp] = await this.kv.mget(keys);
     if (Number(byDevice ?? 0) >= this.limits.perDevicePerHour || Number(byIp ?? 0) >= this.limits.perIpPerHour) return "hour";
-    return Number(byMinute ?? 0) >= this.limits.perDevicePerMinute ? "minute" : null;
+    return skips && Number(byMinute ?? 0) >= this.limits.perDevicePerMinute ? "minute" : null;
   }
 
+  /** One match against the hourly device and IP caps. */
   async recordMatch(deviceId: string): Promise<void> {
     const hour = this.hour();
     const ipHash = await this.kv.get(KEY.capIpOf(deviceId));
     await this.kv.incr(KEY.capDevice(deviceId, hour), MATCH_CAP_WINDOW_MS);
-    await this.kv.incr(KEY.capDeviceMinute(deviceId, this.minute()), MATCH_CAP_MINUTE_WINDOW_MS);
     if (ipHash) await this.kv.incr(KEY.capIp(ipHash, hour), MATCH_CAP_WINDOW_MS);
+  }
+
+  /** One room ended by this device (skip or decline) against the per-minute cap. */
+  async recordSkip(deviceId: string): Promise<void> {
+    await this.kv.incr(KEY.capDeviceMinute(deviceId, this.minute()), MATCH_CAP_MINUTE_WINDOW_MS);
   }
 }

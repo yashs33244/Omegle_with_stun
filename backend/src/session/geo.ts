@@ -15,6 +15,7 @@
  * trusted as a single IP literal; anything else falls back to the TCP peer.
  */
 import { isIP, isIPv4, isIPv6 } from "node:net";
+import type { Socket } from "socket.io";
 import type { Flags } from "../protocol";
 import {
   COUNTRY_HEADER,
@@ -75,6 +76,21 @@ export function requestIp(headers: Headers, remoteAddress: string | undefined, p
     if (real) return real;
   }
   return normalizeIp(remoteAddress) ?? UNKNOWN_IP;
+}
+
+/**
+ * requestIp with the unknown sentinel mapped to null, for per-IP bookkeeping
+ * (report limits, TURN, admin and billing buckets) that must skip unknown
+ * addresses instead of pooling every such client under one key.
+ */
+export function knownIp(headers: Headers, remoteAddress: string | undefined, proxyIpHeader: string | null): string | null {
+  const ip = requestIp(headers, remoteAddress, proxyIpHeader);
+  return ip === UNKNOWN_IP ? null : ip;
+}
+
+/** knownIp of a Socket.IO socket's handshake. */
+export function socketIp(socket: Pick<Socket, "handshake">, proxyIpHeader: string | null): string | null {
+  return knownIp(socket.handshake.headers, socket.handshake.address, proxyIpHeader);
 }
 
 /** Expands an IPv6 address to IPV6_GROUPS groups of 4 hex digits. */

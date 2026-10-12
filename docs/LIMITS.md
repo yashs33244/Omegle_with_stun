@@ -126,10 +126,12 @@ Whatever the topology, one person or one network can never take more than:
 - 10 sessions per minute per IP and 60 per minute per /24
   (`backend/src/config.ts:54-55`; HTTP 429 `rate_limited`,
   `backend/src/session/constants.ts:137`).
-- 200 matches per hour per device and per IP (`backend/src/config.ts:56-57`)
-  and 20 matches per minute per device (`MATCH_CAP_PER_DEVICE_PER_MIN`,
-  `backend/src/session/constants.ts:64`); hello or the automatic re-queue
-  answers `rate_limited` (`backend/src/session/queueGate.ts:49-57`).
+- 200 matches per hour per device and per IP (`backend/src/config.ts:68-69`)
+  and 20 rooms a device may end itself (skip, decline) per minute
+  (`MATCH_CAP_PER_DEVICE_PER_MIN`, `backend/src/config.ts:70`); being
+  skipped never counts. Hello or the automatic re-queue answers
+  `rate_limited` (`backend/src/session/queueGate.ts:50-75`); a re-queue the
+  partner caused skips the per-minute check (`queueGate.ts:20`).
 - 3 accept windows let expire within 10 minutes puts the device on a 60 s
   cooldown (`ACCEPT_TIMEOUT_*`, `backend/src/safety/constants.ts:56-58`);
   hello answers `rate_limited` meanwhile.
@@ -214,7 +216,7 @@ where the knob is: `env` (variable in `backend/.env.example`), `flag`
 | Bytes per connection | burst 1 MiB, then 128 KiB per second (`PACKET_BYTES_PER_CONNECTION`) | `rateLimit.ts:28`, `realtime/limitedParser.ts:41` | socket closed | code |
 | Connections per IP per instance | `MAX_CONNECTIONS_PER_IP` = 10, checked in `allowRequest` on the HTTP upgrade, before any Engine.IO connection or the session gate exists | `config.ts:34`, `realtime/socket.ts:69-117,122-125` | upgrade answered HTTP 400 `too_many_connections`; the Socket.IO client sees `websocket error` (`safety.test.ts` "a refused upgrade holds no connection") | env |
 | New connections per IP per instance | burst `CONNECT_BURST_PER_IP` = 20, then `CONNECT_RATE_PER_IP_PER_SEC` = 1, same place | `config.ts:35-36`, `realtime/socket.ts:87-104` | HTTP 400 `rate_limited` | env |
-| Sockets per session token per instance | `MAX_SOCKETS_PER_SESSION` = 3 (device id from the handshake token; off without the session gate) | `rateLimit.ts:13`, `realtime/socket.ts:211-231` | handshake error `too_many_connections`, connection closed at once (`socketLimits.test.ts` "one session token may hold at most") | code |
+| Sockets per session token per instance | `MAX_SOCKETS_PER_SESSION` = 3 (device id from the handshake token; off without the session gate). A client that dropped while the session gate awaited the store is not counted, since its `close` already fired | `rateLimit.ts:13`, `realtime/socket.ts:216-240` | handshake error `too_many_connections`, connection closed at once (`socketLimits.test.ts` "one session token may hold at most", "a client that drops during the session gate") | code |
 | Refused handshake | a session-gate or per-session refusal closes the connection on the next tick instead of holding it for `connectTimeout` | `realtime/socket.ts:196-210` | n/a (`socketLimits.test.ts` "a refused session handshake is closed at once") | code |
 | Hello deadline | `helloTimeoutMs` 30 s from connect to a well-formed `session:hello`; a malformed hello does not count | `config.ts:219,349`, `realtime/socket.ts:238-251` | socket disconnected, `chizzy_rate_limited_total{event="hello_timeout"}` (`socketLimits.test.ts` "never says hello") | code |
 | Ping | `pingInterval` 20 s, `pingTimeout` 20 s, `connectTimeout` 10 s | `realtime/socket.ts:133-135` | socket dropped, client reconnects | code |
@@ -253,7 +255,7 @@ per-connection packet budget above bounds them.
 | Request body | `SESSION_BODY_LIMIT_BYTES` 8 KiB; an over-cap `Content-Length` is refused before the body is read and the connection closed; compressed bodies refused | `http/constants.ts`, `http/body.ts` | 413 / 415 `invalid` | code |
 | Queue size | flag `max_waiting` 5,000 (schema max 1,000,000) | `protocol.ts:666,690` | hello `matching_closed` "full" | flag |
 | Matches per device / IP per hour | 200 / 200 (fixed 1 h window; device-IP binding kept 24 h) | `config.ts:56-57`, `session/constants.ts:57,67` | `rate_limited` on hello or re-queue, "a lot of matches this hour" | env `MATCH_CAP_PER_*_PER_HOUR` |
-| Matches per device per minute | `MATCH_CAP_PER_DEVICE_PER_MIN` 20 (fixed 1 min window) | `session/constants.ts:64-65`, `session/limits.ts:124-139` | `rate_limited` on hello or re-queue, "skipping very fast" (`socketLimits.test.ts` "at most matchCapPerDevicePerMin times") | code |
+| Skips per device per minute | `MATCH_CAP_PER_DEVICE_PER_MIN` 20 (fixed 1 min window) rooms the device ended itself by `call:skip` or `match:decline`; a re-queue caused by the partner (`partner-skipped`, `partner-left`, `partner-declined`) is never refused by it | `config.ts:70`, `session/constants.ts:65`, `session/limits.ts:127-148`, `session/queueGate.ts:20,63-65`, `match/MatchService.ts:386,428` | `rate_limited` on hello or re-queue, "skipping very fast" (`socketLimits.test.ts` "skips matchCapPerDevicePerMin times", "being skipped never counts") | env `MATCH_CAP_PER_DEVICE_PER_MIN` |
 | Kill switch, staffed hours | flags `matching_enabled`, `staffed_hours`, `new_sessions_enabled` | `protocol.ts:665-685`, `flags/flags.ts:141` | `matching_closed` with the banner, or 503 `closed` | flag |
 | Client identity for every per-IP limit | `PROXY_IP_HEADER` only when `TRUST_PROXY=true` and the header is one IP literal (IPv4-mapped prefix and zone id dropped), else the TCP peer; list headers (`x-forwarded-for`, `forwarded`, `via`) refused at boot | `session/geo.ts` `requestIp`, `config.ts` superRefine | a junk header counts against the proxy's own address, never as a fresh identity | env |
 | Active restriction | by device id and by fingerprint (device-fingerprint link 180 days); device IP and edge country noted 24 h for CSAM packets | `SessionService.ts`, `EnforcementService.activeForDevice`, `enforcement/constants.ts:98,100` | 403 `banned` with the restriction | code |

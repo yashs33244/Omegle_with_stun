@@ -106,11 +106,12 @@ services:
       TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
       TURNSTILE_DISABLED: ${TURNSTILE_DISABLED:-false}
       # Per client IP and per /24 (or /48) network limits on POST /api/session,
-      # and hourly match caps per IP and per device.
+      # hourly match caps per IP and per device, and skips per minute per device.
       SESSION_RATE_PER_IP_PER_MIN: ${SESSION_RATE_PER_IP_PER_MIN:-}
       SESSION_RATE_PER_NETWORK_PER_MIN: ${SESSION_RATE_PER_NETWORK_PER_MIN:-}
       MATCH_CAP_PER_DEVICE_PER_HOUR: ${MATCH_CAP_PER_DEVICE_PER_HOUR:-}
       MATCH_CAP_PER_IP_PER_HOUR: ${MATCH_CAP_PER_IP_PER_HOUR:-}
+      MATCH_CAP_PER_DEVICE_PER_MIN: ${MATCH_CAP_PER_DEVICE_PER_MIN:-}
       # true only when Cloudflare proxies the API hostname (CF-IPCountry is used
       # for the country blocklist). The gateway forwards CF-* headers only for
       # requests that really came from a Cloudflare address.

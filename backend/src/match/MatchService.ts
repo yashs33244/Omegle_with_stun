@@ -243,7 +243,7 @@ export class MatchService implements RestrictionSink {
    * session:hello. The ack is sent through `reply` inside the lock, before
    * queue:waiting or match:found, so clients always see the ack first.
    */
-  async hello(socketId: string, payload: HelloPayload, reply: Reply<HelloAck>, ip?: string): Promise<void> {
+  async hello(socketId: string, payload: HelloPayload, reply: Reply<HelloAck>, ip: string | null = null): Promise<void> {
     if (this.stopped) return reply({ ok: false, error: "internal", message: "server shutting down" });
     const { deviceId } = payload;
     if (this.enforcement) {
@@ -382,6 +382,8 @@ export class MatchService implements RestrictionSink {
       if (!found || found.room.state !== "pending") return;
       const { room, index } = found;
       await this.blockPairLocked(room, this.config.declineBlockMs, false);
+      // Before endRoomLocked, whose re-queue checks the per-minute cap.
+      await this.gate?.recordSkip(room.devices[index]!);
       await this.endRoomLocked(room, "declined", {
         [room.members[index]]: "declined",
         [room.members[1 - index]!]: "partner-declined",
@@ -422,6 +424,8 @@ export class MatchService implements RestrictionSink {
         this.safety.skipped(room.devices[1 - index]!, this.now() - room.activeSince);
       }
       await this.blockPairLocked(room, 0, true);
+      // Before endRoomLocked, whose re-queue checks the per-minute cap.
+      await this.gate?.recordSkip(session.deviceId);
       await this.endRoomLocked(room, "skipped", {
         [room.members[index]]: "skipped",
         [room.members[1 - index]!]: "partner-skipped",
@@ -994,7 +998,7 @@ export class MatchService implements RestrictionSink {
       const s = sessions[i];
       if (!s || s.roomId !== room.id) continue;
       const idle = reason === "accept-timeout";
-      const capped = idle ? undefined : await this.gate?.requeue(s.deviceId);
+      const capped = idle ? undefined : await this.gate?.requeue(s.deviceId, reason);
       if (idle || capped || (await this.store.getBan(s.deviceId))) {
         s.state = "idle";
         s.roomId = undefined;

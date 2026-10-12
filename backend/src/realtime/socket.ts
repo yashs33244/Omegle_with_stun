@@ -34,7 +34,7 @@ import {
   type ServerToClientEvents,
 } from "../protocol";
 import { MAX_SOCKETS_PER_SESSION, SocketRateLimiter, TokenBucket, type EventClass } from "../rateLimit";
-import { requestIp } from "../session/geo";
+import { requestIp, socketIp } from "../session/geo";
 import { handshakeSession } from "../session/handshake";
 import { limitedParser } from "./limitedParser";
 
@@ -168,7 +168,11 @@ interface AttachDeps {
   metrics: Metrics;
   /** Injectable for tests. */
   newRateLimiter?: () => SocketRateLimiter;
-  /** Session-token gate (src/session/handshake.ts). Runs before the per-IP cap. */
+  /**
+   * Session-token gate (src/session/handshake.ts). Runs as the first
+   * namespace middleware, after the per-IP cap and connect rate, which
+   * ConnectionGate applies in allowRequest on the HTTP upgrade.
+   */
   handshake?: Parameters<AppServer["use"]>[0];
 }
 
@@ -215,6 +219,10 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
     // the previous socket's session anyway, so they would gain nothing legitimate).
     const deviceId = handshakeSession(socket)?.deviceId;
     if (!deviceId) return next();
+    // The session gate above awaited a store write; a client that dropped
+    // meanwhile has no close event left to fire, so counting it would hold a
+    // slot for good. Socket.IO discards the socket after next() anyway.
+    if (socket.conn.readyState !== "open") return next();
     const count = perSession.get(deviceId) ?? 0;
     if (count >= MAX_SOCKETS_PER_SESSION) {
       metrics.rateLimitedTotal.inc({ event: "session_connections" });
@@ -224,7 +232,7 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
     // Release on the underlying connection's close, which fires even when the
     // client drops between this middleware and the "connection" event.
     socket.conn.once("close", () => {
-      const left = (perSession.get(deviceId) ?? 1) - 1;
+      const left = (perSession.get(deviceId) ?? 0) - 1;
       if (left <= 0) perSession.delete(deviceId);
       else perSession.set(deviceId, left);
     });
@@ -321,7 +329,7 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
       if (session && session.deviceId !== p.deviceId) {
         return reply({ ok: false, error: "invalid_payload", message: "deviceId does not match the session token" });
       }
-      return service.hello(socket.id, p, reply, requestIp(socket.handshake.headers, socket.handshake.address, config.proxyIpHeader));
+      return service.hello(socket.id, p, reply, socketIp(socket, config.proxyIpHeader));
     });
     on("session:preferences", "preferences", updatePreferencesSchema, (p, reply) =>
       service.updatePreferences(socket.id, p, reply),
@@ -333,9 +341,7 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
     on("rtc:signal", "signal", rtcSignalSchema, (p) => service.signal(socket.id, p));
     on("chat:send", "chat", chatSendSchema, (p, reply) => service.chat(socket.id, p, reply));
     on("chat:typing", "typing", chatTypingSchema, (p) => service.typing(socket.id, p));
-    on("report:submit", "report", reportSchema, (p, reply) =>
-      service.report(socket.id, p, reply, requestIp(socket.handshake.headers, socket.handshake.address, config.proxyIpHeader)),
-    );
+    on("report:submit", "report", reportSchema, (p, reply) => service.report(socket.id, p, reply, socketIp(socket, config.proxyIpHeader)));
     on("call:failed", "telemetry", callFailedSchema, (p) => service.callFailed(socket.id, p));
     on("call:telemetry", "telemetry", callTelemetrySchema, (p) => service.telemetry(socket.id, p));
     on("moderation:signal", "telemetry", moderationSignalSchema, (p) => service.moderationSignal(socket.id, p));
