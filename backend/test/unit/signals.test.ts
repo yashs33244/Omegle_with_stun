@@ -4,6 +4,7 @@ import Redis from "ioredis";
 import { Registry } from "prom-client";
 import { createLogger } from "../../src/logger";
 import { createMatchMetrics } from "../../src/match/matchMetrics";
+import { CALLS_TTL_MS, DEDUPE_MAX } from "../../src/safety/constants";
 import { MemorySignalStore, RedisSignalStore, SafetySignals, type SignalStore } from "../../src/safety/signals";
 import { MemoryTurnStore, RedisTurnStore, type TurnStore } from "../../src/turn/store";
 import { delay, testConfig } from "../helpers";
@@ -64,6 +65,21 @@ describe.each(turnStores)("%s turn store", (_name, make) => {
     expect(await s.getDeviceIp("d1")).toBeNull();
   });
 });
+describe("MemorySignalStore call stats", () => {
+  test("expire CALLS_TTL_MS after the last write and are pruned once the map is large", async () => {
+    let now = 0;
+    const store = new MemorySignalStore(() => now);
+    await store.recordCall("a");
+    now = CALLS_TTL_MS - 1;
+    expect(await store.recordEarlySkip("a")).toEqual({ calls: 1, early: 1 });
+    for (let i = 0; i < DEDUPE_MAX; i++) await store.recordCall(`old-${i}`);
+    now += CALLS_TTL_MS;
+    expect(await store.recordEarlySkip("a")).toEqual({ calls: 0, early: 1 });
+    await store.recordCall("fresh");
+    expect((Reflect.get(store, "calls") as Map<string, unknown>).size).toBe(2);
+  });
+});
+
 
 function signals(overrides: Parameters<typeof testConfig>[0] = {}) {
   const metrics = createMatchMetrics(new Registry());
