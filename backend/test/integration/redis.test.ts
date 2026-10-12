@@ -11,8 +11,8 @@ import { io as ioClient } from "socket.io-client";
 import type { Config } from "../../src/config";
 import { createLogger } from "../../src/logger";
 import { connectRedisAdapter } from "../../src/realtime/redisAdapter";
-import { RedisStore } from "../../src/store/RedisStore";
-import { type Client, hello, next, record, sendHello, startServer, type TestServer } from "../helpers";
+import { RedisStore, type RedisStoreOptions } from "../../src/store/RedisStore";
+import { arrives, type Client, hello, next, record, sendHello, startServer, type TestServer } from "../helpers";
 
 const url = process.env.REDIS_URL;
 
@@ -20,7 +20,7 @@ interface Cluster {
   prefix: string;
   adapterKey: string;
   nodes: TestServer[];
-  add(overrides?: Partial<Config>): Promise<TestServer>;
+  add(overrides?: Partial<Config>, storeOpts?: Omit<RedisStoreOptions, "prefix">): Promise<TestServer>;
 }
 
 let cleanups: (() => Promise<unknown>)[] = [];
@@ -34,8 +34,8 @@ function cluster(): Cluster {
     prefix: `test:${randomUUID()}:`,
     adapterKey: `test:${randomUUID()}:socket.io`,
     nodes: [],
-    async add(overrides = {}) {
-      const store = await RedisStore.connect(url!, { prefix: c.prefix });
+    async add(overrides = {}, storeOpts = {}) {
+      const store = await RedisStore.connect(url!, { prefix: c.prefix, ...storeOpts });
       const adapter = await connectRedisAdapter(url!, createLogger("silent"), c.adapterKey);
       const node = await startServer(overrides, store, { configureIo: adapter.install });
       cleanups.push(() => adapter.close(), () => store.close(), () => node.close());
@@ -190,5 +190,33 @@ describe.skipIf(!url)("two instances on one Redis", () => {
     expect(dead).toBeNull();
     expect(queue).toEqual([cb.id!]);
     expect(deadInstances).toEqual([]);
+  });
+
+  test("a match pass slower than the lock lease does not let the other replica match the same pair again", async () => {
+    const cl = cluster();
+    // Replica A has a short lease and a slow block lookup, the step right before
+    // a room is created; replica B sweeps every 20 ms and would run its own pass.
+    const a = await cl.add({}, { lockTtlMs: 100 });
+    await cl.add();
+    const getBlock = a.store.getBlock.bind(a.store);
+    a.store.getBlock = async (x, y) => {
+      await Bun.sleep(400); // real time: the lease is a Redis PX expiry
+      return getBlock(x, y);
+    };
+    const ca = await a.connect();
+    const cb = await a.connect();
+    const foundA = record(ca, "match:found");
+    const foundB = record(cb, "match:found");
+    const firstA = next(ca, "match:found", 3000);
+    const firstB = next(cb, "match:found", 3000);
+    await sendHello(ca, hello());
+    await sendHello(cb, hello());
+    const [fa, fb] = await Promise.all([firstA, firstB]);
+    expect(fa.roomId).toBe(fb.roomId);
+    // Without lease renewal B entered its pass while A slept and both created a
+    // room for the same pair: a second match:found with another roomId followed.
+    expect(await arrives(ca, "match:found", 600)).toBe(false);
+    expect(foundA.map((f) => f.roomId)).toEqual([fa.roomId]);
+    expect(foundB.map((f) => f.roomId)).toEqual([fa.roomId]);
   });
 });
