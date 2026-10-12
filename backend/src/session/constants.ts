@@ -53,15 +53,15 @@ export const DEVICE_LOCKOUT_MS = 365 * DAY_MS;
 export const FINGERPRINT_LOCKOUT_MS = 30 * DAY_MS;
 /** Session rate limits use fixed windows of this length (ms). */
 export const SESSION_RATE_WINDOW_MS = MINUTE_MS;
-/** Match caps use fixed windows of this length (ms). */
+/** Hourly match caps use fixed windows of this length (ms). */
 export const MATCH_CAP_WINDOW_MS = HOUR_MS;
 /**
- * Matches per device per fixed one-minute window. The hourly cap is a
- * harvesting ceiling; this one stops a skip bot from spending it in the
- * first minutes, sending every waiter a match:found that ends at once.
- * Pressing Next every 3 s for a whole minute reaches it; nobody does that.
+ * The per-minute cap (`MATCH_CAP_PER_DEVICE_PER_MIN`, config.ts) counts the
+ * rooms a device ended itself (call:skip, match:decline) in fixed windows
+ * of this length (ms). The hourly cap is a harvesting ceiling; this one stops
+ * a skip bot from spending it in the first minutes, sending every waiter a
+ * match:found that ends at once. Being skipped never counts.
  */
-export const MATCH_CAP_PER_DEVICE_PER_MIN = 20;
 export const MATCH_CAP_MINUTE_WINDOW_MS = MINUTE_MS;
 /** The device -> IP-hash binding made at the handshake lives this long (ms). */
 export const MATCH_CAP_IP_BINDING_TTL_MS = DAY_MS;

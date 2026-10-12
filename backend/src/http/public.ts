@@ -11,15 +11,13 @@ import type { EnforcementService } from "../enforcement/EnforcementService";
 import type { Logger } from "../logger";
 import { appealRequestSchema, takedownRequestSchema, type AppealResponse, type TakedownResponse } from "../protocol";
 import { TokenBucket, type BucketSpec } from "../rateLimit";
-import { UNKNOWN_IP } from "../session/constants";
-import { requestIp as clientIp } from "../session/geo";
+import { knownIp } from "../session/geo";
 import { jsonBody } from "./body";
 import { ENFORCEMENT_BODY_LIMIT_BYTES } from "./constants";
 
-/** Client IP of an Express request (see session/geo.ts requestIp), or null when unknown. */
+/** Client IP of an Express request (see session/geo.ts knownIp), or null when unknown. */
 export function requestIp(req: Request, proxyIpHeader: string | null): string | null {
-  const ip = clientIp(req.headers, req.socket.remoteAddress, proxyIpHeader);
-  return ip === UNKNOWN_IP ? null : ip;
+  return knownIp(req.headers, req.socket.remoteAddress, proxyIpHeader);
 }
 
 /** Per-IP token buckets for one instance. Cleared when it grows large, so it cannot leak memory. */

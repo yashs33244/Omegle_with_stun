@@ -4,7 +4,7 @@ import Redis from "ioredis";
 import { describeStaffedHours } from "../../src/flags/flags";
 import { ageInYears } from "../../src/session/age";
 import { DEVICE_LOCKOUT_MS, FINGERPRINT_LOCKOUT_MS, SITEVERIFY_URL, TURNSTILE_MAX_INFLIGHT } from "../../src/session/constants";
-import { ipBuckets, isCountryBlocked, requestCountry, requestIp } from "../../src/session/geo";
+import { ipBuckets, isCountryBlocked, knownIp, requestCountry, requestIp, socketIp } from "../../src/session/geo";
 import { Lockout, MatchCaps, SessionRateLimiter, deriveSalt } from "../../src/session/limits";
 import { MemoryKv } from "../../src/session/MemoryKv";
 import { RedisKv } from "../../src/session/RedisKv";
@@ -163,6 +163,18 @@ describe("geo", () => {
     expect(requestIp({}, "garbage", null)).toBe("unknown");
   });
 
+  test("socketIp and knownIp map the unknown sentinel to null so per-IP buckets never pool unknown clients", () => {
+    const socket = (headers: Record<string, string>, address: string | undefined) =>
+      ({ handshake: { headers, address } }) as unknown as Parameters<typeof socketIp>[0];
+    expect(socketIp(socket({ "x-real-ip": "1.2.3.4" }, "10.0.0.1"), "x-real-ip")).toBe("1.2.3.4");
+    expect(socketIp(socket({ "x-real-ip": "1.2.3.4" }, "10.0.0.1"), null)).toBe("10.0.0.1");
+    expect(socketIp(socket({}, "::ffff:203.0.113.9"), null)).toBe("203.0.113.9");
+    expect(socketIp(socket({}, undefined), null)).toBeNull();
+    expect(socketIp(socket({ "x-real-ip": "evil.example" }, "garbage"), "x-real-ip")).toBeNull();
+    expect(knownIp({}, "garbage", null)).toBeNull();
+    expect(knownIp({}, "10.0.0.1", null)).toBe("10.0.0.1");
+  });
+
   test("ip and network buckets", () => {
     expect(ipBuckets("203.0.113.77")).toEqual({ ip: "203.0.113.77", network: "203.0.113.0/24" });
     expect(ipBuckets("::ffff:203.0.113.77")).toEqual({ ip: "203.0.113.77", network: "203.0.113.0/24" });
@@ -306,16 +318,20 @@ function kvSuite(name: string, make: (clock: () => number) => SessionKv | null, 
       expect(await caps.overCap(a)).toBeNull();
     });
 
-    test("the per-minute match cap is a fixed one-minute window per device", async () => {
+    test("the per-minute cap counts the device's own skips in a fixed one-minute window, and is skipped for passive re-queues", async () => {
       let now = NOW;
       const kv = make(() => now)!;
       const caps = new MatchCaps(kv, deriveSalt(randomUUID(), "x"), { perDevicePerHour: 100, perIpPerHour: 100, perDevicePerMinute: 2 }, () => now);
       const a = randomUUID();
       await caps.bindIp(a, "192.0.2.1");
-      await caps.recordMatch(a);
+      // Matches alone never reach it.
+      for (let i = 0; i < 5; i++) await caps.recordMatch(a);
       expect(await caps.overCap(a)).toBeNull();
-      await caps.recordMatch(a);
+      await caps.recordSkip(a);
+      expect(await caps.overCap(a)).toBeNull();
+      await caps.recordSkip(a);
       expect(await caps.overCap(a)).toBe("minute");
+      expect(await caps.overCap(a, false)).toBeNull();
       now += 60_000;
       expect(await caps.overCap(a)).toBeNull();
     });

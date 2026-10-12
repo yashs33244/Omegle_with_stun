@@ -106,6 +106,7 @@ launch build"); the backend itself also refuses to start without them.
 | `TURNSTILE_DISABLED` | `false` | skips Turnstile (session gate and takedown form). Staging and load tests only, never production |
 | `SESSION_RATE_PER_IP_PER_MIN`, `SESSION_RATE_PER_NETWORK_PER_MIN` | `10`, `60` | `POST /api/session` requests per minute per client IP and per /24 (IPv6 /48) network |
 | `MATCH_CAP_PER_DEVICE_PER_HOUR`, `MATCH_CAP_PER_IP_PER_HOUR` | `200`, `200` | matches per hour per device and per client IP |
+| `MATCH_CAP_PER_DEVICE_PER_MIN` | `20` | rooms a device may end itself (skip, decline) per minute before its re-queue is refused; being skipped never counts |
 | `CF_ACCOUNT_ID`, `CF_ANALYTICS_TOKEN` | unset | TURN spend poller (read-only Analytics token) |
 | `TURN_SPEND_DAILY_GB` | `35,50,70` | daily TURN egress thresholds in GB: lower the relay bitrate, then turn off Hide my IP, then turn off TURN |
 | `TURN_CACHE_SECONDS` | `300` | how long a device reuses one set of TURN credentials |

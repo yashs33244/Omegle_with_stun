@@ -3,13 +3,14 @@
  * or one session can hold or send, and that nothing stays behind when it goes.
  * Each test names the limit it pins; docs/LIMITS.md cites them.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import { io as ioClient } from "socket.io-client";
 import { LIMITS } from "../../src/protocol";
 import { MAX_SOCKETS_PER_SESSION, PACKET_RATE_PER_CONNECTION } from "../../src/rateLimit";
 import { ACCEPT_TIMEOUT_STRIKES } from "../../src/safety/constants";
 import { MINUTE_CAP_MESSAGE } from "../../src/session/constants";
+import { MatchCaps } from "../../src/session/limits";
 import {
   activePair,
   arrives,
@@ -180,6 +181,34 @@ describe("one session", () => {
     expect(await tryConnect(ts, auth)).toBe("connected");
   });
 
+  test("a client that drops during the session gate never holds a per-session slot", async () => {
+    ts = await startServer({ requireSession: true, sessionRatePerIpPerMin: 100 });
+    const res = await postSession(ts, sessionBody());
+    if (!res.body.ok) throw new Error(res.body.error);
+    const auth = { sessionToken: res.body.sessionToken };
+    // Stall the store write the session gate awaits, so the client can be
+    // gone before the per-session middleware runs.
+    const stalled: (() => void)[] = [];
+    const bindIp = spyOn(MatchCaps.prototype, "bindIp").mockImplementation(
+      () => new Promise<void>((resolve) => stalled.push(resolve)),
+    );
+    try {
+      for (let i = 0; i < MAX_SOCKETS_PER_SESSION; i++) {
+        const client: Client = ioClient(ts.url, { transports: ["websocket"], forceNew: true, reconnection: false, auth });
+        for (let n = 0; n < 200 && stalled.length === i; n++) await delay(10);
+        expect(stalled.length).toBe(i + 1);
+        client.disconnect();
+        for (let n = 0; n < 200 && ts.server.io.engine.clientsCount > 0; n++) await delay(10);
+        expect(ts.server.io.engine.clientsCount).toBe(0);
+        stalled[i]!();
+        await delay(20);
+      }
+    } finally {
+      bindIp.mockRestore();
+    }
+    expect(await tryConnect(ts, auth)).toBe("connected");
+  });
+
   test("a refused session handshake is closed at once, not held for connectTimeout", async () => {
     ts = await startServer({ requireSession: true });
     expect(await tryConnect(ts, { sessionToken: "garbage" })).toBe("session_required");
@@ -286,7 +315,7 @@ describe("matching caps", () => {
     expect(await store.safety.acceptCooldownMs(a.deviceId)).toBe(0);
   });
 
-  test("a device is matched at most matchCapPerDevicePerMin times in a minute", async () => {
+  test("a device that skips matchCapPerDevicePerMin times in a minute is capped", async () => {
     ts = await startServer({ requireSession: true, matchCapPerDevicePerMin: 2, sessionRatePerIpPerMin: 100 });
     const skipper = await connectWithSession(ts);
     const errors: unknown[] = [];
@@ -311,6 +340,30 @@ describe("matching caps", () => {
       error: "rate_limited",
       message: MINUTE_CAP_MESSAGE,
     });
+  });
+
+  test("being skipped never counts: a device skipped more than matchCapPerDevicePerMin times in a minute is still re-queued", async () => {
+    ts = await startServer({ requireSession: true, matchCapPerDevicePerMin: 2, sessionRatePerIpPerMin: 100 });
+    const victim = await connectWithSession(ts);
+    const errors: unknown[] = [];
+    victim.client.on("server:error", (e) => errors.push(e));
+    await sendHello(victim.client, hello({ deviceId: victim.deviceId }));
+    for (let i = 0; i < 4; i++) {
+      const skipper = await connectWithSession(ts);
+      const found = next(victim.client, "match:found");
+      await sendHello(skipper.client, hello({ deviceId: skipper.deviceId }));
+      const { roomId } = await found;
+      const ended = next(victim.client, "match:ended");
+      const requeued = next(victim.client, "queue:waiting");
+      skipper.client.emit("call:skip", { roomId });
+      expect(await ended).toMatchObject({ reason: "partner-skipped" });
+      await requeued;
+      skipper.client.disconnect();
+    }
+    expect(errors).toEqual([]);
+    expect((await ts.store.getSession(victim.client.id!))!.state).toBe("waiting");
+    // Neither do the matches: a fresh hello is admitted too.
+    expect(await sendHello(victim.client, hello({ deviceId: victim.deviceId }))).toMatchObject({ ok: true });
   });
 });
 

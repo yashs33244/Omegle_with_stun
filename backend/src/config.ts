@@ -6,7 +6,6 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { MATCH_ENV, matchConfigFromEnv, refineMatchEnv, type MatchConfig } from "./match/matchConfig";
-import { MATCH_CAP_PER_DEVICE_PER_MIN } from "./session/constants";
 
 const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace", "silent"] as const;
 
@@ -68,6 +67,7 @@ const envSchema = z
     SESSION_RATE_PER_NETWORK_PER_MIN: int(1).default(60),
     MATCH_CAP_PER_DEVICE_PER_HOUR: int(1).default(200),
     MATCH_CAP_PER_IP_PER_HOUR: int(1).default(200),
+    MATCH_CAP_PER_DEVICE_PER_MIN: int(1).default(20),
     SENTRY_DSN: z.string().url().optional(),
     SENTRY_DSN_FRONTEND: z.string().url().optional(),
     POSTHOG_KEY: z.string().min(1).optional(),
@@ -286,7 +286,7 @@ export interface Config extends MatchConfig {
   sessionRatePerNetworkPerMin: number;
   matchCapPerDevicePerHour: number;
   matchCapPerIpPerHour: number;
-  /** Matches per device per minute (session/constants.ts). Not an env var; tests shrink it. */
+  /** Rooms a device may end itself (skip, decline) per minute before its re-queue is refused. */
   matchCapPerDevicePerMin: number;
   sentryDsn?: string;
   sentryDsnFrontend?: string;
@@ -416,7 +416,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     sessionRatePerNetworkPerMin: e.SESSION_RATE_PER_NETWORK_PER_MIN,
     matchCapPerDevicePerHour: e.MATCH_CAP_PER_DEVICE_PER_HOUR,
     matchCapPerIpPerHour: e.MATCH_CAP_PER_IP_PER_HOUR,
-    matchCapPerDevicePerMin: MATCH_CAP_PER_DEVICE_PER_MIN,
+    matchCapPerDevicePerMin: e.MATCH_CAP_PER_DEVICE_PER_MIN,
     sentryDsn: e.SENTRY_DSN,
     sentryDsnFrontend: e.SENTRY_DSN_FRONTEND,
     posthogKey: e.POSTHOG_KEY,
