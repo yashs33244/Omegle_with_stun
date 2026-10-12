@@ -5,7 +5,16 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, test } from "bun:test";
 import Redis from "ioredis";
-import { LEDGER_MAX, MemoryWalletStore, ORDERS_MAX, RedisWalletStore, UNPAID_ORDER_TTL_MS, type WalletStore } from "../../src/billing/WalletStore";
+import {
+  CLAIM_TTL_MS,
+  LEDGER_MAX,
+  MemoryWalletStore,
+  ORDERS_MAX,
+  RedisWalletStore,
+  UNPAID_ORDER_TTL_MS,
+  WALLET_IDLE_TTL_MS,
+  type WalletStore,
+} from "../../src/billing/WalletStore";
 import type { BillingOrderRecord, WalletLedgerEntry } from "../../src/protocol";
 import { MemoryStore } from "../../src/store/MemoryStore";
 
@@ -44,11 +53,13 @@ function runContract(name: string, make: () => Promise<WalletStore>, opts: { ski
     test("unlocks are per feature and listed raw (expiry is the service's job)", async () => {
       const store = await make();
       const d = randomUUID();
+      // Lapsed unlocks are kept WALLET_IDLE_TTL_MS, so these are recent.
+      const t = Date.now();
       expect(await store.getUnlock(d, "gender_filter")).toBeNull();
-      await store.setUnlock(d, "gender_filter", 123);
-      expect(await store.getUnlock(d, "gender_filter")).toBe(123);
-      await store.setUnlock(d, "gender_filter", 456);
-      expect(await store.listUnlocks(d)).toEqual({ gender_filter: 456 });
+      await store.setUnlock(d, "gender_filter", t - 123);
+      expect(await store.getUnlock(d, "gender_filter")).toBe(t - 123);
+      await store.setUnlock(d, "gender_filter", t + 456);
+      expect(await store.listUnlocks(d)).toEqual({ gender_filter: t + 456 });
       expect(await store.listUnlocks(randomUUID())).toEqual({});
     });
 
@@ -65,7 +76,7 @@ function runContract(name: string, make: () => Promise<WalletStore>, opts: { ski
     test("extendUnlock is atomic: concurrent extends add up from max(now, current)", async () => {
       const store = await make();
       const d = randomUUID();
-      const now = 1_000_000;
+      const now = Date.now();
       expect(await store.extendUnlock(d, "gender_filter", 100, now)).toBe(now + 100);
       // Expired unlock: the extension starts from now, not from the stale expiry.
       expect(await store.extendUnlock(d, "gender_filter", 50, now + 500)).toBe(now + 550);
@@ -148,5 +159,48 @@ describe.skipIf(!url)("RedisWalletStore orders", () => {
     expect(ttl).toBeLessThanOrEqual(UNPAID_ORDER_TTL_MS);
     await store.putOrder({ ...o, status: "paid", paymentId: "pay_1", paidAt: 2000 });
     expect(await redis.pttl(`${prefix}order:${o.orderId}`)).toBe(-1);
+  });
+});
+
+describe("MemoryWalletStore key expiry", () => {
+  test("claims, idle ledgers and lapsed unlocks expire; the balance does not", async () => {
+    let now = Date.UTC(2026, 0, 1);
+    const coins = new MemoryStore();
+    const store = new MemoryWalletStore(coins, () => now);
+    const d = randomUUID();
+    await store.addBalance(d, 50, 0);
+    expect(await store.claimOnce("pay_1")).toBe(true);
+    await store.appendLedger(entry(d, 50, now));
+    await store.setUnlock(d, "gender_filter", now + 7 * 24 * 60 * 60_000);
+    now += WALLET_IDLE_TTL_MS - 1;
+    expect(await store.listLedger(d, 10)).toHaveLength(1);
+    expect(await store.getUnlock(d, "gender_filter")).not.toBeNull();
+    expect(await store.claimOnce("pay_1")).toBe(false);
+    now += 7 * 24 * 60 * 60_000 + 1;
+    expect(await store.listLedger(d, 10)).toEqual([]);
+    expect(await store.getUnlock(d, "gender_filter")).toBeNull();
+    expect(await store.listUnlocks(d)).toEqual({});
+    expect(await store.claimOnce("pay_1")).toBe(false);
+    now = Date.UTC(2026, 0, 1) + CLAIM_TTL_MS;
+    expect(await store.claimOnce("pay_1")).toBe(true);
+    expect(await store.getBalance(d)).toBe(50);
+  });
+});
+
+describe.skipIf(!url)("RedisWalletStore key expiry", () => {
+  test("claims, ledgers and unlocks carry TTLs", async () => {
+    const { redis, prefix, store } = redisStore();
+    const d = randomUUID();
+    const claim = `pay_${randomUUID()}`;
+    expect(await store.claimOnce(claim)).toBe(true);
+    const claimTtl = await redis.pttl(`${prefix}once:${claim}`);
+    expect(claimTtl).toBeGreaterThan(CLAIM_TTL_MS - 5_000);
+    await store.appendLedger(entry(d, 5, Date.now()));
+    expect(await redis.pttl(`${prefix}ledger:${d}`)).toBeGreaterThan(WALLET_IDLE_TTL_MS - 5_000);
+    const until = Date.now() + 60_000;
+    await store.setUnlock(d, "gender_filter", until);
+    expect(await redis.pexpiretime(`${prefix}unlock:${d}`)).toBe(until + WALLET_IDLE_TTL_MS);
+    const extended = await store.extendUnlock(d, "gender_filter", 120_000, until);
+    expect(await redis.pexpiretime(`${prefix}unlock:${d}`)).toBe(extended + WALLET_IDLE_TTL_MS);
   });
 });
