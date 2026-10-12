@@ -84,7 +84,8 @@ describe("call:start ICE servers", () => {
       undefined,
       { fetch: fakeCloudflare().fetch },
     );
-    const ip = `198.51.100.${Math.floor(Math.random() * 200) + 1}-${randomUUID()}`;
+    // One IP literal per run: a malformed header now counts as the TCP peer, which every test shares.
+    const ip = `2001:db8:${Math.floor(Math.random() * 0xffff).toString(16)}:${Math.floor(Math.random() * 0xffff).toString(16)}::1`;
     const connect = () => ts.connect({ headers: { "x-real-ip": ip } });
     const ca = await connect();
     const cb = await connect();

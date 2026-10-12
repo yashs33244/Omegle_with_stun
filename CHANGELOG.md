@@ -11,6 +11,17 @@ All notable changes to Chizzy are recorded here. The format follows
 
 - The production branch is `main` (renamed from `new-v`); workflows, Render, Vercel and the docs follow it.
 
+### Security
+
+- Session gate: the restriction check at `POST /api/session` was never wired in production, so a banned device got a fresh token; bans now follow the device and its fingerprint link and the CSAM packet carries the noted IP and country. The proxy IP header is believed only when it holds one IP literal, list headers (`X-Forwarded-For`) are refused at boot, and production refuses placeholder secrets.
+- HTTP: bounded Node server timeouts (15 s headers, 30 s request, 65 s keep-alive, 100 headers, 1,000 requests per socket); over-cap `Content-Length` refused before the body is read and compressed bodies refused; Turnstile verifications capped at 64 in flight.
+- Sockets: per-IP cap and connect rate enforced on the upgrade so refused attempts hold nothing; websocket-only transport; a 30 s hello deadline; per-connection packet and byte budgets ahead of JSON parsing; a per-session socket cap; unchanged preference updates no longer reload the queue; a matches-per-minute cap and an accept-expiry penalty.
+- Store: the Redis match lock is renewed and token-fenced so a slow pass can no longer let two replicas match the same pair; matching status is memoized (a closed `staffed_hours` window cost 60 ms per `GET /api/config`); the memory store forgets reporter indexes after the retention window; key parts are validated; one Redis client option set with command timeouts.
+- Billing: a pack is credited once per order (two captured payments for one order no longer double-credit), the credit claim survives a failed ledger write, unpaid orders expire after 24 h and are capped per device, and `initialCoins` defaults to 0 so a fresh device id cannot unlock the gender filter for free.
+- Safety: captions pass through the chat guard with a byte budget, reports are bucketed per IP, reporters on one address count once toward automatic action, admin restriction durations are limited to the ladder, the open-report queue and memory enforcement store are bounded, and appeal quotas are charged only for the device's own restrictions.
+- Frontend: "Hide my IP" fails closed (no connection until the user continues or skips), the fake-Checkout seam is dropped from production bundles, HSTS added, non-major audit fixes.
+- Infrastructure: gateway `limit_req`/`limit_conn` zones and slow-client timeouts; unknown paths answered at the gateway; containers run with all capabilities dropped, read-only root, memory and pid limits on three isolated networks; workflows no longer persist credentials, publish from a shared cache or release outside a protected environment; zizmor runs in CI; `check-deploy-env.sh` diffs `config.ts` against the deploy surface.
+
 ## [1.0.0] - 2026-10-11
 
 First versioned release: the launch build merged through #1, #2, #23 and #24.

@@ -238,6 +238,7 @@ describe("POST /api/session", () => {
     const { reportId } = await ts.server.enforcement.submitReport({
       roomId: randomUUID(),
       reporterDevice: randomUUID(),
+      reporterIp: null,
       reportedDevice: banned.deviceId,
       reason: "harassment",
       frame: null,
