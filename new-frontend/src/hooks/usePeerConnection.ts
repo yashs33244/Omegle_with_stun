@@ -1,6 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { CallTelemetryPayload, IceServer, RtcSignal } from "@/lib/protocol";
 import {
+  CONNECT_TIMEOUT_MS,
   ConnectMonitor,
   LossTracker,
   applyVideoSenderLimits,
@@ -46,6 +47,12 @@ export interface PeerConnectionOptions {
   onCallFailed: (roomId: string, reason: ConnectFailure) => void;
   /** Sent once when the call ends. */
   onTelemetry: (payload: CallTelemetryPayload) => void;
+  /**
+   * Hide my IP was on but the relay is unavailable, and the user answered
+   * neither Skip nor Continue within the connect timeout: the partner's side
+   * has given up by now, so the room should be skipped.
+   */
+  onPrivateUnavailableExpired: (roomId: string) => void;
 }
 
 export interface PeerConnectionState {
@@ -62,6 +69,14 @@ export interface PeerConnectionState {
   privateMode: boolean;
   /** Hide my IP was on when this call started (it may still have been unavailable). */
   privateRequested: boolean;
+  /**
+   * Hide my IP is on but this call cannot use the relay: no connection exists
+   * yet and nothing has been sent to the partner. Stays true until
+   * continueWithoutPrivate() (direct connection) or the room ends (Skip).
+   */
+  privateBlocked: boolean;
+  /** Start this call over a direct connection after all; a no-op unless privateBlocked. */
+  continueWithoutPrivate: () => void;
   /** The selected path goes through the TURN relay. */
   relayed: boolean;
   /** Sustained packet loss: sending about 360p at 400 kbps. */
@@ -74,6 +89,11 @@ export interface PeerConnectionState {
  * or the component unmounts. Also runs the connect timeout and ICE restarts,
  * applies the bitrate caps, steps down on sustained loss and reports
  * telemetry when the call ends.
+ *
+ * Hide my IP fails closed: when it is on and call:start cannot offer the
+ * relay (not allowed right now, or no TURN server), no RTCPeerConnection is
+ * created, so no ICE candidate carrying the user's address ever leaves the
+ * browser, until the user explicitly continues without it.
  */
 export function usePeerConnection(opts: PeerConnectionOptions): PeerConnectionState {
   const { roomId, initiator, sendSignal, subscribeSignals } = opts;
@@ -86,6 +106,9 @@ export function usePeerConnection(opts: PeerConnectionOptions): PeerConnectionSt
   const [failure, setFailure] = useState<ConnectFailure | null>(null);
   const [privateMode, setPrivateMode] = useState(false);
   const [privateRequested, setPrivateRequested] = useState(false);
+  const [privateBlocked, setPrivateBlocked] = useState(false);
+  /** Room the user agreed to connect directly although Hide my IP is on. */
+  const [directAllowedFor, setDirectAllowedFor] = useState<string | null>(null);
   const [relayed, setRelayed] = useState(false);
   const [lowBandwidth, setLowBandwidth] = useState(false);
 
@@ -100,6 +123,18 @@ export function usePeerConnection(opts: PeerConnectionOptions): PeerConnectionSt
     const iceServers = o.media?.iceServers.length ? o.media.iceServers : o.iceServers;
     // Relay-only needs a relay: without TURN credentials it could never connect.
     const isPrivate = o.hideIp && !!o.media?.privateModeAllowed && hasTurnServer(iceServers);
+    if (o.hideIp && !isPrivate && directAllowedFor !== roomId) {
+      // Nothing is created or sent: the user decides between Skip and a direct connection.
+      setPrivateBlocked(true);
+      setPrivateRequested(true);
+      setPrivateMode(false);
+      const expiry = setTimeout(() => latest.current.onPrivateUnavailableExpired(roomId), CONNECT_TIMEOUT_MS);
+      return () => {
+        clearTimeout(expiry);
+        setPrivateBlocked(false);
+        setPrivateRequested(false);
+      };
+    }
     const caps = o.media ?? DEFAULT_CAPS;
 
     const monitor = new ConnectMonitor({
@@ -207,7 +242,11 @@ export function usePeerConnection(opts: PeerConnectionOptions): PeerConnectionSt
       setLowBandwidth(false);
       setConnectedAt(null);
     };
-  }, [roomId, initiator, sendSignal, subscribeSignals]);
+  }, [roomId, initiator, sendSignal, subscribeSignals, directAllowedFor]);
+
+  const continueWithoutPrivate = useCallback(() => {
+    if (roomId && privateBlocked) setDirectAllowedFor(roomId);
+  }, [roomId, privateBlocked]);
 
   // The face gate pauses and resumes our video without renegotiating.
   useEffect(() => {
@@ -228,6 +267,8 @@ export function usePeerConnection(opts: PeerConnectionOptions): PeerConnectionSt
     failure,
     privateMode,
     privateRequested,
+    privateBlocked,
+    continueWithoutPrivate,
     relayed,
     lowBandwidth,
   };

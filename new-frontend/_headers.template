@@ -16,6 +16,7 @@
   X-Frame-Options: DENY
   Referrer-Policy: strict-origin-when-cross-origin
   Cross-Origin-Opener-Policy: same-origin
+  Strict-Transport-Security: max-age=63072000; includeSubDomains
 
 # Vite emits content-hashed file names under /assets/.
 /assets/*
