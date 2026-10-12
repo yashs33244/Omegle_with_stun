@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  SENTRY_EVENTS_PER_PAGE,
+  initObservability,
   resetObservabilityForTests,
   scrubEvent,
   setCaptureForTests,
@@ -7,7 +9,33 @@ import {
   trackOnce,
 } from "./observability";
 
-beforeEach(() => resetObservabilityForTests());
+const sentry = vi.hoisted(() => ({ init: vi.fn(), captureException: vi.fn() }));
+vi.mock("@sentry/react", () => sentry);
+vi.mock("@/lib/idle", () => ({ pageIdle: () => Promise.resolve() }));
+
+beforeEach(() => {
+  resetObservabilityForTests();
+  sentry.init.mockReset();
+});
+
+describe("Sentry event budget", () => {
+  it("sends at most SENTRY_EVENTS_PER_PAGE events per page load, scrubbed, then drops the rest", async () => {
+    await initObservability({ sentryDsn: "https://key@sentry.example/1", posthogKey: null, posthogHost: null });
+    expect(sentry.init).toHaveBeenCalledTimes(1);
+    const { beforeSend } = sentry.init.mock.calls[0]![0] as { beforeSend: (e: object) => object | null };
+    const event = () => ({ user: { id: "device" }, message: "boom" });
+    const sent = Array.from({ length: SENTRY_EVENTS_PER_PAGE + 5 }, () => beforeSend(event()));
+    expect(SENTRY_EVENTS_PER_PAGE).toBe(20);
+    expect(sent.slice(0, SENTRY_EVENTS_PER_PAGE)).toEqual(Array(SENTRY_EVENTS_PER_PAGE).fill({ message: "boom" }));
+    expect(sent.slice(SENTRY_EVENTS_PER_PAGE)).toEqual(Array(5).fill(null));
+
+    // A new page load (module state reset) gets a fresh budget.
+    resetObservabilityForTests();
+    await initObservability({ sentryDsn: "https://key@sentry.example/1", posthogKey: null, posthogHost: null });
+    const next = sentry.init.mock.calls[1]![0] as { beforeSend: (e: object) => object | null };
+    expect(next.beforeSend(event())).toEqual({ message: "boom" });
+  });
+});
 
 describe("scrubEvent", () => {
   it("removes the user, request details, personal fields, data URLs and input breadcrumbs", () => {

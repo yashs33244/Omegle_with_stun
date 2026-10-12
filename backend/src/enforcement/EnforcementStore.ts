@@ -41,6 +41,8 @@ export interface EnforcementStore {
   addToIndex(index: string, id: string, score: number): Promise<void>;
   removeFromIndex(index: string, id: string): Promise<void>;
   indexRange(index: string, opts?: RangeOptions): Promise<string[]>;
+  /** Entries of an index whose score is within [min, max], without loading them (Redis ZCOUNT). */
+  indexCount(index: string, opts?: Pick<RangeOptions, "min" | "max">): Promise<number>;
 
   /** Sets `key` only if absent. True when this call set it. */
   claim(key: string, ttlMs: number): Promise<boolean>;

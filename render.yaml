@@ -35,6 +35,12 @@ services:
         value: production
       - key: PORT
         value: "3004"
+      # Node 22 sizes V8's heap from the host's memory, not the 512 MB
+      # instance, so a leak would run into the OOM killer before V8 collects
+      # hard or the shedding heap budget (shed/LoadMonitor.ts) trips. 320 MB
+      # of old space leaves room for sockets, buffers and code.
+      - key: NODE_OPTIONS
+        value: --max-old-space-size=320
       - key: LOG_LEVEL
         value: info
       # Browser origin of the Vercel frontend. Update after the first Vercel deploy.

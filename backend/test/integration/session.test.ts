@@ -3,7 +3,7 @@
  * Socket.IO handshake, the matching gate (kill switch, staffed hours,
  * max_waiting, hourly caps) and the status broadcast.
  */
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { randomBytes, randomUUID } from "node:crypto";
 import Redis from "ioredis";
 import { io as ioClient } from "socket.io-client";
@@ -13,6 +13,7 @@ import { TOS_VERSION, type PublicConfig, type Restriction, type RestrictionDurat
 import { startMatchingBroadcast } from "../../src/session/broadcast";
 import { TokenSigner } from "../../src/session/tokens";
 import type { FetchFn } from "../../src/turn/cloudflare";
+import { TurnService } from "../../src/turn/TurnService";
 import {
   type Client,
   arrives,
@@ -502,6 +503,40 @@ describe("matching gate", () => {
     const res = await sendHello(b.client, hello({ deviceId: b.deviceId }));
     expect(res).toMatchObject({ ok: false, error: "matching_closed" });
     expect((res as { message?: string }).message).toMatch(/try again/i);
+  });
+
+  test("a hello past max_waiting is refused before any store write or the match lock", async () => {
+    ts = await gated();
+    await ts.server.flags.set({ max_waiting: 1 });
+    const a = await connectWithSession(ts);
+    const b = await connectWithSession(ts);
+    await sendHello(a.client, hello({ deviceId: a.deviceId, preferences: { genderFilter: "all", languageFilter: "hi" } }));
+
+    // The sweeper runs on its own timer (and takes the lock), so count only
+    // calls that carry b's device or socket id.
+    const spies = [
+      spyOn(ts.store, "setDeviceSocket"),
+      spyOn(ts.store, "putSession"),
+      spyOn(ts.store, "setPhoto"),
+      spyOn(ts.store, "addWaiting"),
+      // The first read inside the match lock: proves the hello never took it.
+      spyOn(ts.store, "getSession"),
+      spyOn(ts.server.enforcement, "noteDeviceSeen"),
+      spyOn(TurnService.prototype, "rememberIp"),
+    ];
+    const counted = spyOn(ts.store, "waitingCount");
+    try {
+      const res = await sendHello(b.client, hello({ deviceId: b.deviceId }));
+      expect(res).toMatchObject({ ok: false, error: "matching_closed" });
+      expect(counted).toHaveBeenCalled();
+      const ids = [b.deviceId, b.client.id!];
+      const touched = spies.filter((spy) =>
+        spy.mock.calls.some((args: unknown[]) => ids.some((id) => JSON.stringify(args).includes(id))),
+      );
+      expect(touched).toEqual([]);
+    } finally {
+      for (const spy of [...spies, counted]) spy.mockRestore();
+    }
   });
 
   test("hourly match caps: the re-queue and new hellos are refused with rate_limited", async () => {

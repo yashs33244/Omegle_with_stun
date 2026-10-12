@@ -36,16 +36,32 @@ export interface LoadSampler {
 const NS_PER_MS = 1e6;
 const BYTES_PER_MB = 1024 * 1024;
 
+/** Where heapLimitBytes reads V8's limit and the container's memory; injectable for tests. */
+export interface HeapFacts {
+  /** v8.getHeapStatistics().heap_size_limit: old space (--max-old-space-size) plus young generation. */
+  heapSizeLimit(): number;
+  /** process.constrainedMemory(): the cgroup limit, or 0 / the host's memory without one. */
+  constrainedMemory(): number;
+}
+
+const processHeapFacts: HeapFacts = {
+  heapSizeLimit: () => getHeapStatistics().heap_size_limit,
+  constrainedMemory: () => process.constrainedMemory?.() ?? 0,
+};
+
 /**
  * The heap budget shedding compares against: SHED_HEAP_LIMIT_MB when set,
  * else V8's limit capped at HEAP_SHARE_OF_MEMORY of the container's memory.
  * process.constrainedMemory() is 0 (Node) or the host's memory (Bun) outside
- * a cgroup limit, so the min() leaves V8's limit in place there.
+ * a cgroup limit, so the min() leaves V8's limit in place there. The
+ * deployments set NODE_OPTIONS=--max-old-space-size=320 (render.yaml,
+ * docker-compose.yml), so V8's limit is about 368 MB even where the cgroup
+ * limit is not visible to the process.
  */
-export function heapLimitBytes(limitMb: number | undefined): number {
+export function heapLimitBytes(limitMb: number | undefined, facts: HeapFacts = processHeapFacts): number {
   if (limitMb !== undefined) return limitMb * BYTES_PER_MB;
-  const v8Limit = getHeapStatistics().heap_size_limit;
-  const container = process.constrainedMemory?.() ?? 0;
+  const v8Limit = facts.heapSizeLimit();
+  const container = facts.constrainedMemory();
   return container > 0 ? Math.min(v8Limit, container * HEAP_SHARE_OF_MEMORY) : v8Limit;
 }
 

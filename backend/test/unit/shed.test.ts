@@ -75,6 +75,23 @@ describe("LoadMonitor", () => {
       process.constrainedMemory = original;
     }
   });
+
+  test("the heap limit reads V8's heap_size_limit from --max-old-space-size=320", () => {
+    const MB = 1024 * 1024;
+    // Node 22 reports old space plus young generation: 368 MB for 320.
+    const flagged = 368 * MB;
+    const facts = (heapSizeLimit: number, constrainedMemory: number) => ({
+      heapSizeLimit: () => heapSizeLimit,
+      constrainedMemory: () => constrainedMemory,
+    });
+    // No visible cgroup limit (Render may not expose one): V8's limit as is.
+    expect(heapLimitBytes(undefined, facts(flagged, 0))).toBe(flagged);
+    // A host-sized heap (no flag) on a 4 GB host shows why the flag matters.
+    expect(heapLimitBytes(undefined, facts(2096 * MB, 0))).toBe(2096 * MB);
+    // A visible 512 MB cgroup still caps it at its share.
+    expect(heapLimitBytes(undefined, facts(flagged, 512 * MB))).toBe(512 * MB * HEAP_SHARE_OF_MEMORY);
+    expect(heapLimitBytes(256, facts(flagged, 512 * MB))).toBe(256 * MB);
+  });
 });
 
 describe("Shedder", () => {

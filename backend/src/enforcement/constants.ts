@@ -136,7 +136,11 @@ export const ADMIN_IDEMPOTENCY_TTL_MS = DAY;
 
 /** Records (and evidence) are deleted this long (ms) after they stopped mattering. */
 export const RETENTION_MS = YEAR;
-/** Escalated (CSAM) evidence is frozen for at least this long (ms). */
+/**
+ * Escalated (CSAM) evidence is frozen for at least this long (ms) from the
+ * last escalation: the report's `preservedUntil`. Escalating again renews
+ * it; once it passes, the hold no longer keeps the report from retention.
+ */
 export const CSAM_PRESERVE_MS = YEAR;
 /** The retention sweeper checks for a daily claim this often (ms). */
 export const RETENTION_CHECK_INTERVAL_MS = HOUR;
@@ -200,6 +204,7 @@ export const AUDIT_ACTION = {
   evidenceDenied: "report.evidence_denied",
   viewEvidence: "report.view_evidence",
   escalateCsam: "report.escalate_csam",
+  releaseHold: "report.release_hold",
   resolveTakedown: "takedown.resolve",
 } as const;
 

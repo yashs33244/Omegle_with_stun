@@ -129,9 +129,11 @@ export function runStoreContract(
       expect(await store.listWaiting()).toEqual(["a", "b", "c"]);
       await store.addWaiting("a", 40);
       expect(await store.listWaiting()).toEqual(["b", "c", "a"]);
+      expect(await store.waitingCount()).toBe(3); // a re-score is not a second entry
       await store.removeWaiting("c");
       await store.removeWaiting("missing");
       expect(await store.listWaiting()).toEqual(["b", "a"]);
+      expect(await store.waitingCount()).toBe(2);
     });
 
     test("rooms: put, replace, delete, expired pending index", async () => {

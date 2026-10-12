@@ -291,8 +291,15 @@ describe("restrictions", () => {
       await fetch(`${ts.url}/api/restrictions/${res.restriction.id}?deviceId=${b.deviceId}`)
     ).json()) as RestrictionView;
     expect(view.evidenceFrame).toBeNull();
+    const release = (body: unknown) =>
+      admin(`/reports/${ack.reportId}/release-hold`, { method: "POST", body: JSON.stringify(body) });
+    expect((await release({ note: "x".repeat(2_001) })).status).toBe(400);
+    const released = await release({ note: "case closed" });
+    expect(released.status).toBe(200);
+    expect(await released.json()).toMatchObject({ id: ack.reportId, status: "escalated" });
+    expect((await release({})).status).toBe(409); // no hold left
     const audit = (await adminJson<{ action: string }[]>("/audit")).map((e) => e.action);
-    expect(audit).toEqual(expect.arrayContaining(["report.evidence_denied", "report.escalate_csam"]));
+    expect(audit).toEqual(expect.arrayContaining(["report.evidence_denied", "report.escalate_csam", "report.release_hold"]));
   });
 });
 
