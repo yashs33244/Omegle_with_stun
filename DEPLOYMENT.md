@@ -51,6 +51,20 @@ cost, SLOs) is in [docs/OPERATIONS.md](docs/OPERATIONS.md); step-by-step
 pages are [docs/runbooks/rollback.md](docs/runbooks/rollback.md) and
 [docs/runbooks/release.md](docs/runbooks/release.md).
 
+### Render (production backend)
+
+`render.yaml` describes the backend service: one Free instance with 512 MB
+of memory and the in-memory store. Node 22 sizes V8's heap from the host's
+memory, not the instance's, so without a flag V8 would let the heap grow past
+512 MB and the instance would be OOM-killed before V8 collected hard or the
+overload shedding (`SHED_HEAP_LIMIT_MB`, below) tripped. The blueprint sets
+`NODE_OPTIONS=--max-old-space-size=320`: V8 then reports a `heap_size_limit`
+of about 368 MB (old space plus young generation), and the shedding budget is
+that limit, capped at 60% of the container's memory (307 MB) where the cgroup
+limit is visible to the process, so new sockets and sessions are refused from
+about 246 MB of heap (docs/LIMITS.md "Instance-wide limits and shedding").
+Raise the flag in `render.yaml` only together with a bigger plan.
+
 ### Repository settings the workflows rely on
 
 The jobs that publish something run in a GitHub deployment environment:
@@ -136,6 +150,7 @@ launch build"); the backend itself also refuses to start without them.
 | `MAX_CONNECTIONS_TOTAL` | `2000` | open Socket.IO connections on each replica, all clients together; the next upgrade is answered `503 server_full`. About 17 KiB of heap per waiting socket (measured, [docs/LIMITS.md](docs/LIMITS.md#instance-wide-limits-and-shedding)), sized for a 512 MB instance |
 | `SESSION_RATE_TOTAL_PER_SEC` | `20` | `POST /api/session` per second on each replica, all clients together (a bucket of 5 s worth); over it `503 closed` with `Retry-After` |
 | `SHED_HEAP_LIMIT_MB` | unset | heap budget for overload shedding: above 80% of it, or with event-loop delay p99 over 200 ms, a replica refuses new sockets and sessions and `/readyz` answers 503 while live calls continue. Unset: V8's heap limit, capped at 60% of the container's memory |
+| `NODE_OPTIONS` | `--max-old-space-size=320` | Node flags for each replica. Node 22 sizes V8's heap from the host's memory, not the container's, so the default caps old space at 320 MB (`heap_size_limit` about 368 MB with the young generation); the shedding budget above then follows it. Raise it together with the replica memory limit in `docker-compose.yml` |
 | `MATCH_ACCEPT_TIMEOUT_MS` | `30000` | how long both users have to accept a match |
 | `SHUTDOWN_GRACE_MS` | `10000` | how long a replica drains on stop; keep it under the 15 s `stop_grace_period` in `docker-compose.yml` |
 | `STUN_URLS` | Google public STUN | comma list |

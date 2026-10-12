@@ -95,6 +95,10 @@ services:
       MAX_CONNECTIONS_TOTAL: ${MAX_CONNECTIONS_TOTAL:-}
       SESSION_RATE_TOTAL_PER_SEC: ${SESSION_RATE_TOTAL_PER_SEC:-}
       SHED_HEAP_LIMIT_MB: ${SHED_HEAP_LIMIT_MB:-}
+      # Node 22 sizes V8's heap from the host's memory, not the container
+      # limit below; cap old space so V8 collects hard (and shedding trips)
+      # before the container is OOM-killed. Empty: this default.
+      NODE_OPTIONS: ${NODE_OPTIONS:---max-old-space-size=320}
       MATCH_ACCEPT_TIMEOUT_MS: ${MATCH_ACCEPT_TIMEOUT_MS:-30000}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       METRICS_TOKEN: ${METRICS_TOKEN:-}
@@ -172,9 +176,10 @@ services:
         hard: 65535
     deploy:
       replicas: ${BACKEND_REPLICAS:-2}
-      # Per replica. Node sizes its heap from this limit; a replica that grows
-      # past it (a leak, or far more sockets than the host can serve) is
-      # restarted instead of pushing the host into swap.
+      # Per replica. Node does not size its heap from this limit (NODE_OPTIONS
+      # above caps it); a replica that grows past it (a leak, or far more
+      # sockets than the host can serve) is restarted instead of pushing the
+      # host into swap.
       resources:
         limits:
           memory: 768M
