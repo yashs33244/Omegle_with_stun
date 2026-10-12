@@ -77,7 +77,8 @@ describe("createAdminApi", () => {
     vi.stubGlobal("URL", Object.assign(URL, { createObjectURL: create, revokeObjectURL: revoke }));
     const img = createAdminApi({
       token: "t",
-      fetch: vi.fn(async () => new Response(new Blob(["x"]), { headers: { "Content-Type": "image/jpeg" } })),
+      // Bytes, not a Blob: jsdom's Blob has no stream(), which Node's Response needs as a body.
+      fetch: vi.fn(async () => new Response(new Uint8Array([0xff, 0xd8]), { headers: { "Content-Type": "image/jpeg" } })),
     });
     const frame = await img.getReportFrame("r1");
     expect(frame?.src).toBe("blob:frame");

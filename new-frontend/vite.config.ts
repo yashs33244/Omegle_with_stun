@@ -17,7 +17,6 @@ const VENDOR_CHUNKS: Record<string, string> = {
   "use-sync-external-store": "vendor-react",
   "react-router": "vendor-react",
   "react-router-dom": "vendor-react",
-  "@remix-run/router": "vendor-react",
   i18next: "vendor-i18n",
   "react-i18next": "vendor-i18n",
   "i18next-browser-languagedetector": "vendor-i18n",
