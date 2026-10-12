@@ -11,7 +11,7 @@ import type { WalletStore } from "./billing/WalletStore";
 import { CaptionRelay } from "./captions/CaptionRelay";
 import { createEnforcement, type EnforcementOptions, type EnforcementService } from "./enforcement";
 import { FlagsReader, MemoryFlagsStore, type FlagsStore } from "./flags/flags";
-import { adminApiRouter } from "./http/admin";
+import { adminApiRouter, adminWarnings } from "./http/admin";
 import { billingApiRouter } from "./http/billing";
 import { createApp } from "./http/app";
 import {
@@ -26,6 +26,7 @@ import { publicApiRouter } from "./http/public";
 import type { Logger } from "./logger";
 import { MatchService, type Emitter } from "./match/MatchService";
 import { createMetrics, type Metrics } from "./metrics";
+import type { SocketRateLimiter } from "./rateLimit";
 import { MemorySignalStore, RedisSignalStore, SafetySignals } from "./safety/signals";
 import type { FetchFn } from "./turn/cloudflare";
 import { TurnSpendPoller, cloudflareEgressQuery } from "./turn/spendPoller";
@@ -34,6 +35,8 @@ import { TurnService } from "./turn/TurnService";
 import { SparkService } from "./spark/SparkService";
 import { ConnectionGate, attachHandlers, createEmitter, createSocketServer, type AppServer } from "./realtime/socket";
 import { createSessionFeature, sessionWarnings, type RestrictionChecker } from "./session";
+import { LoadMonitor, ProcessLoadSampler, heapLimitBytes, type LoadSampler } from "./shed/LoadMonitor";
+import { Shedder } from "./shed/Shedder";
 import type { MatchStore } from "./store/MatchStore";
 
 export interface ServerDeps {
@@ -60,6 +63,14 @@ export interface ServerDeps {
   enforcement?: EnforcementOptions;
   /** Billing overrides for tests: a fake gateway (null = disabled) or a prepared wallet store. */
   billing?: { gateway?: RazorpayGateway | null; walletStore?: WalletStore };
+  /** Instance photo budget in bytes for tests (defaults to PHOTO_BUDGET_BYTES). */
+  photoBudgetBytes?: number;
+  /** Overload signal source; tests inject one and step `ChizzyServer.load` with tick(). Defaults to the process sampler. */
+  loadSampler?: LoadSampler;
+  /** Clock for session tokens, the handshake and the socket session-expiry timer; tests inject one. */
+  now?: () => number;
+  /** Per-socket event buckets for tests (property tests lift them so payloads reach validation); defaults to RATE_LIMITS. */
+  newRateLimiter?: () => SocketRateLimiter;
 }
 
 export interface ChizzyServer {
@@ -74,6 +85,8 @@ export interface ChizzyServer {
   billing: BillingService;
   /** The deps this server was built with, for feature modules that need the shared Redis client. */
   deps: ServerDeps;
+  /** Overload state (shed/LoadMonitor.ts); sampled every config.loadSampleIntervalMs unless that is 0. */
+  load: LoadMonitor;
   /**
    * Starts listening once the instance heartbeat is stored; resolves with the
    * bound port (use 0 for a random port). Rejects if the store is unreachable.
@@ -92,9 +105,24 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
   const { store, logger } = deps;
   const flags = new FlagsReader(deps.flags ?? new MemoryFlagsStore());
   const metrics = createMetrics(store);
+  const load = new LoadMonitor(deps.loadSampler ?? new ProcessLoadSampler(heapLimitBytes(config.shedHeapLimitMb)));
+  load.onChange((overloaded, sample) => {
+    metrics.overloaded.set(overloaded ? 1 : 0);
+    const facts = { loopDelayP99Ms: Math.round(sample.loopDelayP99Ms), heapUsedMb: Math.round(sample.heapUsedBytes / 2 ** 20) };
+    if (overloaded) logger.warn(facts, "overloaded: refusing new sockets and sessions");
+    else logger.info(facts, "load back to normal: admitting new sockets and sessions");
+  });
+  if (config.loadSampleIntervalMs > 0) load.start(config.loadSampleIntervalMs);
+  const shed = new Shedder({
+    maxConnectionsTotal: config.maxConnectionsTotal,
+    sessionRateTotal: config.sessionRateTotal,
+    load,
+    metrics,
+  });
   const enforcement = createEnforcement(config, { logger, redis: deps.redis }, deps.enforcement);
   const session = createSessionFeature({
     config,
+    shed,
     flags,
     store,
     logger,
@@ -102,6 +130,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     redis: deps.redis,
     fetch: deps.fetch,
     restrictions: deps.restrictions ?? enforcement,
+    now: deps.now,
   });
   for (const warning of sessionWarnings(config)) logger.warn(`SESSION GATE WARNING: ${warning}`);
   // Socket.IO exists only after the HTTP app, which needs billing: late-bound.
@@ -127,6 +156,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     logger,
     metricsToken: config.metricsToken,
     metricsRequireToken: config.nodeEnv === "production",
+    overloaded: () => shed.overloaded,
     session: session.router,
     routes: (a) => {
       a.use(publicApiRouter({ enforcement, proxyIpHeader: config.proxyIpHeader, logger }));
@@ -147,6 +177,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     },
   });
   if (config.nodeEnv === "production" && !config.metricsToken) logger.warn("METRICS_TOKEN is unset: GET /metrics answers 404");
+  for (const warning of adminWarnings(config)) logger.warn(`ADMIN API WARNING: ${warning}`);
   const httpServer = createHttpServer({ connectionsCheckingInterval: HTTP_CONNECTIONS_CHECK_INTERVAL_MS }, app);
   // Node's defaults (requestTimeout 300 s, unlimited requests per socket) let
   // one slow client hold a socket for minutes; see http/constants.ts.
@@ -155,7 +186,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
   httpServer.keepAliveTimeout = HTTP_KEEP_ALIVE_TIMEOUT_MS;
   httpServer.maxHeadersCount = HTTP_MAX_HEADERS_COUNT;
   httpServer.maxRequestsPerSocket = HTTP_MAX_REQUESTS_PER_SOCKET;
-  const io = createSocketServer(httpServer, config, new ConnectionGate(config, metrics));
+  const io = createSocketServer(httpServer, config, new ConnectionGate(config, metrics), shed);
   deps.configureIo?.(io);
   const emitter = createEmitter(io);
   live.emitter = emitter;
@@ -202,6 +233,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     billing,
     emitter,
     gate: session.gate,
+    photoBudgetBytes: deps.photoBudgetBytes,
   });
   const spark = new SparkService({ store, emitter, registry: metrics.registry });
   const captions = new CaptionRelay({ store, emitter, metrics, chatGuardMs: config.chatGuardMs });
@@ -213,6 +245,8 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     logger,
     metrics,
     handshake: config.requireSession ? session.handshake : undefined,
+    now: deps.now,
+    newRateLimiter: deps.newRateLimiter,
   });
   const stopBroadcast = session.startBroadcast(io);
   // listen() waits for this, so no client connects before the first heartbeat.
@@ -235,6 +269,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     enforcement,
     billing,
     deps,
+    load,
     async listen(port, host) {
       await started;
       return new Promise((resolve, reject) => {
@@ -249,6 +284,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     close() {
       closing ??= (async () => {
         flags.stop();
+        load.stop();
         stopBroadcast();
         spendPoller?.stop();
         await enforcement.stop();

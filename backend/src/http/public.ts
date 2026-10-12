@@ -10,34 +10,43 @@ import { z } from "zod";
 import type { EnforcementService } from "../enforcement/EnforcementService";
 import type { Logger } from "../logger";
 import { appealRequestSchema, takedownRequestSchema, type AppealResponse, type TakedownResponse } from "../protocol";
-import { TokenBucket, type BucketSpec } from "../rateLimit";
-import { knownIp } from "../session/geo";
+import { TokenBucket, evictOne, type BucketSpec } from "../rateLimit";
+import { ipBuckets, knownIp } from "../session/geo";
 import { jsonBody } from "./body";
-import { ENFORCEMENT_BODY_LIMIT_BYTES } from "./constants";
+import { ENFORCEMENT_BODY_LIMIT_BYTES, IP_BUCKETS_MAX_KEYS } from "./constants";
 
 /** Client IP of an Express request (see session/geo.ts knownIp), or null when unknown. */
 export function requestIp(req: Request, proxyIpHeader: string | null): string | null {
   return knownIp(req.headers, req.socket.remoteAddress, proxyIpHeader);
 }
 
-/** Per-IP token buckets for one instance. Cleared when it grows large, so it cannot leak memory. */
+/**
+ * Per-IP token buckets for one instance, keyed by subscriber (session/geo.ts
+ * ipBuckets: an IPv4 address or an IPv6 /64; other keys, e.g. device ids, as
+ * given). Bounded at `maxKeys`: a new key evicts a refilled bucket first, else
+ * the fullest of the least recently used, so filling the map never resets a
+ * limited client.
+ */
 export class IpBuckets {
   private readonly buckets = new Map<string, TokenBucket>();
 
   constructor(
     private readonly spec: BucketSpec,
     private readonly clock: () => number = Date.now,
+    private readonly maxKeys = IP_BUCKETS_MAX_KEYS,
   ) {}
 
   allow(ip: string | null): boolean {
-    const key = ip ?? "unknown";
+    const key = ip === null ? "unknown" : ipBuckets(ip).ip;
     const now = this.clock();
     let bucket = this.buckets.get(key);
-    if (!bucket) {
-      if (this.buckets.size >= 50_000) this.buckets.clear();
+    if (bucket) {
+      this.buckets.delete(key);
+    } else {
+      if (this.buckets.size >= this.maxKeys) evictOne(this.buckets, (b) => (b.full(now) ? Infinity : b.fill(now)));
       bucket = new TokenBucket(this.spec, now);
-      this.buckets.set(key, bucket);
     }
+    this.buckets.set(key, bucket);
     return bucket.take(now);
   }
 }

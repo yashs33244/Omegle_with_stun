@@ -46,6 +46,12 @@ export interface Session {
   /** Set while state is waiting. Epoch ms. */
   waitingSince?: number;
   connectedAt: number;
+  /**
+   * TurnService.ipKeyFor() of the socket's address at its last hello (a keyed
+   * hash, never the raw IP), so the TURN per-IP cap still counts a call after
+   * the device's hello binding lapsed. Unset when the address was unknown.
+   */
+  ipKey?: string;
 }
 
 export interface Room {
@@ -120,6 +126,8 @@ export interface MatchStore {
   removeWaiting(socketId: string): Promise<void>;
   /** Oldest first by `since`. Ties come back in a stable but unspecified order. */
   listWaiting(): Promise<string[]>;
+  /** Size of the queue, O(1) (Redis ZCARD): the max_waiting check on every hello. */
+  waitingCount(): Promise<number>;
 
   /* Rooms */
   getRoom(roomId: string): Promise<Room | null>;

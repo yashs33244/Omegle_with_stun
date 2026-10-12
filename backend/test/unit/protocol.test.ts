@@ -1,7 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
-import { LIMITS, chatSendSchema, helloSchema, rtcSignalSchema } from "../../src/protocol";
-import { hello, profile } from "../helpers";
+import {
+  LIMITS,
+  captionSegmentSchema,
+  chatSendSchema,
+  flagsSchema,
+  helloSchema,
+  rtcSignalSchema,
+  sessionRequestSchema,
+} from "../../src/protocol";
+import { hello, profile, sessionBody } from "../helpers";
 
 describe("protocol schemas", () => {
   test("a valid hello parses", () => {
@@ -26,6 +34,16 @@ describe("protocol schemas", () => {
     expect(
       rtcSignalSchema.safeParse({ roomId, description: { type: "offer", sdp: "x".repeat(LIMITS.sdpMax + 1) } }).success,
     ).toBe(false);
+  });
+
+  test("pattern-only strings are capped by length too (found by test/property/schemas.test.ts)", () => {
+    const tooBig = (r: { success: boolean; error?: { issues: { code: string }[] } }) => r.error?.issues.some((i) => i.code === "too_big") ?? false;
+    const long = "x".repeat(5_000);
+    expect(tooBig(helloSchema.safeParse(hello({ profile: profile({ language: `en-${long}` }) })))).toBe(true);
+    expect(tooBig(helloSchema.safeParse(hello({ profile: profile({ country: `IN${long}` }) })))).toBe(true);
+    expect(tooBig(sessionRequestSchema.safeParse({ ...sessionBody(), fingerprint: "a".repeat(65) }))).toBe(true);
+    expect(tooBig(captionSegmentSchema.safeParse({ roomId: randomUUID(), id: "a".repeat(65), text: "hi", final: true, lang: "en" }))).toBe(true);
+    expect(tooBig(flagsSchema.partial().safeParse({ blocked_countries: Array(300).fill("IN").join(",") }))).toBe(true);
   });
 
   test("topics must be a non-empty array of known topics", () => {

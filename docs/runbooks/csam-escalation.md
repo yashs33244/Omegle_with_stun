@@ -13,7 +13,11 @@ Sources: LAUNCH_PLAN LB-4 and LB-16; research 04-trust-safety-legal.md sections 
 - **Do not tip off the suspect.** The restriction copy stays generic. Do not
   message the reported user about the reason.
 - **Do not delete anything** connected to the report. Evidence is frozen for
-  1 year by the escalate action.
+  1 year by the escalate action. The hold ends by itself after that year and
+  the retention sweep then deletes the report: if police or NCMEC ask for
+  longer, escalate again before the date (each escalation renews the year).
+  Release a hold early only when the lawyer confirms the process is closed
+  (`POST /admin/api/reports/:id/release-hold`, audited; docs/retention.md).
 - **Never decide "looks old enough" by eye.** An age pause is only lifted by
   verification (v1.1), never by a reviewer's impression.
 

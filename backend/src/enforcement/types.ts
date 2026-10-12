@@ -31,8 +31,13 @@ export interface StoredReport {
   shortCall: boolean;
   /** An admin opened the evidence image. */
   humanViewed: boolean;
-  /** Frozen for a legal process: the retention sweep keeps it. */
+  /**
+   * Frozen for a legal process: the retention sweep keeps it until
+   * `preservedUntil` (renewed by escalating again). POST
+   * /admin/api/reports/:id/release-hold ends it early.
+   */
   legalHold: boolean;
+  /** End of the legal hold (epoch ms); null when not held. */
   preservedUntil: number | null;
   acknowledgedAt: number | null;
   decidedAt: number | null;
@@ -86,4 +91,11 @@ export interface LastRoom {
 export interface DeviceNetwork {
   ip: string | null;
   country: string | null;
+}
+
+/** A ban carried to the banned device's address for NETWORK_BAN_TTL_MS (see EnforcementService.activeForNetwork). */
+export interface NetworkBan {
+  restrictionId: string;
+  /** Epoch ms when the address is free again: the earlier of the ban's end and NETWORK_BAN_TTL_MS. */
+  until: number;
 }

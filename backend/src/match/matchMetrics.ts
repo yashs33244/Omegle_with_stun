@@ -21,6 +21,8 @@ export interface MatchMetrics {
   turnCredentialsTotal: Counter<"result">;
   turnSpendStepsTotal: Counter<"step">;
   turnSpendPollErrorsTotal: Counter;
+  /** Times the poller failed SPEND_FAILSAFE_AFTER_FAILURES polls in a row and stepped down blind. */
+  turnSpendFailsafeTotal: Counter;
   turnEgressGbToday: Gauge;
 }
 
@@ -98,6 +100,11 @@ export function createMatchMetrics(registry: Registry): MatchMetrics {
     turnSpendPollErrorsTotal: new Counter({
       name: "chizzy_turn_spend_poll_errors_total",
       help: "TURN spend poller failures (analytics API unreachable or malformed)",
+      registers,
+    }),
+    turnSpendFailsafeTotal: new Counter({
+      name: "chizzy_turn_spend_failsafe_total",
+      help: "Analytics outages long enough that the TURN spend poller applied its failsafe step-downs",
       registers,
     }),
     turnEgressGbToday: new Gauge({

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { HIDDEN } from "../../src/safety/constants";
-import { containsSlur, guardChat, guardName, nicknameFor, normalize } from "../../src/safety/guard";
+import { containsSlur, escapeRegExp, guardChat, guardName, nicknameFor, normalize } from "../../src/safety/guard";
 import { NAME_SLURS, SOLICITATION_PHRASES } from "../../src/safety/phrases";
 
 const DEVICE = "6f1c1f2e-8a8b-4c39-9b0e-6d2a6f1b9c11";
@@ -60,10 +60,27 @@ describe("chat guard redaction", () => {
     expect(on("see t.me/somebody").contactSharing).toBe(true);
   });
 
+  test("social host dots match only a literal dot", () => {
+    expect(on("see https://wa.me/123").contactSharing).toBe(true);
+    expect(on("see https://waxme/123").contactSharing).toBe(false);
+  });
+
   test("contact phrases flag contact sharing without hiding anything", () => {
     const r = on("give me your number");
     expect(r).toMatchObject({ redacted: false, contactSharing: true });
     expect(on("apna number do na").contactSharing).toBe(true);
+  });
+});
+
+describe("escapeRegExp", () => {
+  test("escapes every occurrence of every metacharacter, backslashes included", () => {
+    const inputs = ["a.b.c..d", String.raw`\\.\d`, "(a|b)*+?[x]{2}^$/-", String.raw`t.me\..*\\`];
+    for (const s of inputs) {
+      const re = new RegExp(`^${escapeRegExp(s)}$`);
+      expect(re.test(s)).toBe(true);
+      expect(re.test(s.replaceAll(".", "x"))).toBe(!s.includes("."));
+    }
+    expect(escapeRegExp(String.raw`a\b\c`)).toBe(String.raw`a\\b\\c`);
   });
 });
 

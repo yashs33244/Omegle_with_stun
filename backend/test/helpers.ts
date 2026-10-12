@@ -3,7 +3,7 @@
  * socket.io clients with small await helpers.
  */
 import { randomBytes, randomUUID } from "node:crypto";
-import { connect } from "node:net";
+import { connect, type Socket as NetSocket } from "node:net";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -39,10 +39,14 @@ export type Client = Socket<ServerToClientEvents, ClientToServerEvents>;
  */
 export function testConfig(overrides: Partial<Config> = {}): Config {
   return {
-    ...loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent", MAX_CONNECTIONS_PER_IP: "1000" }),
+    ...loadConfig({ NODE_ENV: "test", LOG_LEVEL: "silent", MAX_CONNECTIONS_PER_IP: "1000", MAX_CONNECTIONS_PER_NETWORK: "1000" }),
     requireSession: false,
     // Tests open many sockets from one address in quick succession.
     connectRatePerIp: { capacity: 1_000_000, refillPerSec: 1_000_000 },
+    connectRatePerNetwork: { capacity: 1_000_000, refillPerSec: 1_000_000 },
+    sessionRateTotal: { capacity: 1_000_000, refillPerSec: 1_000_000 },
+    // A busy test runner must not trip overload shedding; shedding tests inject a sampler.
+    loadSampleIntervalMs: 0,
     matchAcceptTimeoutMs: 400,
     matchAcceptGraceMs: 50,
     sweepIntervalMs: 20,
@@ -85,7 +89,12 @@ export interface TestServer {
 export async function startServer(
   overrides: Partial<Config> = {},
   store?: MatchStore,
-  deps: Pick<ServerDeps, "configureIo" | "fetch" | "restrictions" | "redis" | "flags" | "enforcement" | "billing"> = {},
+  deps: Partial<
+    Pick<
+      ServerDeps,
+      "configureIo" | "fetch" | "restrictions" | "redis" | "flags" | "enforcement" | "billing" | "photoBudgetBytes" | "loadSampler" | "now" | "logger" | "newRateLimiter"
+    >
+  > = {},
 ): Promise<TestServer> {
   // Each server gets its own evidence directory, removed on close.
   const evidenceDir = mkdtempSync(join(tmpdir(), "chizzy-evidence-"));
@@ -230,18 +239,26 @@ export const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * status line and body the server answered. A refused upgrade (per-IP cap,
  * connect rate, origin) is a 400 whose body names the reason; the Socket.IO
  * client only ever reports "websocket error" for it. On success the socket
- * is closed at once (the connection is counted and released server-side).
+ * is closed at once (the connection is counted and released server-side),
+ * unless `keepOpen`: then the accepted socket is returned and stays open
+ * without ever sending the Socket.IO CONNECT packet, until the caller destroys it.
  */
-export function rawUpgrade(ts: Pick<TestServer, "url">, headers: Record<string, string> = {}): Promise<{ status: number; body: string }> {
+export function rawUpgrade(
+  ts: Pick<TestServer, "url">,
+  headers: Record<string, string> = {},
+  opts: { keepOpen?: boolean } = {},
+): Promise<{ status: number; body: string; socket?: NetSocket }> {
   const { hostname, port } = new URL(ts.url);
   return new Promise((resolve, reject) => {
     const socket = connect({ host: hostname, port: Number(port) });
     let text = "";
     socket.on("error", reject);
     socket.on("data", (chunk: Buffer) => {
+      if (text.startsWith("HTTP/1.1 101")) return;
       text += chunk.toString();
       const status = Number(text.slice(9, 12));
       if (status === 101) {
+        if (opts.keepOpen) return resolve({ status, body: "", socket });
         socket.destroy();
         resolve({ status, body: "" });
         return;

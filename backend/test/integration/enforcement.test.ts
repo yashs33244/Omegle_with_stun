@@ -107,6 +107,8 @@ describe("report v2 over the socket", () => {
     expect(image.status).toBe(200);
     expect(image.headers.get("content-type")).toBe("image/jpeg");
     expect(image.headers.get("cache-control")).toBe("no-store");
+    expect(image.headers.get("content-disposition")).toBe(`attachment; filename="evidence-${ack.reportId}.jpg"`);
+    expect(image.headers.get("x-content-type-options")).toBe("nosniff");
     expect([...new Uint8Array(await image.arrayBuffer())]).toEqual([...bytes]);
     const audit = await adminJson<{ action: string; target: string; ip: string | null }[]>("/audit");
     expect(audit[0]).toMatchObject({ action: "report.view_evidence", target: ack.reportId });
@@ -289,8 +291,15 @@ describe("restrictions", () => {
       await fetch(`${ts.url}/api/restrictions/${res.restriction.id}?deviceId=${b.deviceId}`)
     ).json()) as RestrictionView;
     expect(view.evidenceFrame).toBeNull();
+    const release = (body: unknown) =>
+      admin(`/reports/${ack.reportId}/release-hold`, { method: "POST", body: JSON.stringify(body) });
+    expect((await release({ note: "x".repeat(2_001) })).status).toBe(400);
+    const released = await release({ note: "case closed" });
+    expect(released.status).toBe(200);
+    expect(await released.json()).toMatchObject({ id: ack.reportId, status: "escalated" });
+    expect((await release({})).status).toBe(409); // no hold left
     const audit = (await adminJson<{ action: string }[]>("/audit")).map((e) => e.action);
-    expect(audit).toEqual(expect.arrayContaining(["report.evidence_denied", "report.escalate_csam"]));
+    expect(audit).toEqual(expect.arrayContaining(["report.evidence_denied", "report.escalate_csam", "report.release_hold"]));
   });
 });
 

@@ -62,17 +62,28 @@ describe("loadConfig", () => {
     expect(a.trustCloudflare).toBe(false);
     expect(a.matchCapPerDevicePerHour).toBe(200);
     expect(a.matchCapPerIpPerHour).toBe(200);
+    expect(a.sessionNewDevicesPerNetworkPerDay).toBe(50);
+    expect(loadConfig({ SESSION_NEW_DEVICES_PER_NETWORK_PER_DAY: "500" }).sessionNewDevicesPerNetworkPerDay).toBe(500);
+    expect(() => loadConfig({ SESSION_NEW_DEVICES_PER_NETWORK_PER_DAY: "0" })).toThrow(/SESSION_NEW_DEVICES_PER_NETWORK_PER_DAY/);
   });
 
   test("production requires a long ADMIN_TOKEN", () => {
     expect(() => loadConfig({ ...PROD, ADMIN_TOKEN: undefined })).toThrow(/ADMIN_TOKEN/);
     expect(() => loadConfig({ ...PROD, ADMIN_TOKEN: "short" })).toThrow(/ADMIN_TOKEN: must be at least 24 characters/);
+    // 31 random-looking characters: fine outside production, refused in it.
+    const thirtyOne = "0123456789abcdefghijklmnopqrstu";
+    expect(() => loadConfig({ ...PROD, ADMIN_TOKEN: thirtyOne })).toThrow(/ADMIN_TOKEN: must be at least 32 characters in production/);
+    expect(loadConfig({ ADMIN_TOKEN: thirtyOne }).adminToken).toBe(thirtyOne);
+    expect(loadConfig({ ...PROD, ADMIN_TOKEN: `${thirtyOne}v` }).adminToken).toBe(`${thirtyOne}v`);
     expect(loadConfig({}).adminToken).toBeUndefined();
   });
 
   test("enforcement settings", () => {
-    const c = loadConfig({ ADMIN_ALLOWED_IPS: "203.0.113.1, 2001:db8::1", EVIDENCE_S3_BUCKET: "chizzy-evidence" });
-    expect(c.adminAllowedIps).toEqual(["203.0.113.1", "2001:db8::1"]);
+    const c = loadConfig({ ADMIN_ALLOWED_IPS: "203.0.113.1, 2001:db8::1, 198.51.100.0/24, 2001:db8:1::/48", EVIDENCE_S3_BUCKET: "chizzy-evidence" });
+    expect(c.adminAllowedIps).toEqual(["203.0.113.1", "2001:db8::1", "198.51.100.0/24", "2001:db8:1::/48"]);
+    for (const bad of ["example.com", "203.0.113.0/33", "2001:db8::/129", "203.0.113.0/", "203.0.113.0/24/8", "203.0.113.0/-1"]) {
+      expect(() => loadConfig({ ADMIN_ALLOWED_IPS: `203.0.113.1,${bad}` })).toThrow(/ADMIN_ALLOWED_IPS: invalid entry/);
+    }
     expect(c.evidenceDir).toBe("./data/evidence");
     expect(c.evidenceS3Bucket).toBe("chizzy-evidence");
     expect(c.reportAfterEndMs).toBe(60_000);
@@ -98,11 +109,13 @@ describe("loadConfig", () => {
     expect(Object.keys(env).sort()).toEqual(
       [
         "NODE_ENV", "PORT", "CORS_ORIGINS", "REDIS_URL", "TRUST_PROXY", "PROXY_IP_HEADER", "KEEPALIVE_URL", "RENDER_EXTERNAL_URL", "MAX_CONNECTIONS_PER_IP", "CONNECT_BURST_PER_IP", "CONNECT_RATE_PER_IP_PER_SEC",
+        "MAX_CONNECTIONS_PER_NETWORK", "CONNECT_BURST_PER_NETWORK", "CONNECT_RATE_PER_NETWORK_PER_SEC",
+        "MAX_CONNECTIONS_TOTAL", "SESSION_RATE_TOTAL_PER_SEC", "SHED_HEAP_LIMIT_MB", "NODE_OPTIONS",
         "MATCH_ACCEPT_TIMEOUT_MS", "STUN_URLS", "TURN_URLS", "TURN_SECRET", "TURN_USERNAME",
         "TURN_CREDENTIAL", "TURN_TTL_SECONDS", "LOG_LEVEL", "METRICS_TOKEN", "SHUTDOWN_GRACE_MS",
         "SESSION_SECRET", "SESSION_SECRET_PREVIOUS", "TURNSTILE_SECRET", "TURNSTILE_SITE_KEY",
         "TURNSTILE_DISABLED", "TRUST_CLOUDFLARE", "SESSION_RATE_PER_IP_PER_MIN",
-        "SESSION_RATE_PER_NETWORK_PER_MIN", "MATCH_CAP_PER_DEVICE_PER_HOUR", "MATCH_CAP_PER_IP_PER_HOUR", "MATCH_CAP_PER_DEVICE_PER_MIN",
+        "SESSION_RATE_PER_NETWORK_PER_MIN", "SESSION_NEW_DEVICES_PER_NETWORK_PER_DAY", "MATCH_CAP_PER_DEVICE_PER_HOUR", "MATCH_CAP_PER_IP_PER_HOUR", "MATCH_CAP_PER_DEVICE_PER_MIN",
         "SENTRY_DSN", "SENTRY_DSN_FRONTEND", "POSTHOG_KEY", "POSTHOG_HOST",
         "TURN_PROVIDER", "CF_TURN_KEY_ID", "CF_TURN_API_TOKEN", "TURN_CACHE_SECONDS", "TURN_MAX_PER_DEVICE_HOUR",
         "TURN_MAX_PER_IP_HOUR", "CF_ACCOUNT_ID", "CF_ANALYTICS_TOKEN", "TURN_SPEND_DAILY_GB",

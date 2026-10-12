@@ -38,6 +38,7 @@ import type {
   SimpleAck,
   UpdatePreferencesPayload,
 } from "../protocol";
+import { PHOTO_BUDGET_BYTES } from "../store/constants";
 import type { MatchStore, Room, Session, SessionProfile } from "../store/MatchStore";
 import { guardChat, guardName } from "../safety/guard";
 import { NUDGE_RISK, type SafetySignals } from "../safety/signals";
@@ -85,6 +86,8 @@ export interface MatchServiceDeps {
   billing: Pick<BillingService, "balance" | "earn" | "mayUseGenderFilter" | "walletView">;
   /** Injectable clock for tests. */
   now?: () => number;
+  /** Photo bytes this instance holds at most (PHOTO_BUDGET_BYTES); a test seam. */
+  photoBudgetBytes?: number;
 }
 
 /** Per-socket bookkeeping for sockets owned by this instance. */
@@ -131,6 +134,13 @@ export class MatchService implements RestrictionSink {
   private readonly now: () => number;
   private readonly local = new Map<string, LocalSocket>();
   /**
+   * Photo bytes stored for this instance's sockets, and their sum. A hello
+   * whose photo would take the sum past photoBudget is stored without it.
+   */
+  private readonly photoBytes = new Map<string, number>();
+  private photoTotal = 0;
+  private readonly photoBudget: number;
+  /**
    * Relaxation ladder progress of sessions THIS instance queued: the sweeper
    * marks a session dirty when its step goes up (so the incremental pass
    * retries it) and tells it with queue:waiting. Entries leave at the last step.
@@ -169,6 +179,7 @@ export class MatchService implements RestrictionSink {
     this.now = deps.now ?? Date.now;
     this.enforcement = deps.enforcement;
     this.billing = deps.billing;
+    this.photoBudget = deps.photoBudgetBytes ?? PHOTO_BUDGET_BYTES;
     this.enforcement?.setSink(this);
   }
 
@@ -251,6 +262,13 @@ export class MatchService implements RestrictionSink {
       if (restriction) return reply({ ok: false, error: "banned", restriction });
     }
     if (await this.store.getBan(deviceId)) return reply({ ok: false, error: "banned" });
+    // A socket without a session would join the queue: refuse a closed or
+    // full queue before any write below and before the match lock. admit()
+    // inside the lock checks again (and covers idle re-hellos).
+    if (!this.local.has(socketId)) {
+      const refused = await this.gate?.precheck();
+      if (refused) return reply({ ok: false, ...refused });
+    }
     if (ip) {
       await this.turn.rememberIp(deviceId, ip).catch((err: unknown) => this.log.warn({ err }, "remember ip failed"));
     }
@@ -261,6 +279,7 @@ export class MatchService implements RestrictionSink {
       payload.preferences.genderFilter !== "all" && !(await this.billing.mayUseGenderFilter(deviceId))
         ? { ...payload.preferences, genderFilter: "all" as const }
         : payload.preferences;
+    const ipKey = ip ? this.turn.ipKeyFor(ip) : undefined;
 
     await this.store.withLock(async () => {
       // The socket may have disconnected while we waited for the lock.
@@ -303,19 +322,34 @@ export class MatchService implements RestrictionSink {
           mode: payload.mode,
           state: "idle",
           connectedAt: now,
+          ...(ipKey && { ipKey }),
         };
         await this.store.setDeviceSocket(deviceId, socketId);
       } else {
         session.profile = profile;
         session.preferences = preferences;
         session.mode = payload.mode;
+        if (ipKey) session.ipKey = ipKey;
       }
       await this.store.putSession(session);
-      await this.store.setPhoto(socketId, photo ?? null);
+      this.releasePhoto(socketId);
+      const photoFits = photo !== undefined && this.photoTotal + photo.length <= this.photoBudget;
+      if (photoFits) {
+        this.photoBytes.set(socketId, photo.length);
+        this.photoTotal += photo.length;
+      }
+      await this.store.setPhoto(socketId, photoFits ? photo : null);
       this.local.set(socketId, this.local.get(socketId) ?? { deviceId });
 
       const coins = await this.billing.balance(deviceId);
-      reply({ ok: true, coins, iceServers: this.turn.stunServers(), mode: this.effectiveMode(payload.mode), genderFilter: preferences.genderFilter });
+      reply({
+        ok: true,
+        coins,
+        iceServers: this.turn.stunServers(),
+        mode: this.effectiveMode(payload.mode),
+        genderFilter: preferences.genderFilter,
+        ...(photo !== undefined && !photoFits && { photoDropped: "busy" as const }),
+      });
       this.emitter.emit(socketId, "wallet:update", await this.billing.walletView(deviceId));
 
       if (session.state === "idle" || session.state === "waiting") {
@@ -656,6 +690,7 @@ export class MatchService implements RestrictionSink {
 
   async disconnect(socketId: string): Promise<void> {
     this.local.delete(socketId);
+    this.releasePhoto(socketId);
     await this.store.withLock(async () => {
       // Again under the lock: a hello that held the lock may have re-added it.
       this.local.delete(socketId);
@@ -799,6 +834,7 @@ export class MatchService implements RestrictionSink {
           continue;
         }
         this.local.delete(socketId);
+        this.releasePhoto(socketId);
         this.log.warn({ socketId }, "local socket lost its session; disconnecting it");
         this.emitter.emit(socketId, "server:shutdown");
         this.emitter.disconnect(socketId);
@@ -882,18 +918,21 @@ export class MatchService implements RestrictionSink {
     }
     this.safety.callStarted(room.devices);
     this.log.info({ roomId: room.id }, "call started");
+    // getSessions answers in room.members order, which is room.devices order.
+    const ipKeys = sessions.map((s) => s?.ipKey ?? null);
     // Not awaited: it takes the lock again after the network calls.
-    void this.startCall(room);
+    void this.startCall(room, ipKeys);
   }
 
   /**
    * Per-call ICE servers (TURN credentials may need an API call) are fetched
    * without holding the matchmaking lock; call:start is then emitted under the
    * lock only if the room is still active, so it never follows match:ended.
+   * `ipKeys[i]` is the stored address key of room.members[i] (TURN per-IP cap).
    */
-  private async startCall(room: Room): Promise<void> {
+  private async startCall(room: Room, ipKeys: (string | null)[]): Promise<void> {
     try {
-      const [mediaA, mediaB] = await Promise.all(room.devices.map((d) => this.turn.callMedia(d)));
+      const [mediaA, mediaB] = await Promise.all(room.devices.map((d, i) => this.turn.callMedia(d, ipKeys[i] ?? null)));
       if (this.stopped) return;
       await this.store.withLock(async () => {
         const current = await this.store.getRoom(room.id);
@@ -1038,7 +1077,14 @@ export class MatchService implements RestrictionSink {
     await this.store.removeWaiting(session.socketId);
     this.relaxing.delete(session.socketId);
     await this.store.deleteSession(session.socketId);
+    this.releasePhoto(session.socketId);
     await this.store.clearDeviceSocket(session.deviceId, session.socketId);
+  }
+
+  /** Gives back the photo bytes counted for a socket (deleteSession drops the photo itself). */
+  private releasePhoto(socketId: string): void {
+    this.photoTotal -= this.photoBytes.get(socketId) ?? 0;
+    this.photoBytes.delete(socketId);
   }
 
   /** The device connected again elsewhere: retire the old socket. */

@@ -1,4 +1,6 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import AxeBuilder from "@axe-core/playwright";
 import type { Result } from "axe-core";
 import { devices, type Page } from "@playwright/test";
@@ -9,14 +11,25 @@ import { acceptMatch, expectMatchPrompt, onboard, openChat, passGate } from "./h
  * Runs axe-core (WCAG 2.1 AA) over every screen a stranger meets, on a phone
  * and on a desktop viewport. Serious and critical violations fail the test;
  * moderate ones are printed so they show up in the run log. Each audit is
- * also written to $A11Y_REPORT_DIR (default /tmp/chizzy-ui/a11y) as JSON.
+ * also written to $A11Y_REPORT_DIR (default: a fresh chizzy-a11y-* directory
+ * under the OS temp dir, logged on first use) as JSON.
  *
  * The second half checks the keyboard contract of the shared sheets: Escape
  * closes, focus returns to the opener, the dialog is named by its title.
  */
 
 const TAGS = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"];
-const REPORT_DIR = process.env.A11Y_REPORT_DIR || "/tmp/chizzy-ui/a11y";
+let reportDir: string | undefined;
+
+/** $A11Y_REPORT_DIR, or a private directory created once per worker. */
+function reportDirectory(): string {
+  if (!reportDir) {
+    reportDir = process.env.A11Y_REPORT_DIR || mkdtempSync(join(tmpdir(), "chizzy-a11y-"));
+    mkdirSync(reportDir, { recursive: true });
+    console.log(`axe reports: ${reportDir}`);
+  }
+  return reportDir;
+}
 
 const VIEWPORTS = {
   "pixel-7": devices["Pixel 7"].viewport,
@@ -49,9 +62,8 @@ async function audit(page: Page, viewport: ViewportName, state: string): Promise
     ),
   );
   const results = await new AxeBuilder({ page }).withTags(TAGS).analyze();
-  mkdirSync(REPORT_DIR, { recursive: true });
   writeFileSync(
-    `${REPORT_DIR}/axe-${viewport}-${state}.json`,
+    join(reportDirectory(), `axe-${viewport}-${state}.json`),
     JSON.stringify({ url: page.url(), viewport, state, violations: results.violations, incomplete: results.incomplete }, null, 2),
   );
   const moderate = results.violations.filter((v) => v.impact === "moderate" || v.impact === "minor");

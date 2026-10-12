@@ -4,8 +4,10 @@
  * Every variable is documented in backend/.env.example.
  */
 import { randomBytes, randomUUID } from "node:crypto";
+import { isIP } from "node:net";
 import { z } from "zod";
 import { MATCH_ENV, matchConfigFromEnv, refineMatchEnv, type MatchConfig } from "./match/matchConfig";
+import { LOAD_SAMPLE_INTERVAL_MS, SESSION_TOTAL_BURST_SECONDS } from "./shed/constants";
 
 const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace", "silent"] as const;
 
@@ -21,6 +23,24 @@ const bool = z
 
 const int = (min: number) => z.coerce.number().int().min(min);
 
+/** One ADMIN_ALLOWED_IPS entry: an IP literal (prefix null) or a CIDR block. */
+export interface IpRange {
+  address: string;
+  prefix: number | null;
+  type: "ipv4" | "ipv6";
+}
+
+/** Parses `203.0.113.7`, `203.0.113.0/24`, `2001:db8::1` or `2001:db8::/32`; null for anything else. */
+export function parseIpRange(entry: string): IpRange | null {
+  const [address = "", prefix, ...rest] = entry.split("/");
+  const version = isIP(address);
+  if (version === 0 || rest.length > 0) return null;
+  const type = version === 4 ? "ipv4" : "ipv6";
+  if (prefix === undefined) return { address, prefix: null, type };
+  if (!/^\d{1,3}$/.test(prefix) || Number(prefix) > (version === 4 ? 32 : 128)) return null;
+  return { address, prefix: Number(prefix), type };
+}
+
 /**
  * Headers that carry a client-controlled list (every hop appends), so the
  * first element is whatever the client sent. The proxy IP header must be one
@@ -33,6 +53,12 @@ const LIST_IP_HEADERS: Record<string, true> = { "x-forwarded-for": true, forward
  * them reach this floor with overwhelming probability.
  */
 const MIN_DISTINCT_SECRET_CHARS = 8;
+/**
+ * ADMIN_TOKEN length floor in production (characters): the admin API is open
+ * to the internet on Render, guarded by this token and the failure limits in
+ * http/constants.ts. 24 stays the floor elsewhere.
+ */
+const MIN_PRODUCTION_ADMIN_TOKEN_CHARS = 32;
 
 const envSchema = z
   .object({
@@ -47,6 +73,12 @@ const envSchema = z
     MAX_CONNECTIONS_PER_IP: int(1).default(10),
     CONNECT_BURST_PER_IP: int(1).default(20),
     CONNECT_RATE_PER_IP_PER_SEC: int(1).default(1),
+    MAX_CONNECTIONS_PER_NETWORK: int(1).default(40),
+    CONNECT_BURST_PER_NETWORK: int(1).default(60),
+    CONNECT_RATE_PER_NETWORK_PER_SEC: int(1).default(4),
+    MAX_CONNECTIONS_TOTAL: int(1).default(2000),
+    SESSION_RATE_TOTAL_PER_SEC: int(1).default(20),
+    SHED_HEAP_LIMIT_MB: int(64).optional(),
     MATCH_ACCEPT_TIMEOUT_MS: int(1000).default(30000),
     STUN_URLS: z.string().default("stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302"),
     TURN_URLS: z.string().optional(),
@@ -65,6 +97,7 @@ const envSchema = z
     TRUST_CLOUDFLARE: bool.default("false"),
     SESSION_RATE_PER_IP_PER_MIN: int(1).default(10),
     SESSION_RATE_PER_NETWORK_PER_MIN: int(1).default(60),
+    SESSION_NEW_DEVICES_PER_NETWORK_PER_DAY: int(1).default(50),
     MATCH_CAP_PER_DEVICE_PER_HOUR: int(1).default(200),
     MATCH_CAP_PER_IP_PER_HOUR: int(1).default(200),
     MATCH_CAP_PER_DEVICE_PER_MIN: int(1).default(20),
@@ -94,6 +127,12 @@ const envSchema = z
         path: ["ADMIN_TOKEN"],
         message: "is required in production (the admin API stays closed without it)",
       });
+    } else if (env.NODE_ENV === "production" && env.ADMIN_TOKEN && env.ADMIN_TOKEN.length < MIN_PRODUCTION_ADMIN_TOKEN_CHARS) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["ADMIN_TOKEN"],
+        message: `must be at least ${MIN_PRODUCTION_ADMIN_TOKEN_CHARS} characters in production (openssl rand -hex 32)`,
+      });
     }
     if (env.NODE_ENV === "production") {
       if (origins.length === 0) {
@@ -116,6 +155,15 @@ const envSchema = z
           code: z.ZodIssueCode.custom,
           path: ["CORS_ORIGINS"],
           message: `invalid origin "${origin}" (expected scheme://host[:port] without a path)`,
+        });
+      }
+    }
+    for (const entry of csv(env.ADMIN_ALLOWED_IPS)) {
+      if (!parseIpRange(entry)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["ADMIN_ALLOWED_IPS"],
+          message: `invalid entry "${entry}" (expected an IP address or a CIDR block such as 203.0.113.0/24, comma separated)`,
         });
       }
     }
@@ -250,6 +298,33 @@ export interface Config extends MatchConfig {
    */
   connectRatePerIp: { capacity: number; refillPerSec: number };
   /**
+   * Open connections and new connections per network (an IPv4 /24 or IPv6
+   * /48, session/geo.ts ipBuckets) on this instance, a few times the per-IP
+   * limits: one IPv6 allocation holds thousands of /64s, so without these it
+   * could fill MAX_CONNECTIONS_TOTAL. MAX_CONNECTIONS_PER_NETWORK,
+   * CONNECT_BURST_PER_NETWORK and CONNECT_RATE_PER_NETWORK_PER_SEC.
+   */
+  maxConnectionsPerNetwork: number;
+  connectRatePerNetwork: { capacity: number; refillPerSec: number };
+  /**
+   * Open Engine.IO connections on this instance, all clients together
+   * (shed/Shedder.ts). MAX_CONNECTIONS_TOTAL; the default leaves headroom on
+   * a 512 MB instance (docs/LIMITS.md, "Instance-wide limits and shedding").
+   */
+  maxConnectionsTotal: number;
+  /**
+   * POST /api/session per second on this instance, all clients together: a
+   * bucket of SESSION_TOTAL_BURST_SECONDS of SESSION_RATE_TOTAL_PER_SEC.
+   */
+  sessionRateTotal: { capacity: number; refillPerSec: number };
+  /** Heap budget for overload shedding (SHED_HEAP_LIMIT_MB); unset: derived, see shed/LoadMonitor.ts heapLimitBytes. */
+  shedHeapLimitMb?: number;
+  /**
+   * How often LoadMonitor samples; 0 never samples, so the instance never
+   * counts as overloaded. Not an env var; tests set 0 and inject a sampler.
+   */
+  loadSampleIntervalMs: number;
+  /**
    * A socket that has not sent a well-formed session:hello this long after
    * connecting is disconnected (realtime/socket.ts). Not an env var; the SPA
    * sends hello on connect, tests shrink it.
@@ -277,6 +352,8 @@ export interface Config extends MatchConfig {
   trustCloudflare: boolean;
   sessionRatePerIpPerMin: number;
   sessionRatePerNetworkPerMin: number;
+  /** Distinct new device ids (date-of-birth sessions) per IPv4 address or IPv6 /64 per UTC day. */
+  sessionNewDevicesPerNetworkPerDay: number;
   matchCapPerDevicePerHour: number;
   matchCapPerIpPerHour: number;
   /** Rooms a device may end itself (skip, decline) per minute before its re-queue is refused. */
@@ -345,7 +422,7 @@ export interface Config extends MatchConfig {
   /* Enforcement (src/enforcement). */
   /** Bearer token for /admin/api. Unset: the admin API answers 503 (never open). */
   adminToken?: string;
-  /** Exact client IPs allowed to use the admin API; empty allows any. */
+  /** Client IPs and CIDR blocks allowed to use the admin API (validated by parseIpRange); empty allows any. */
   adminAllowedIps: string[];
   /** Local evidence directory, used when no S3 bucket is set. */
   evidenceDir: string;
@@ -389,6 +466,15 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     keepaliveUrl: e.KEEPALIVE_URL ?? (e.RENDER_EXTERNAL_URL ? `${e.RENDER_EXTERNAL_URL.replace(/\/$/, "")}/healthz` : undefined),
     maxConnectionsPerIp: e.MAX_CONNECTIONS_PER_IP,
     connectRatePerIp: { capacity: e.CONNECT_BURST_PER_IP, refillPerSec: e.CONNECT_RATE_PER_IP_PER_SEC },
+    maxConnectionsPerNetwork: e.MAX_CONNECTIONS_PER_NETWORK,
+    connectRatePerNetwork: { capacity: e.CONNECT_BURST_PER_NETWORK, refillPerSec: e.CONNECT_RATE_PER_NETWORK_PER_SEC },
+    maxConnectionsTotal: e.MAX_CONNECTIONS_TOTAL,
+    sessionRateTotal: {
+      capacity: e.SESSION_RATE_TOTAL_PER_SEC * SESSION_TOTAL_BURST_SECONDS,
+      refillPerSec: e.SESSION_RATE_TOTAL_PER_SEC,
+    },
+    shedHeapLimitMb: e.SHED_HEAP_LIMIT_MB,
+    loadSampleIntervalMs: LOAD_SAMPLE_INTERVAL_MS,
     helloTimeoutMs: 30_000,
     stunUrls: csv(e.STUN_URLS),
     turnUrls: csv(e.TURN_URLS),
@@ -407,6 +493,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     trustCloudflare: e.TRUST_CLOUDFLARE,
     sessionRatePerIpPerMin: e.SESSION_RATE_PER_IP_PER_MIN,
     sessionRatePerNetworkPerMin: e.SESSION_RATE_PER_NETWORK_PER_MIN,
+    sessionNewDevicesPerNetworkPerDay: e.SESSION_NEW_DEVICES_PER_NETWORK_PER_DAY,
     matchCapPerDevicePerHour: e.MATCH_CAP_PER_DEVICE_PER_HOUR,
     matchCapPerIpPerHour: e.MATCH_CAP_PER_IP_PER_HOUR,
     matchCapPerDevicePerMin: e.MATCH_CAP_PER_DEVICE_PER_MIN,

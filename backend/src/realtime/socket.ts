@@ -1,6 +1,7 @@
 /**
- * Socket.IO server: transport limits, per-IP connection cap and connection
- * rate, per-session socket cap, the hello deadline, per-socket rate limits
+ * Socket.IO server: transport limits, instance-wide shedding, per-IP
+ * connection cap and connection rate, per-session socket cap, the hello
+ * deadline, per-socket rate limits
  * and the safe() wrapper that validates every payload and guarantees a
  * handler can never throw out of an event listener.
  */
@@ -34,8 +35,10 @@ import {
   type ServerToClientEvents,
 } from "../protocol";
 import { MAX_SOCKETS_PER_SESSION, SocketRateLimiter, TokenBucket, type EventClass } from "../rateLimit";
-import { requestIp, socketIp } from "../session/geo";
+import { IpBuckets } from "../http/public";
+import { ipBuckets, requestIp, socketIp } from "../session/geo";
 import { handshakeSession } from "../session/handshake";
+import { refuseUpgrade, type Shedder } from "../shed/Shedder";
 import { limitedParser } from "./limitedParser";
 
 export type AppServer = Server<ClientToServerEvents, ServerToClientEvents>;
@@ -56,12 +59,16 @@ export function originAllowed(origin: string | undefined, allowed: Config["corsO
 export type ConnectionRefusal = "too_many_connections" | "rate_limited";
 
 /**
- * Per-IP connection cap and connect rate, checked in allowRequest, i.e. on
+ * Per-IP connection cap and connect rate (keyed by subscriber: an IPv4
+ * address or an IPv6 /64, session/geo.ts ipBuckets), and the same per
+ * network (an IPv4 /24 or IPv6 /48), checked in allowRequest, i.e. on
  * the HTTP upgrade before any Engine.IO connection or Socket.IO client
  * exists. A refusal there is a plain HTTP 400 whose body names the reason
  * and costs nothing after it (the Socket.IO client only sees "websocket error"); a
  * namespace middleware refusal would leave the client's connection open for
- * connectTimeout and run the session gate (a store write) first.
+ * connectTimeout and run the session gate (a store write) first. The
+ * network limits stop one IPv6 allocation, thousands of /64s, from filling
+ * MAX_CONNECTIONS_TOTAL for everyone.
  *
  * Open connections are counted from the engine's "connection" event, which
  * ws fires in the same tick as allowRequest, so a burst from one address
@@ -69,20 +76,31 @@ export type ConnectionRefusal = "too_many_connections" | "rate_limited";
  */
 export class ConnectionGate {
   private readonly perIp = new Map<string, number>();
+  private readonly perNetwork = new Map<string, number>();
   private readonly connectRate = new Map<string, TokenBucket>();
+  /** Bounded like every per-key bucket map (http/public.ts IpBuckets). */
+  private readonly networkRate: IpBuckets;
   private lastPrune: number;
 
   constructor(
-    private readonly config: Pick<Config, "maxConnectionsPerIp" | "connectRatePerIp">,
+    private readonly config: Pick<
+      Config,
+      "maxConnectionsPerIp" | "connectRatePerIp" | "maxConnectionsPerNetwork" | "connectRatePerNetwork"
+    >,
     private readonly metrics: Pick<Metrics, "rateLimitedTotal">,
     private readonly now: () => number = Date.now,
   ) {
     this.lastPrune = now();
+    this.networkRate = new IpBuckets(config.connectRatePerNetwork, now);
   }
 
   /** Why a new connection from `ip` is refused, or null to let it through. */
-  admit(ip: string): ConnectionRefusal | null {
-    if ((this.perIp.get(ip) ?? 0) >= this.config.maxConnectionsPerIp) {
+  admit(rawIp: string): ConnectionRefusal | null {
+    const { ip, network } = ipBuckets(rawIp);
+    if (
+      (this.perIp.get(ip) ?? 0) >= this.config.maxConnectionsPerIp ||
+      (this.perNetwork.get(network) ?? 0) >= this.config.maxConnectionsPerNetwork
+    ) {
       this.metrics.rateLimitedTotal.inc({ event: "connection" });
       return "too_many_connections";
     }
@@ -99,29 +117,62 @@ export class ConnectionGate {
       bucket = new TokenBucket(this.config.connectRatePerIp, now);
       this.connectRate.set(ip, bucket);
     }
-    if (!bucket.take(now)) {
+    // IpBuckets keys anything that is not an address as given: the network key.
+    if (!bucket.take(now) || !this.networkRate.allow(network)) {
       this.metrics.rateLimitedTotal.inc({ event: "connection_rate" });
       return "rate_limited";
     }
     return null;
   }
 
-  opened(ip: string): void {
-    this.perIp.set(ip, (this.perIp.get(ip) ?? 0) + 1);
+  opened(rawIp: string): void {
+    const { ip, network } = ipBuckets(rawIp);
+    increment(this.perIp, ip);
+    increment(this.perNetwork, network);
   }
 
-  closed(ip: string): void {
-    const left = (this.perIp.get(ip) ?? 1) - 1;
-    if (left <= 0) this.perIp.delete(ip);
-    else this.perIp.set(ip, left);
+  closed(rawIp: string): void {
+    const { ip, network } = ipBuckets(rawIp);
+    decrement(this.perIp, ip);
+    decrement(this.perNetwork, network);
   }
 }
 
-export function createSocketServer(httpServer: HttpServer, config: Config, gate: ConnectionGate): AppServer {
-  const io = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
+function increment(counts: Map<string, number>, key: string): void {
+  counts.set(key, (counts.get(key) ?? 0) + 1);
+}
+
+function decrement(counts: Map<string, number>, key: string): void {
+  const left = (counts.get(key) ?? 1) - 1;
+  if (left <= 0) counts.delete(key);
+  else counts.set(key, left);
+}
+
+/**
+ * How long a connection that has not sent the Socket.IO CONNECT packet may
+ * stay open. Engine.IO counts it against MAX_CONNECTIONS_TOTAL without any
+ * session, so it is kept short; a real client sends CONNECT at once.
+ */
+export const CONNECT_TIMEOUT_MS = 5_000;
+
+/**
+ * `shed` runs first: while the instance sheds (overload, MAX_CONNECTIONS_TOTAL)
+ * the upgrade is answered 503 before any per-IP bucket is charged. The
+ * instance-wide count is the engine's own clientsCount, which counts every
+ * open Engine.IO connection, with or without a Socket.IO session yet.
+ */
+export function createSocketServer(httpServer: HttpServer, config: Config, gate: ConnectionGate, shed: Shedder): AppServer {
+  const io: AppServer = new Server<ClientToServerEvents, ServerToClientEvents>(httpServer, {
     cors: { origin: config.corsOrigins === "*" ? "*" : config.corsOrigins, methods: ["GET", "POST"] },
     allowRequest: (req, callback) => {
       if (!originAllowed(req.headers.origin, config.corsOrigins)) return callback("origin not allowed", false);
+      const shedding = shed.admitSocket(io.engine.clientsCount);
+      if (shedding) {
+        // allowRequest only runs for a websocket handshake, so req.socket is
+        // the raw upgrade socket; the engine's own 400 then finds it destroyed.
+        refuseUpgrade(req.socket, shedding);
+        return callback(shedding, false);
+      }
       const refused = gate.admit(requestIp(req.headers, req.socket.remoteAddress, config.proxyIpHeader));
       callback(refused, refused === null);
     },
@@ -133,7 +184,7 @@ export function createSocketServer(httpServer: HttpServer, config: Config, gate:
     parser: limitedParser(MAX_HTTP_BUFFER_SIZE),
     pingInterval: 20_000,
     pingTimeout: 20_000,
-    connectTimeout: 10_000,
+    connectTimeout: CONNECT_TIMEOUT_MS,
   });
   io.engine.on("connection", (conn: { request: IncomingMessage; on(event: "close", fn: () => void): void }) => {
     const ip = requestIp(conn.request.headers, conn.request.socket.remoteAddress, config.proxyIpHeader);
@@ -174,6 +225,8 @@ interface AttachDeps {
    * ConnectionGate applies in allowRequest on the HTTP upgrade.
    */
   handshake?: Parameters<AppServer["use"]>[0];
+  /** Clock for the session-expiry timer; injectable for tests. */
+  now?: () => number;
 }
 
 export interface Handlers {
@@ -188,6 +241,7 @@ export interface Handlers {
 export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
   const { config, service, logger, metrics, spark, captions } = deps;
   const newRateLimiter = deps.newRateLimiter ?? (() => new SocketRateLimiter());
+  const now = deps.now ?? Date.now;
   /** Open sockets per session (device id from the handshake token); unused when the gate is off. */
   const perSession = new Map<string, number>();
   const running = new Set<Promise<void>>();
@@ -258,6 +312,19 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
       clearTimeout(helloDeadline);
       helloDeadline = undefined;
     };
+    // The handshake checked the session token once; the socket must not
+    // outlive it. At its expiry the client is told to mint a new session
+    // (the packet is flushed before the close), then dropped.
+    const expiresAt = handshakeSession(socket)?.expiresAt;
+    let sessionExpiry: NodeJS.Timeout | undefined;
+    if (expiresAt !== undefined) {
+      sessionExpiry = setTimeout(() => {
+        sessionExpiry = undefined;
+        log.debug("session token expired");
+        socket.emit("server:error", { code: "session_expired", message: "session token expired" });
+        socket.disconnect(true);
+      }, Math.max(0, expiresAt - now()));
+    }
 
     const fail = (event: string, code: ErrorCode, ack?: (res: unknown) => void, message?: string) => {
       if (ack) ack({ ok: false, error: code, ...(message ? { message } : {}) });
@@ -350,6 +417,7 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
     on("caption:segment", "signal", captionSegmentSchema, (p) => captions.segment(socket.id, p));
 
     socket.on("disconnect", (reason) => {
+      clearTimeout(sessionExpiry);
       helloSeen();
       metrics.connectedSockets.dec();
       captions.forget(socket.id);

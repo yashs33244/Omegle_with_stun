@@ -51,6 +51,27 @@ cost, SLOs) is in [docs/OPERATIONS.md](docs/OPERATIONS.md); step-by-step
 pages are [docs/runbooks/rollback.md](docs/runbooks/rollback.md) and
 [docs/runbooks/release.md](docs/runbooks/release.md).
 
+### Render (production backend)
+
+`render.yaml` describes the backend service: one Free instance with 512 MB
+of memory and the in-memory store. Node 22 sizes V8's heap from the host's
+memory, not the instance's, so without a flag V8 would let the heap grow past
+512 MB and the instance would be OOM-killed before V8 collected hard or the
+overload shedding (`SHED_HEAP_LIMIT_MB`, below) tripped. The blueprint sets
+`NODE_OPTIONS=--max-old-space-size=320`: V8 then reports a `heap_size_limit`
+of about 368 MB (old space plus young generation), and the shedding budget is
+that limit, capped at 60% of the container's memory (307 MB) where the cgroup
+limit is visible to the process, so new sockets and sessions are refused from
+about 246 MB of heap (docs/LIMITS.md "Instance-wide limits and shedding").
+Raise the flag in `render.yaml` only together with a bigger plan.
+
+Set `ADMIN_ALLOWED_IPS` (your IPs or CIDR blocks; the blueprint asks for it
+with `sync: false`) or put Cloudflare Access in front of `/admin`: strongly
+recommended. Without either, the admin API is reachable from every address and
+guarded only by `ADMIN_TOKEN` and the bad-token limits, which one IPv6 /48
+(65,536 subscriber addresses) can spend in an hour: the owner is still judged
+by the token alone, but every guess costs nothing more than a fresh address.
+
 ### Repository settings the workflows rely on
 
 The jobs that publish something run in a GitHub deployment environment:
@@ -92,7 +113,7 @@ launch build"); the backend itself also refuses to start without them.
 |---|---|
 | `SESSION_SECRET` | HMAC key for session and age tokens (`openssl rand -hex 32`, at least 32 characters) |
 | `TURNSTILE_SITE_KEY`, `TURNSTILE_SECRET` | Cloudflare Turnstile widget for the SPA hostname. The secret verifies both the session gate and the takedown form; the site key is public (served by `/api/config`) |
-| `ADMIN_TOKEN` | bearer token for `/admin/api/*` (`openssl rand -hex 32`, at least 24 characters) |
+| `ADMIN_TOKEN` | bearer token for `/admin/api/*` (`openssl rand -hex 32`; at least 32 characters in production, the backend and the deploy refuse shorter) |
 | `PSEUDONYM_SALT` | salt for the pseudonymous device ids the admin console shows (`openssl rand -hex 32`). Strongly recommended: without it they are derived from `ADMIN_TOKEN` and all change when the token is rotated. Set it once and never change it; the deploy warns while it is empty |
 | `TURN_PROVIDER` | `cloudflare` |
 | `CF_TURN_KEY_ID`, `CF_TURN_API_TOKEN` | Cloudflare Realtime TURN key; the backend mints per-call credentials with it |
@@ -105,6 +126,7 @@ launch build"); the backend itself also refuses to start without them.
 | `SESSION_SECRET_PREVIOUS` | unset | previous `SESSION_SECRET`, still accepted during a rotation; clear it after 180 days |
 | `TURNSTILE_DISABLED` | `false` | skips Turnstile (session gate and takedown form). Staging and load tests only, never production |
 | `SESSION_RATE_PER_IP_PER_MIN`, `SESSION_RATE_PER_NETWORK_PER_MIN` | `10`, `60` | `POST /api/session` requests per minute per client IP and per /24 (IPv6 /48) network |
+| `SESSION_NEW_DEVICES_PER_NETWORK_PER_DAY` | `50` | distinct new device ids (date-of-birth sessions) per client IPv4 address or IPv6 /64 per UTC day; beyond it `POST /api/session` answers 429 `rate_limited`. Returning devices (age token) never count. Raise it if one carrier-NAT address legitimately brings more new users a day |
 | `MATCH_CAP_PER_DEVICE_PER_HOUR`, `MATCH_CAP_PER_IP_PER_HOUR` | `200`, `200` | matches per hour per device and per client IP |
 | `MATCH_CAP_PER_DEVICE_PER_MIN` | `20` | rooms a device may end itself (skip, decline) per minute before its re-queue is refused; being skipped never counts |
 | `CF_ACCOUNT_ID`, `CF_ANALYTICS_TOKEN` | unset | TURN spend poller (read-only Analytics token) |
@@ -113,7 +135,7 @@ launch build"); the backend itself also refuses to start without them.
 | `TURN_MAX_PER_DEVICE_HOUR`, `TURN_MAX_PER_IP_HOUR` | `20`, `100` | TURN credential sets per hour per device and per client IP |
 | `SENTRY_DSN`, `SENTRY_DSN_FRONTEND` | unset | Sentry projects for the backend and the SPA |
 | `POSTHOG_KEY`, `POSTHOG_HOST` | unset | PostHog Cloud project (cookieless) |
-| `ADMIN_ALLOWED_IPS` | unset | comma list of client IPs (exact match, no CIDRs) allowed to call the admin API, on top of the token |
+| `ADMIN_ALLOWED_IPS` | unset | comma list of client IPs and CIDR blocks (`203.0.113.7,198.51.100.0/24,2001:db8::/48`) allowed to call the admin API, on top of the token; an invalid entry stops the backend at startup. Unset in production logs `ADMIN API WARNING` at startup |
 | `EVIDENCE_S3_BUCKET`, `EVIDENCE_S3_REGION` | unset | evidence in S3 instead of the `evidence-data` volume (credentials from the instance role). The region is required with a bucket; the deploy stops without it |
 | `EVIDENCE_S3_KMS_KEY_ID` | unset (SSE-S3) | KMS key for SSE-KMS encryption of evidence objects |
 | `CLOUDFLARE_ONLY` | `false` | `true`: the gateway refuses requests that did not come through Cloudflare |
@@ -132,6 +154,11 @@ launch build"); the backend itself also refuses to start without them.
 | `LOG_LEVEL` | `info` | pino log level |
 | `MAX_CONNECTIONS_PER_IP` | `10` | Socket.IO connections allowed per client IP on each backend replica. Raise it if many users share one address (office NAT, mobile carrier NAT). Needs the real client IP, see [Behind Cloudflare](#cloudflare-in-front) |
 | `CONNECT_BURST_PER_IP`, `CONNECT_RATE_PER_IP_PER_SEC` | `20`, `1` | new socket connections per client IP on each replica: a burst, then a steady rate per second. Raise both only for load tests |
+| `MAX_CONNECTIONS_PER_NETWORK`, `CONNECT_BURST_PER_NETWORK`, `CONNECT_RATE_PER_NETWORK_PER_SEC` | `40`, `60`, `4` | the same per network (an IPv4 /24 or IPv6 /48) on each replica: open sockets, then a burst and a steady rate per second of new ones, so one IPv6 allocation cannot fill `MAX_CONNECTIONS_TOTAL`. Raise them with the per-IP ones for load tests or a large shared network |
+| `MAX_CONNECTIONS_TOTAL` | `2000` | open Socket.IO connections on each replica, all clients together; the next upgrade is answered `503 server_full`. About 17 KiB of heap per waiting socket (measured, [docs/LIMITS.md](docs/LIMITS.md#instance-wide-limits-and-shedding)), sized for a 512 MB instance |
+| `SESSION_RATE_TOTAL_PER_SEC` | `20` | `POST /api/session` per second on each replica, all clients together (a bucket of 5 s worth); over it `503 closed` with `Retry-After` |
+| `SHED_HEAP_LIMIT_MB` | unset | heap budget for overload shedding: above 80% of it, or with event-loop delay p99 over 200 ms, a replica refuses new sockets and sessions and `/readyz` answers 503 while live calls continue. Unset: V8's heap limit, capped at 60% of the container's memory |
+| `NODE_OPTIONS` | `--max-old-space-size=320` | Node flags for each replica. Node 22 sizes V8's heap from the host's memory, not the container's, so the default caps old space at 320 MB (`heap_size_limit` about 368 MB with the young generation); the shedding budget above then follows it. Raise it together with the replica memory limit in `docker-compose.yml` |
 | `MATCH_ACCEPT_TIMEOUT_MS` | `30000` | how long both users have to accept a match |
 | `SHUTDOWN_GRACE_MS` | `10000` | how long a replica drains on stop; keep it under the 15 s `stop_grace_period` in `docker-compose.yml` |
 | `STUN_URLS` | Google public STUN | comma list |
@@ -233,6 +260,21 @@ Also on Cloudflare: Turnstile (the site key and secret above), Realtime TURN
 front of `chizzyapi.itsyash.space/admin/api/*` and `chizzy.itsyash.space/admin`
 (free for small teams), so the admin console is not on the open internet even
 though it also needs `ADMIN_TOKEN`.
+
+Without Access or `ADMIN_ALLOWED_IPS` (the Render service today), the admin
+API is guarded by `ADMIN_TOKEN` and two failure limits per instance
+(`backend/src/http/constants.ts`), counted per subscriber address (an IPv4
+address or an IPv6 /64): 10 bad tokens lock an address out for 15 minutes,
+and once 100 bad tokens from all addresses together fall within an hour
+(logged once at error as `admin_auth_budget_exhausted`), one bad token is
+enough for the rest of that hour: every address with a failure in the window
+gets 429 with `Retry-After`, right token included, so each further guess
+costs the attacker a fresh address. An address without a failure (the owner)
+is still judged by its token alone, so guessers cannot lock the owner out,
+even once failures from 50,000 addresses fill the records (new failures are
+then not recorded; one IPv6 /48 has 65,536 addresses, so set
+`ADMIN_ALLOWED_IPS` or Access). What to do when the console
+answers 429 is in docs/OPERATIONS.md "Admin API".
 
 ## Cloudflare Pages (free, commercial use allowed)
 

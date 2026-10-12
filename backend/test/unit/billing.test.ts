@@ -371,7 +371,7 @@ describe("createBilling", () => {
     CORS_ORIGINS: "https://a.com",
     SESSION_SECRET: "0123456789abcdef0123456789abcdef",
     TURNSTILE_DISABLED: "true",
-    ADMIN_TOKEN: "admin-token-admin-token-admin",
+    ADMIN_TOKEN: "admin-token-admin-token-admin-token",
     RAZORPAY_KEY_ID: "rzp_live_x",
     RAZORPAY_KEY_SECRET: "secret",
     RAZORPAY_WEBHOOK_SECRET: "whsec",

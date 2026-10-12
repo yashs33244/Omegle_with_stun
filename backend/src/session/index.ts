@@ -7,13 +7,13 @@ import type Redis from "ioredis";
 import { Counter, type Registry } from "prom-client";
 import type { Config } from "../config";
 import type { FlagsReader } from "../flags/flags";
-import { createSessionRouter } from "../http/session";
+import { createSessionRouter, type SessionRouterDeps } from "../http/session";
 import type { Logger } from "../logger";
 import type { MatchStore } from "../store/MatchStore";
 import { startMatchingBroadcast } from "./broadcast";
 import { SALT_PURPOSE } from "./constants";
 import { sessionHandshake } from "./handshake";
-import { Lockout, MatchCaps, SessionRateLimiter, deriveSalt } from "./limits";
+import { Lockout, MatchCaps, NewDeviceCap, SessionRateLimiter, deriveSalt } from "./limits";
 import { MemoryKv } from "./MemoryKv";
 import { SessionQueueGate } from "./queueGate";
 import { RedisKv } from "./RedisKv";
@@ -35,19 +35,29 @@ export interface SessionFeatureDeps {
   redis?: Redis;
   fetch?: FetchLike;
   restrictions?: RestrictionChecker;
+  /** Instance-wide shedding in front of POST /api/session. */
+  shed: SessionRouterDeps["shed"];
+  /** Clock for tokens, windows and the handshake; tests inject one. */
+  now?: () => number;
 }
 
 export function createSessionFeature(deps: SessionFeatureDeps) {
   const { config, flags, logger } = deps;
+  const now = deps.now ?? Date.now;
   const secrets = [config.sessionSecret, ...(config.sessionSecretPrevious ? [config.sessionSecretPrevious] : [])];
   const tokens = new TokenSigner(secrets);
-  const kv = deps.redis ? new RedisKv(deps.redis) : new MemoryKv();
+  const kv = deps.redis ? new RedisKv(deps.redis) : new MemoryKv(now);
   const salt = deriveSalt(config.sessionSecret, SALT_PURPOSE.limits);
-  const caps = new MatchCaps(kv, salt, {
-    perDevicePerHour: config.matchCapPerDevicePerHour,
-    perIpPerHour: config.matchCapPerIpPerHour,
-    perDevicePerMinute: config.matchCapPerDevicePerMin,
-  });
+  const caps = new MatchCaps(
+    kv,
+    salt,
+    {
+      perDevicePerHour: config.matchCapPerDevicePerHour,
+      perIpPerHour: config.matchCapPerIpPerHour,
+      perDevicePerMinute: config.matchCapPerDevicePerMin,
+    },
+    now,
+  );
 
   const sessionRequests = new Counter({
     name: "chizzy_session_requests_total",
@@ -68,23 +78,38 @@ export function createSessionFeature(deps: SessionFeatureDeps) {
     lockout: new Lockout(
       kv,
       secrets.map((s) => deriveSalt(s, SALT_PURPOSE.lockout)),
+      now,
     ),
-    rateLimiter: new SessionRateLimiter(kv, salt, {
-      perIpPerMinute: config.sessionRatePerIpPerMin,
-      perNetworkPerMinute: config.sessionRatePerNetworkPerMin,
-    }),
+    rateLimiter: new SessionRateLimiter(
+      kv,
+      salt,
+      {
+        perIpPerMinute: config.sessionRatePerIpPerMin,
+        perNetworkPerMinute: config.sessionRatePerNetworkPerMin,
+      },
+      now,
+    ),
+    newDevices: new NewDeviceCap(kv, salt, config.sessionNewDevicesPerNetworkPerDay, now),
     logger,
     turnstileSecret: config.turnstileSecret,
     fetch: deps.fetch ?? (fetch as unknown as FetchLike),
     restrictions: deps.restrictions,
     onResult: (result) => sessionRequests.inc({ result }),
+    now,
   });
 
   return {
     tokens,
     caps,
     service,
-    router: createSessionRouter({ config, flags, service, logger, onRateLimited: () => sessionRequests.inc({ result: "rate_limited" }) }),
+    router: createSessionRouter({
+      config,
+      flags,
+      service,
+      logger,
+      shed: deps.shed,
+      onRateLimited: () => sessionRequests.inc({ result: "rate_limited" }),
+    }),
     handshake: sessionHandshake({
       tokens,
       flags,
@@ -93,6 +118,7 @@ export function createSessionFeature(deps: SessionFeatureDeps) {
       trustCloudflare: config.trustCloudflare,
       proxyIpHeader: config.proxyIpHeader,
       onReject: (code) => handshakeRejected.inc({ code }),
+      now,
     }),
     gate: new SessionQueueGate(flags, deps.store, caps, logger),
     startBroadcast: (io: Parameters<typeof startMatchingBroadcast>[0]) =>

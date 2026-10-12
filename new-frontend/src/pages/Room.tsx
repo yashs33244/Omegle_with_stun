@@ -581,6 +581,7 @@ const RoomSession: React.FC<RoomProps> = ({
               topics={profile.topics}
               relaxStep={state.relaxStep}
               online={state.online}
+              busyRetryAt={state.busyRetryAt}
               onRetry={signaling.retry}
               onSearch={signaling.search}
               onHome={onBackToHome}

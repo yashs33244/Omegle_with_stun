@@ -149,3 +149,52 @@ the owner should add the reasoning in a follow-up entry.
   ship as templates marked "Draft, pending legal review". Public launch waits
   for the lawyer (LAUNCH_PLAN exit criteria).
 - **Research recommendation.** The same (LB-1).
+
+---
+
+## 2026-10-12: address-level limits on fresh device ids
+
+Recorded by the identity hardening lane. Changes nothing decided in D-5; it
+narrows the evasion that D-5's residual risk describes, for the production
+setup at the time (one Render instance, `TURNSTILE_DISABLED=true`).
+
+### D-7. A ban reaches the banned device's address for 6 h; new device ids are capped per address per day
+
+- **Decision.** Two limits at `POST /api/session`, both keyed on a salted hash
+  of the client address (an IPv4 address or an IPv6 /64), never the address:
+  (a) a `ban` (24 h or longer, always an admin decision) also refuses new
+  sessions from the address the banned device last minted a session on, for
+  6 h (`NETWORK_BAN_TTL_MS`), or until the ban ends or is lifted; pauses and
+  warnings never reach the address. (b) At most 50 distinct new device ids
+  (date-of-birth sessions) per address per UTC day
+  (`SESSION_NEW_DEVICES_PER_NETWORK_PER_DAY`); returning devices renewing with
+  their age token never count.
+- **Problem.** Device ids are chosen by the client. Without Turnstile a script
+  could mint a session for a fresh id at the per-IP session rate (10 a minute,
+  14,400 a day) and so reset every per-device limit and step around a ban.
+- **Alternatives considered.** Keying bans on the /24 (IPv6 /48), as the
+  per-minute session limit does; a longer address ban (the ban's full length);
+  a lower daily cap (10); turning Turnstile on (the real fix, kept for when the
+  widget is configured, D-4).
+- **Reason for the decision.** On Indian mobile carrier NAT one IPv4 address
+  fronts many unrelated people (D-5), so the address is a weak and shared key.
+  The limits are therefore narrow: the smallest block (/32, /64), a short
+  window, only human bans, and a daily cap sized for a small app's new users
+  per address rather than for people per address. Users on that address who
+  already hold a 24 h session keep it; a returning device never meets the cap.
+- **Mitigations adopted.** Strangers caught by an address ban see the
+  restriction page without an appeal button and with the 6 h end time;
+  lifting the ban lifts the address at once; the cap is an env value the
+  operator can raise (docs/OPERATIONS.md); the address is stored only as a
+  salted hash.
+- **Residual risk.** Someone on the same carrier NAT as a banned user cannot
+  start a first session for up to 6 h. One abuser sharing a carrier-NAT
+  address can also use up the daily cap on purpose (50 date-of-birth
+  sessions with random device ids, about 5 minutes at the per-IP rate):
+  every other first visit from that address (new phone, cleared storage,
+  private window) is then refused until UTC midnight. The refusal carries
+  `Retry-After` up to midnight, existing sessions and age-token renewals are
+  unaffected, and it lasts at most one day, so it is accepted. A determined
+  evader with many addresses (mobile data toggling, VPNs) is slowed, not
+  stopped; Turnstile and an optional verified identity (D-5) remain the
+  stronger controls.

@@ -54,7 +54,7 @@ export interface SignalStore {
 
 export class MemorySignalStore implements SignalStore {
   private readonly risk = new Map<string, { points: number; expiresAt: number }>();
-  private readonly calls = new Map<string, CallStats>();
+  private readonly calls = new Map<string, CallStats & { expiresAt: number }>();
   private readonly low = new Map<string, number>();
   private readonly expiries = new Map<string, { count: number; expiresAt: number }>();
   private readonly cooldowns = new Map<string, number>();
@@ -71,16 +71,24 @@ export class MemorySignalStore implements SignalStore {
   }
 
   async recordCall(deviceId: string): Promise<void> {
-    const s = this.calls.get(deviceId) ?? { calls: 0, early: 0 };
-    s.calls++;
-    this.calls.set(deviceId, s);
+    this.touchCalls(deviceId).calls++;
   }
 
   async recordEarlySkip(deviceId: string): Promise<CallStats> {
-    const s = this.calls.get(deviceId) ?? { calls: 0, early: 0 };
+    const s = this.touchCalls(deviceId);
     s.early++;
+    return { calls: s.calls, early: s.early };
+  }
+
+  /** The device's live stats with the TTL refreshed, as the Redis hash's PEXPIRE on every write. */
+  private touchCalls(deviceId: string): CallStats & { expiresAt: number } {
+    const now = this.clock();
+    const current = this.calls.get(deviceId);
+    const s = current && current.expiresAt > now ? current : { calls: 0, early: 0, expiresAt: 0 };
+    s.expiresAt = now + CALLS_TTL_MS;
     this.calls.set(deviceId, s);
-    return { ...s };
+    if (this.calls.size > DEDUPE_MAX) for (const [k, v] of this.calls) if (v.expiresAt <= now) this.calls.delete(k);
+    return s;
   }
 
   async setLowPriority(deviceId: string, until: number): Promise<void> {

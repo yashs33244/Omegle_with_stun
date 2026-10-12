@@ -1,5 +1,5 @@
 /// <reference lib="webworker" />
-import type { WorkerRequest, WorkerResponse } from "../workerProtocol";
+import type { WorkerResponse } from "../workerProtocol";
 
 interface WorkerTask<R> {
   /** Loads the model; returns the backend name for the logs. */
@@ -10,7 +10,8 @@ interface WorkerTask<R> {
 /**
  * Wires a model into the worker message loop. Loading happens once; "run"
  * requests that arrive before it finishes wait for it. Requests are handled
- * one at a time, in order.
+ * one at a time, in order. This is a dedicated worker, so only the page that
+ * created it can post here; messages that are not a `WorkerRequest` are ignored.
  */
 export function serveWorker<R>(task: WorkerTask<R>): void {
   const scope = self as unknown as DedicatedWorkerGlobalScope;
@@ -32,20 +33,27 @@ export function serveWorker<R>(task: WorkerTask<R>): void {
     return loading;
   };
 
-  scope.onmessage = (e: MessageEvent<WorkerRequest>) => {
+  scope.onmessage = (e: MessageEvent<unknown>) => {
+    // A dedicated worker only hears its creating page: such messages carry an
+    // empty origin (or the page's own). Anything else is not ours.
+    if (e.origin !== "" && e.origin !== scope.location.origin) return;
     const msg = e.data;
+    if (typeof msg !== "object" || msg === null || !("type" in msg)) return;
     if (msg.type === "load") {
       ensureLoaded().catch(() => {
         // Reported through "load-error".
       });
       return;
     }
+    if (msg.type !== "run" || !("id" in msg) || !("image" in msg)) return;
+    const { id, image } = msg;
+    if (typeof id !== "number" || !(image instanceof ImageData)) return;
     chain = chain.then(async () => {
       try {
         await ensureLoaded();
-        post({ type: "result", id: msg.id, result: await task.run(msg.image) });
+        post({ type: "result", id, result: await task.run(image) });
       } catch (err) {
-        post({ type: "error", id: msg.id, message: err instanceof Error ? err.message : String(err) });
+        post({ type: "error", id, message: err instanceof Error ? err.message : String(err) });
       }
     });
   };

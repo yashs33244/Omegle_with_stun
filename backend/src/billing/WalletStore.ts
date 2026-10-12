@@ -8,9 +8,11 @@
  * balance plus their own keys for the rest:
  *   - MemoryWalletStore: single instance and tests.
  *   - RedisWalletStore (prefix `chizzy:wallet:`):
- *       ledger:{deviceId}   list of JSON WalletLedgerEntry, newest first, capped
- *       unlock:{deviceId}   hash feature -> expiresAt (epoch ms)
- *       once:{key}          idempotency marker, kept for good (a credited order never un-happens)
+ *       ledger:{deviceId}   list of JSON WalletLedgerEntry, newest first, capped; expires
+ *                           WALLET_IDLE_TTL_MS after the last entry
+ *       unlock:{deviceId}   hash feature -> expiresAt (epoch ms); expires WALLET_IDLE_TTL_MS
+ *                           after the latest unlock lapses
+ *       once:{key}          idempotency marker, kept CLAIM_TTL_MS (longer than any payment retry)
  *       order:{orderId}     JSON BillingOrderRecord; unpaid ones expire after UNPAID_ORDER_TTL_MS,
  *                           paid ones are kept for good (replays are decided from them)
  *       orders              zset orderId -> createdAt, capped
@@ -36,6 +38,19 @@ export const ORDERS_MAX = 2_000;
  * with a session could grow the order table forever. Paid orders never expire.
  */
 export const UNPAID_ORDER_TTL_MS = 24 * 60 * 60_000;
+const DAY_MS = 24 * 60 * 60_000;
+/**
+ * How long (ms) a credit claim (`once:` key) is kept. Razorpay retries a
+ * webhook for about a day and a client can re-verify a payment for as long as
+ * it keeps the ids, so two years is far past any replay of the same order.
+ */
+export const CLAIM_TTL_MS = 2 * 365 * DAY_MS;
+/**
+ * A device's ledger is dropped this long (ms) after its last entry, its
+ * unlocks this long after the latest one lapsed. The balance lives in the
+ * MatchStore coins hash and never expires.
+ */
+export const WALLET_IDLE_TTL_MS = 365 * DAY_MS;
 
 export interface WalletStore {
   /** Stored balance, or null if the device never had coins. */
@@ -54,7 +69,7 @@ export interface WalletStore {
   extendUnlock(deviceId: string, feature: PremiumFeature, ms: number, now: number): Promise<number>;
   listUnlocks(deviceId: string): Promise<Record<string, number>>;
 
-  /** True the first time `key` is claimed; false for every later call. Claims never expire. */
+  /** True the first time `key` is claimed; false for every later call within CLAIM_TTL_MS. */
   claimOnce(key: string): Promise<boolean>;
   /** Gives a claim back after the work it guarded failed, so a retry can credit. */
   releaseClaim(key: string): Promise<void>;
@@ -66,20 +81,42 @@ export interface WalletStore {
   listOrders(limit: number): Promise<BillingOrderRecord[]>;
 }
 
-/** KEYS[1] unlock hash, ARGV[1] feature, ARGV[2] ms, ARGV[3] now. Returns the new expiry. */
+/** Lua moving the unlock hash's expiry to WALLET_IDLE_TTL_MS (in ARGV[idleArg]) after its latest unlock. */
+const expireUnlocksLua = (idleArg: number) => `
+local latest = 0
+for _, v in ipairs(redis.call('HVALS', KEYS[1])) do
+  local n = tonumber(v) or 0
+  if n > latest then latest = n end
+end
+redis.call('PEXPIREAT', KEYS[1], latest + tonumber(ARGV[${idleArg}]))
+`;
+
+/** KEYS[1] unlock hash, ARGV[1] feature, ARGV[2] expiresAt, ARGV[3] idle ms. */
+const SET_UNLOCK_LUA = `
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+${expireUnlocksLua(3)}
+`;
+
+/** KEYS[1] unlock hash, ARGV[1] feature, ARGV[2] ms, ARGV[3] now, ARGV[4] idle ms. Returns the new expiry. */
 const EXTEND_UNLOCK_LUA = `
 local current = tonumber(redis.call('HGET', KEYS[1], ARGV[1]) or '0')
 local base = tonumber(ARGV[3])
 if current > base then base = current end
 local expires = base + tonumber(ARGV[2])
 redis.call('HSET', KEYS[1], ARGV[1], tostring(expires))
+${expireUnlocksLua(4)}
 return expires
 `;
 
 export class MemoryWalletStore implements WalletStore {
-  private readonly ledger = new Map<string, WalletLedgerEntry[]>();
-  private readonly unlocks = new Map<string, Record<string, number>>();
-  private readonly claims = new Set<string>();
+  /** deviceId -> entries and when they expire (epoch ms). */
+  private readonly ledger = new Map<string, { entries: WalletLedgerEntry[]; expiresAt: number }>();
+  /** deviceId -> feature expiries and when the record expires (epoch ms). */
+  private readonly unlocks = new Map<string, { features: Record<string, number>; expiresAt: number }>();
+  /** claim key -> expiry (epoch ms). */
+  private readonly claims = new Map<string, number>();
+  /** Expired entries are swept when a map reaches this size; it then doubles, so sweeps stay amortized O(1). */
+  private sweepAt = { ledger: 1_024, unlocks: 1_024, claims: 1_024 };
   private readonly orders = new Map<string, BillingOrderRecord>();
   /** orderId -> expiry (epoch ms) of every unpaid order, oldest first. */
   private readonly unpaid = new Map<string, number>();
@@ -98,37 +135,64 @@ export class MemoryWalletStore implements WalletStore {
   }
 
   async appendLedger(entry: WalletLedgerEntry): Promise<void> {
-    const list = this.ledger.get(entry.deviceId) ?? [];
-    list.unshift({ ...entry });
-    if (list.length > LEDGER_MAX) list.length = LEDGER_MAX;
-    this.ledger.set(entry.deviceId, list);
+    const entries = this.live(this.ledger, entry.deviceId)?.entries ?? [];
+    entries.unshift({ ...entry });
+    if (entries.length > LEDGER_MAX) entries.length = LEDGER_MAX;
+    this.ledger.set(entry.deviceId, { entries, expiresAt: this.now() + WALLET_IDLE_TTL_MS });
+    this.sweep("ledger", this.ledger, (v) => v.expiresAt);
   }
 
   async listLedger(deviceId: string, limit: number): Promise<WalletLedgerEntry[]> {
-    return (this.ledger.get(deviceId) ?? []).slice(0, limit).map((e) => ({ ...e }));
+    return (this.live(this.ledger, deviceId)?.entries ?? []).slice(0, limit).map((e) => ({ ...e }));
   }
 
   async getUnlock(deviceId: string, feature: PremiumFeature): Promise<number | null> {
-    return this.unlocks.get(deviceId)?.[feature] ?? null;
+    return this.live(this.unlocks, deviceId)?.features[feature] ?? null;
   }
 
   async setUnlock(deviceId: string, feature: PremiumFeature, expiresAt: number): Promise<void> {
-    this.unlocks.set(deviceId, { ...this.unlocks.get(deviceId), [feature]: expiresAt });
+    this.putUnlock(deviceId, feature, expiresAt);
   }
 
   async extendUnlock(deviceId: string, feature: PremiumFeature, ms: number, now: number): Promise<number> {
-    const expiresAt = Math.max(now, this.unlocks.get(deviceId)?.[feature] ?? 0) + ms;
-    this.unlocks.set(deviceId, { ...this.unlocks.get(deviceId), [feature]: expiresAt });
+    const expiresAt = Math.max(now, this.live(this.unlocks, deviceId)?.features[feature] ?? 0) + ms;
+    this.putUnlock(deviceId, feature, expiresAt);
     return expiresAt;
   }
 
   async listUnlocks(deviceId: string): Promise<Record<string, number>> {
-    return { ...this.unlocks.get(deviceId) };
+    return { ...this.live(this.unlocks, deviceId)?.features };
+  }
+
+  /** Sets one feature; the record expires WALLET_IDLE_TTL_MS after its latest unlock, as in Redis. */
+  private putUnlock(deviceId: string, feature: PremiumFeature, expiresAt: number): void {
+    const features = { ...this.live(this.unlocks, deviceId)?.features, [feature]: expiresAt };
+    this.unlocks.set(deviceId, { features, expiresAt: Math.max(...Object.values(features)) + WALLET_IDLE_TTL_MS });
+    this.sweep("unlocks", this.unlocks, (v) => v.expiresAt);
+  }
+
+  /** The record under `key` unless it has expired (then it is deleted). */
+  private live<V extends { expiresAt: number }>(map: Map<string, V>, key: string): V | undefined {
+    const value = map.get(key);
+    if (value && value.expiresAt <= this.now()) {
+      map.delete(key);
+      return undefined;
+    }
+    return value;
+  }
+
+  private sweep<V>(name: keyof MemoryWalletStore["sweepAt"], map: Map<string, V>, expiresAt: (value: V) => number): void {
+    if (map.size < this.sweepAt[name]) return;
+    const now = this.now();
+    for (const [key, value] of map) if (expiresAt(value) <= now) map.delete(key);
+    this.sweepAt[name] = Math.max(1_024, map.size * 2);
   }
 
   async claimOnce(key: string): Promise<boolean> {
-    if (this.claims.has(key)) return false;
-    this.claims.add(key);
+    const now = this.now();
+    if ((this.claims.get(key) ?? 0) > now) return false;
+    this.claims.set(key, now + CLAIM_TTL_MS);
+    this.sweep("claims", this.claims, (v) => v);
     return true;
   }
 
@@ -195,7 +259,7 @@ export class RedisWalletStore implements WalletStore {
 
   async appendLedger(entry: WalletLedgerEntry): Promise<void> {
     const key = `${this.prefix}ledger:${entry.deviceId}`;
-    await this.redis.multi().lpush(key, JSON.stringify(entry)).ltrim(key, 0, LEDGER_MAX - 1).exec();
+    await this.redis.multi().lpush(key, JSON.stringify(entry)).ltrim(key, 0, LEDGER_MAX - 1).pexpire(key, WALLET_IDLE_TTL_MS).exec();
   }
 
   async listLedger(deviceId: string, limit: number): Promise<WalletLedgerEntry[]> {
@@ -209,7 +273,7 @@ export class RedisWalletStore implements WalletStore {
   }
 
   async setUnlock(deviceId: string, feature: PremiumFeature, expiresAt: number): Promise<void> {
-    await this.redis.hset(`${this.prefix}unlock:${deviceId}`, feature, String(expiresAt));
+    await this.redis.eval(SET_UNLOCK_LUA, 1, `${this.prefix}unlock:${deviceId}`, feature, String(expiresAt), String(WALLET_IDLE_TTL_MS));
   }
 
   async extendUnlock(deviceId: string, feature: PremiumFeature, ms: number, now: number): Promise<number> {
@@ -220,6 +284,7 @@ export class RedisWalletStore implements WalletStore {
       feature,
       String(ms),
       String(now),
+      String(WALLET_IDLE_TTL_MS),
     );
     return Number(result);
   }
@@ -232,7 +297,7 @@ export class RedisWalletStore implements WalletStore {
   }
 
   async claimOnce(key: string): Promise<boolean> {
-    const res = await this.redis.set(`${this.prefix}once:${key}`, "1", "NX");
+    const res = await this.redis.set(`${this.prefix}once:${key}`, "1", "PX", CLAIM_TTL_MS, "NX");
     return res === "OK";
   }
 

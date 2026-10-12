@@ -2,15 +2,12 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Loader } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Banner } from "@/components/Banner";
-import { api as defaultApi, type Api } from "@/lib/api";
+import { ServerBusy } from "@/components/ServerBusy";
+import { api as defaultApi, type Api, type SessionReply } from "@/lib/api";
+import { Backoff } from "@/lib/backoff";
 import { getDeviceId } from "@/lib/device";
 import { initObservability, trackOnce } from "@/lib/observability";
-import type {
-  PublicConfig,
-  Restriction,
-  SessionRequest,
-  SessionResponse,
-} from "@/lib/protocol";
+import type { PublicConfig, Restriction, SessionRequest } from "@/lib/protocol";
 import {
   clearAgeToken,
   fingerprint as defaultFingerprint,
@@ -49,6 +46,8 @@ type View =
   | { kind: "passed" };
 
 const CLOSED_POLL_MS = 30_000;
+/** Automatic re-sends of POST /api/session after a transient refusal before the user is asked to retry. */
+const SESSION_AUTO_RETRIES = 5;
 
 /** Shown when the server refuses a device without sending the restriction itself. */
 function unknownRestriction(): Restriction {
@@ -98,8 +97,14 @@ export const Gate: React.FC<GateProps> = ({
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [turnstileReset, setTurnstileReset] = useState(0);
+  /** Local time of the next automatic POST /api/session while the server is busy. */
+  const [busyRetryAt, setBusyRetryAt] = useState<number | null>(null);
   const viewRef = useRef(view);
   viewRef.current = view;
+  const retries = useRef(new Backoff());
+  const retryTimer = useRef<number | undefined>(undefined);
+  /** A session request (with its automatic retries) is running. */
+  const sending = useRef(false);
 
   const loadConfig = useCallback(async (): Promise<PublicConfig | null> => {
     try {
@@ -132,16 +137,23 @@ export const Gate: React.FC<GateProps> = ({
     if (view.kind === "passed") trackOnce("gate_passed");
   }, [view.kind]);
 
-  // The socket rejected the session: ask again over the current page.
+  useEffect(() => () => window.clearTimeout(retryTimer.current), []);
+
+  // The socket rejected the session or it expired: get a new one over the current page.
   useEffect(
     () =>
-      onSessionInvalidated(() => {
-        if (viewRef.current.kind !== "passed" || !config) return;
+      onSessionInvalidated((reason) => {
+        if (viewRef.current.kind !== "passed" || !config || sending.current) return;
+        const ageToken = getAgeToken(config.tosVersion);
+        // An expired session needs no new answer from a returning device when
+        // the server asks for no Turnstile: mint the new token silently.
+        if (reason === "session_expired" && ageToken && !config.turnstileSiteKey) {
+          sending.current = true;
+          void sendRef.current({ ageToken, tosVersion: config.tosVersion }, undefined, config.tosVersion, true);
+          return;
+        }
         setFormError(null);
-        setReverify({
-          returning: getAgeToken(config.tosVersion) !== null,
-          notice: null,
-        });
+        setReverify({ returning: ageToken !== null, notice: null });
       }),
     [config],
   );
@@ -169,7 +181,7 @@ export const Gate: React.FC<GateProps> = ({
     setView(next);
   }, []);
 
-  const handleResponse = (res: SessionResponse, tosVersion: string) => {
+  const handleResponse = (res: SessionReply, tosVersion: string) => {
     if (res.ok) {
       saveSession(res, tosVersion);
       leave({ kind: "passed" });
@@ -208,8 +220,56 @@ export const Gate: React.FC<GateProps> = ({
     }
   };
 
+  /**
+   * POSTs the session request. A transient refusal (Retry-After on `closed`
+   * or `rate_limited`) is sent again after a jittered backoff while the page
+   * shows "busy, retrying"; a silent renewal also retries a network failure.
+   * Out of automatic tries, the user gets the form (an overlay if passed).
+   */
+  const send = async (
+    age: SessionRequest["age"],
+    turnstileToken: string | undefined,
+    tosVersion: string,
+    silent: boolean,
+  ): Promise<void> => {
+    let res: SessionReply | null;
+    try {
+      res = await api.createSession({
+        deviceId: getDeviceId(),
+        fingerprint: await fingerprint(),
+        ...(turnstileToken ? { turnstileToken } : {}),
+        age,
+      });
+    } catch {
+      res = null;
+    }
+    const retryAfterMs = res && !res.ok ? (res.retryAfterMs ?? null) : null;
+    const transient = res === null ? silent : retryAfterMs !== null;
+    if (transient && retries.current.failures < SESSION_AUTO_RETRIES) {
+      const at = retries.current.nextAttemptAt(retryAfterMs);
+      setBusyRetryAt(at);
+      retryTimer.current = window.setTimeout(() => void send(age, turnstileToken, tosVersion, silent), at - Date.now());
+      return;
+    }
+    retries.current.reset();
+    sending.current = false;
+    setBusyRetryAt(null);
+    setSubmitting(false);
+    if (res !== null && !transient) {
+      // A silent renewal that needs the user: open the overlay; handleResponse may replace it with a screen.
+      if (silent && !res.ok) setReverify({ returning: true, notice: null });
+      return handleResponse(res, tosVersion);
+    }
+    const rateLimited = res !== null && !res.ok && res.error === "rate_limited";
+    setFormError(t(res === null ? "errors.unreachable" : rateLimited ? "errors.rateLimited" : "errors.busy"));
+    setTurnstileReset((n) => n + 1);
+    if (silent) setReverify({ returning: true, notice: null });
+  };
+  const sendRef = useRef(send);
+  sendRef.current = send;
+
   const submit = async (input: GateSubmit) => {
-    if (!config || submitting) return;
+    if (!config || submitting || sending.current) return;
     const { tosVersion } = config;
     const ageToken = getAgeToken(tosVersion);
     let age: SessionRequest["age"];
@@ -217,24 +277,10 @@ export const Gate: React.FC<GateProps> = ({
     else if (ageToken) age = { ageToken, tosVersion };
     else return showForm({ returning: false, notice: "dobAgain" });
 
+    sending.current = true;
     setSubmitting(true);
     setFormError(null);
-    try {
-      const res = await api.createSession({
-        deviceId: getDeviceId(),
-        fingerprint: await fingerprint(),
-        ...(input.turnstileToken
-          ? { turnstileToken: input.turnstileToken }
-          : {}),
-        age,
-      });
-      handleResponse(res, tosVersion);
-    } catch {
-      setFormError(t("errors.unreachable"));
-      setTurnstileReset((n) => n + 1);
-    } finally {
-      setSubmitting(false);
-    }
+    await send(age, input.turnstileToken, tosVersion, false);
   };
 
   const showRestriction = useCallback(
@@ -254,18 +300,25 @@ export const Gate: React.FC<GateProps> = ({
     [config, showRestriction, loadConfig],
   );
 
+  const busy = busyRetryAt !== null && (
+    <ServerBusy retryAt={busyRetryAt} className="mb-4 rounded border-2 border-black bg-yellow-100 p-3 text-center text-black" />
+  );
+
   const form = (state: FormState) => (
-    <GateForm
-      key={`${state.returning}-${state.notice ?? ""}`}
-      siteKey={config?.turnstileSiteKey ?? null}
-      returning={state.returning}
-      notice={state.notice}
-      submitting={submitting}
-      error={formError}
-      turnstileReset={turnstileReset}
-      onSubmit={(input) => void submit(input)}
-      onTurnstileError={() => setFormError(t("errors.turnstile"))}
-    />
+    <>
+      {busy}
+      <GateForm
+        key={`${state.returning}-${state.notice ?? ""}`}
+        siteKey={config?.turnstileSiteKey ?? null}
+        returning={state.returning}
+        notice={state.notice}
+        submitting={submitting}
+        error={formError}
+        turnstileReset={turnstileReset}
+        onSubmit={(input) => void submit(input)}
+        onTurnstileError={() => setFormError(t("errors.turnstile"))}
+      />
+    </>
   );
 
   let content: React.ReactNode;
@@ -340,6 +393,14 @@ export const Gate: React.FC<GateProps> = ({
               <div className="w-full max-w-md rounded-lg border-2 border-black bg-white p-6 shadow-md">
                 {form(reverify)}
               </div>
+            </div>
+          )}
+          {!reverify && busyRetryAt !== null && (
+            <div className="pointer-events-none fixed inset-x-0 bottom-4 z-[70] flex justify-center px-4">
+              <ServerBusy
+                retryAt={busyRetryAt}
+                className="rounded-lg border-2 border-black bg-yellow-100 px-4 py-3 text-center text-black shadow-md"
+              />
             </div>
           )}
         </>

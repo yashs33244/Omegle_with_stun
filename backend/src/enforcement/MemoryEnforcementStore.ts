@@ -105,6 +105,15 @@ export class MemoryEnforcementStore implements EnforcementStore {
     return rangeOf(this.indexes.get(index), opts);
   }
 
+  async indexCount(index: string, opts: Pick<RangeOptions, "min" | "max"> = {}): Promise<number> {
+    const scores = this.indexes.get(index);
+    if (!scores) return 0;
+    if (opts.min === undefined && opts.max === undefined) return scores.size;
+    let n = 0;
+    for (const s of scores.values()) if (inRange(s, opts)) n++;
+    return n;
+  }
+
   async claim(key: string, ttlMs: number): Promise<boolean> {
     if (this.live(this.values, `claim:${key}`)) return false;
     this.values.set(`claim:${key}`, { value: 1, expiresAt: Date.now() + ttlMs });

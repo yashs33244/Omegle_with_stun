@@ -7,8 +7,9 @@
  *   node scripts/loadtest/loadtest.ts --url http://127.0.0.1:3004 --users 200
  *
  * The target needs: TURNSTILE_DISABLED=true (or test keys), a high
- * MAX_CONNECTIONS_PER_IP and relaxed per-IP session limits, because every
- * virtual user comes from this one machine. Never point it at production.
+ * MAX_CONNECTIONS_PER_IP and MAX_CONNECTIONS_PER_NETWORK, raised connect rates
+ * and relaxed per-IP session limits, because every virtual user comes from
+ * this one machine. Never point it at production.
  */
 import { writeFileSync } from "node:fs";
 import { monitorEventLoopDelay } from "node:perf_hooks";

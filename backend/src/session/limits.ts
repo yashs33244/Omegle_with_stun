@@ -1,5 +1,6 @@
 /**
- * Under-18 lockouts, per-IP session rate limits and hourly match caps.
+ * Under-18 lockouts, per-IP session rate limits, the daily new-device cap
+ * per address and hourly match caps.
  *
  * Nothing here stores a raw IP address or fingerprint: keys are salted
  * SHA-256 HMACs, with the salt derived from SESSION_SECRET. Every salt in the
@@ -14,6 +15,7 @@ import {
   MATCH_CAP_IP_BINDING_TTL_MS,
   MATCH_CAP_MINUTE_WINDOW_MS,
   MATCH_CAP_WINDOW_MS,
+  NEW_DEVICE_WINDOW_MS,
   SALT_DOMAIN,
   SESSION_RATE_WINDOW_MS,
 } from "./constants";
@@ -83,6 +85,44 @@ export class SessionRateLimiter {
       this.kv.incr(KEY.networkRate(saltedHash(this.salt, network), window), SESSION_RATE_WINDOW_MS),
     ]);
     return perIp <= this.limits.perIpPerMinute && perNet <= this.limits.perNetworkPerMinute;
+  }
+}
+
+/**
+ * Distinct new device ids per subscriber address (IPv4 address or IPv6 /64)
+ * per UTC day. Device ids are client-chosen, so without Turnstile a script
+ * could mint a fresh id per session and reset every per-device limit; this
+ * bounds that to `perNetworkPerDay` ids. A device repeating its date of birth
+ * the same day counts once. Concurrent first requests may overshoot by a few:
+ * a ceiling, not an exact count.
+ */
+export class NewDeviceCap {
+  constructor(
+    private readonly kv: SessionKv,
+    private readonly salt: Uint8Array,
+    private readonly perNetworkPerDay: number,
+    private readonly clock: () => number = Date.now,
+  ) {}
+
+  async admit(deviceId: string, rawIp: string): Promise<boolean> {
+    const now = this.clock();
+    const day = Math.floor(now / NEW_DEVICE_WINDOW_MS);
+    // Keys die with their window, so the memory store holds at most one day.
+    const ttl = (day + 1) * NEW_DEVICE_WINDOW_MS - now;
+    const net = saltedHash(this.salt, ipBuckets(rawIp).ip);
+    const seenKey = KEY.newDeviceSeen(net, day, saltedHash(this.salt, `device:${deviceId}`));
+    const [seen, count] = await this.kv.mget([seenKey, KEY.newDevices(net, day)]);
+    if (seen !== null) return true;
+    if (Number(count ?? 0) >= this.perNetworkPerDay) return false;
+    await this.kv.incr(KEY.newDevices(net, day), ttl);
+    await this.kv.set(seenKey, "1", ttl);
+    return true;
+  }
+
+  /** Whole seconds until the window resets (UTC midnight): the Retry-After of a refusal. */
+  retryAfterSec(): number {
+    const now = this.clock();
+    return Math.ceil((NEW_DEVICE_WINDOW_MS - (now % NEW_DEVICE_WINDOW_MS)) / 1000);
   }
 }
 

@@ -34,7 +34,8 @@
     "rateLimited": "Too many tries. Wait a minute and try again.",
     "invalid": "We could not accept that. Check your date of birth and try again.",
     "unreachable": "Cannot reach Chizzy. Check your connection and try again.",
-    "turnstile": "The security check could not load. Check your connection and try again."
+    "turnstile": "The security check could not load. Check your connection and try again.",
+    "busy": "Chizzy is very busy right now. Wait a minute and try again."
   },
   "reverify": {
     "aria": "Confirm to continue"

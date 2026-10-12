@@ -150,6 +150,7 @@ jobs:
       ADMIN_TOKEN: ci-e2e-admin-token-not-used-in-production
       SESSION_RATE_PER_IP_PER_MIN: "10000"
       SESSION_RATE_PER_NETWORK_PER_MIN: "10000"
+      SESSION_NEW_DEVICES_PER_NETWORK_PER_DAY: "10000"
       MATCH_CAP_PER_DEVICE_PER_HOUR: "10000"
       MATCH_CAP_PER_IP_PER_HOUR: "10000"
     steps:
@@ -254,6 +255,7 @@ jobs:
       # Every browser reaches the gateway from the same Docker bridge address.
       SESSION_RATE_PER_IP_PER_MIN: "10000"
       SESSION_RATE_PER_NETWORK_PER_MIN: "10000"
+      SESSION_NEW_DEVICES_PER_NETWORK_PER_DAY: "10000"
       MATCH_CAP_PER_DEVICE_PER_HOUR: "10000"
       MATCH_CAP_PER_IP_PER_HOUR: "10000"
     steps:

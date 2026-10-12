@@ -65,6 +65,12 @@ export const MATCH_CAP_WINDOW_MS = HOUR_MS;
 export const MATCH_CAP_MINUTE_WINDOW_MS = MINUTE_MS;
 /** The device -> IP-hash binding made at the handshake lives this long (ms). */
 export const MATCH_CAP_IP_BINDING_TTL_MS = DAY_MS;
+/**
+ * Distinct new device ids (a date-of-birth session, the only way to get an age
+ * token for a fresh id) per subscriber address (`SESSION_NEW_DEVICES_PER_NETWORK_PER_DAY`,
+ * config.ts) are counted in fixed UTC-day windows of this length (ms).
+ */
+export const NEW_DEVICE_WINDOW_MS = DAY_MS;
 /** Domain separator for salts derived from SESSION_SECRET. */
 export const SALT_DOMAIN = "chizzy:salt:";
 /** Salt purposes: one salt per use so hashes of one table never match another. */
@@ -84,6 +90,8 @@ export const KEY = {
   capDevice: (deviceId: string, hour: number) => `cap:d:${deviceId}:${hour}`,
   capDeviceMinute: (deviceId: string, minute: number) => `cap:dm:${deviceId}:${minute}`,
   capIp: (ipHash: string, hour: number) => `cap:i:${ipHash}:${hour}`,
+  newDevices: (ipHash: string, day: number) => `nd:n:${ipHash}:${day}`,
+  newDeviceSeen: (ipHash: string, day: number, deviceHash: string) => `nd:d:${ipHash}:${day}:${deviceHash}`,
 } as const;
 
 /* ------------------------------------------------------------------ */

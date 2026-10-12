@@ -1,8 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
-import type { Api } from "@/lib/api";
+import type { Api, SessionReply } from "@/lib/api";
 import type { PublicConfig, Restriction, SessionRequest, SessionResponse } from "@/lib/protocol";
 import {
   getSessionToken,
@@ -43,7 +43,7 @@ const okSession = (token = "session-1"): SessionResponse => ({
   country: "IN",
 });
 
-function fakeApi(cfg: PublicConfig | (() => PublicConfig), sessions: SessionResponse[] = [okSession()]) {
+function fakeApi(cfg: PublicConfig | (() => PublicConfig), sessions: SessionReply[] = [okSession()]) {
   const requests: SessionRequest[] = [];
   const api: Api = {
     getConfig: vi.fn(async () => (typeof cfg === "function" ? cfg() : cfg)),
@@ -80,6 +80,10 @@ beforeEach(() => {
   localStorage.clear();
   resetSessionStateForTests();
   delete window.turnstile;
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("Gate", () => {
@@ -124,7 +128,10 @@ describe("Gate", () => {
     });
     expect(requests[0]).not.toHaveProperty("turnstileToken");
     expect(getSessionToken()).toBe("session-1");
-    expect(JSON.stringify(localStorage)).not.toContain("1999");
+    // The date of birth is never stored. The device id is a random UUID that can contain "1999" by chance.
+    expect(JSON.stringify(localStorage)).not.toContain("1999-03-07");
+    const stored = Object.entries(localStorage).filter(([key]) => key !== "chizzy:deviceId");
+    expect(JSON.stringify(stored)).not.toContain("1999");
   });
 
   it("lets a returning device with a valid session straight through", async () => {
@@ -253,6 +260,78 @@ describe("Gate", () => {
     await expect(next).resolves.toBe("session-2");
     await waitFor(() => expect(overlay).not.toBeInTheDocument());
     expect(requests[0]?.age).toEqual({ ageToken: "age-1", tosVersion: TOS });
+  });
+
+  it("renews an expired session without asking, waiting out a busy server's Retry-After", async () => {
+    saveSession(okSession() as Extract<SessionResponse, { ok: true }>, TOS);
+    const { api, requests } = fakeApi(config(), [{ ok: false, error: "closed", retryAfterMs: 3_000 }, okSession("session-2")]);
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    renderGate(api);
+    expect(await screen.findByTestId("app")).toBeInTheDocument();
+    vi.useFakeTimers();
+
+    const next = waitForSession();
+    await act(async () => {
+      invalidateSession("session_expired");
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(requests).toHaveLength(1);
+    expect(screen.getByTestId("server-busy")).toHaveTextContent("Chizzy is busy right now");
+    expect(screen.getByTestId("server-busy")).toHaveTextContent("Next try in 3 s");
+    await act(() => vi.advanceTimersByTimeAsync(2_999));
+    expect(requests).toHaveLength(1);
+    await act(() => vi.advanceTimersByTimeAsync(1));
+
+    await expect(next).resolves.toBe("session-2");
+    expect(requests[1]).toEqual(requests[0]);
+    expect(requests[1]).toMatchObject({ age: { ageToken: "age-1", tosVersion: TOS } });
+    expect(screen.queryByTestId("gate-reverify")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("server-busy")).not.toBeInTheDocument();
+    expect(screen.getByTestId("app")).toBeInTheDocument();
+  });
+
+  it("re-sends the first session request while the server answers busy, then lets the visitor in", async () => {
+    const user = userEvent.setup();
+    const { api, requests } = fakeApi(config(), [{ ok: false, error: "closed", retryAfterMs: 2_000 }, okSession()]);
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    renderGate(api);
+    await fillDob(user, "7", "3", "1999");
+    vi.useFakeTimers();
+
+    fireEvent.click(screen.getByTestId("gate-continue"));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(screen.getByTestId("server-busy")).toBeInTheDocument();
+    expect(screen.getByTestId("gate-continue")).toBeDisabled();
+    expect(screen.queryByTestId("app")).not.toBeInTheDocument();
+
+    await act(() => vi.advanceTimersByTimeAsync(2_000));
+    expect(screen.getByTestId("app")).toBeInTheDocument();
+    expect(requests).toHaveLength(2);
+    expect(requests[1]).toEqual(requests[0]);
+  });
+
+  it("gives the form back after five busy answers in a row; the kill switch still pauses", async () => {
+    const user = userEvent.setup();
+    const busy = { ok: false as const, error: "closed" as const, retryAfterMs: 1_000 };
+    const { api, requests } = fakeApi(config(), [busy, busy, busy, busy, busy, busy, { ok: false, error: "closed" }]);
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    renderGate(api);
+    await fillDob(user, "7", "3", "1999");
+    vi.useFakeTimers();
+
+    fireEvent.click(screen.getByTestId("gate-continue"));
+    await act(() => vi.advanceTimersByTimeAsync(120_000));
+    expect(requests).toHaveLength(6);
+    expect(screen.queryByTestId("server-busy")).not.toBeInTheDocument();
+    expect(screen.getByTestId("gate-error")).toHaveTextContent("Chizzy is very busy right now");
+    expect(screen.getByTestId("gate-continue")).toBeEnabled();
+
+    // `closed` without Retry-After is the kill switch: no automatic retry.
+    fireEvent.click(screen.getByTestId("gate-continue"));
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(requests).toHaveLength(7);
+    expect(screen.queryByTestId("server-busy")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("gate-form")).not.toBeInTheDocument();
   });
 
   it("shows the operator banner from the config", async () => {

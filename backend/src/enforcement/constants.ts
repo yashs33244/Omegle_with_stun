@@ -104,6 +104,15 @@ export const DEVICE_TTL_MS = YEAR;
 export const FINGERPRINT_TTL_MS = 180 * DAY;
 /** Network facts (IP, country) for CSAM packets are kept this long (ms). */
 export const NETWORK_TTL_MS = DAY;
+/**
+ * A `ban` (24 h or longer, always a human decision) also refuses new sessions
+ * from the address the banned device last minted a session on (IPv4 address
+ * or IPv6 /64, as a salted hash) for this long (ms), so the banned person
+ * cannot come straight back under a fresh device id. Kept short because one
+ * carrier-NAT address is shared by many strangers; their session tokens
+ * already issued keep working.
+ */
+export const NETWORK_BAN_TTL_MS = 6 * HOUR;
 /** A finished room stays reportable for reportAfterEndMs plus this grace (ms) for clock skew. */
 export const LAST_ROOM_GRACE_MS = 5_000;
 /** Default for EnforcementDeps.reportAfterEndMs (ms) when the caller passes none. */
@@ -122,10 +131,16 @@ export const TAKEDOWNS_PER_IP_PER_HOUR = 5;
 
 /** Most recent records returned by the admin list endpoints. */
 export const ADMIN_LIST_LIMIT = 500;
+/** An admin Idempotency-Key is remembered this long (ms); a repeat inside it is refused, not applied. */
+export const ADMIN_IDEMPOTENCY_TTL_MS = DAY;
 
 /** Records (and evidence) are deleted this long (ms) after they stopped mattering. */
 export const RETENTION_MS = YEAR;
-/** Escalated (CSAM) evidence is frozen for at least this long (ms). */
+/**
+ * Escalated (CSAM) evidence is frozen for at least this long (ms) from the
+ * last escalation: the report's `preservedUntil`. Escalating again renews
+ * it; once it passes, the hold no longer keeps the report from retention.
+ */
 export const CSAM_PRESERVE_MS = YEAR;
 /** The retention sweeper checks for a daily claim this often (ms). */
 export const RETENTION_CHECK_INTERVAL_MS = HOUR;
@@ -170,7 +185,11 @@ export const KEY = {
   appealDeviceRate: (deviceId: string) => `appeal-dev:${deviceId}`,
   appealClaim: (restrictionId: string) => `appeal:${restrictionId}`,
   takedownIpRate: (network: string) => `takedown-ip:${network}`,
+  /** `network` is the salted address hash (EnforcementService.network) of a banned device; holds a NetworkBan. */
+  networkBan: (network: string) => `ban-net:${network}`,
   retentionClaim: (day: number) => `retention:${day}`,
+  /** Admin Idempotency-Key claims (`<action>:<target>:<key>`). */
+  adminRequest: (key: string) => `admin-req:${key}`,
   /** Reports against a device, scored by creation time. */
   reportsAgainst: (deviceId: string) => `against:${deviceId}`,
   /** Restrictions of a device, scored by creation time. */
@@ -185,6 +204,7 @@ export const AUDIT_ACTION = {
   evidenceDenied: "report.evidence_denied",
   viewEvidence: "report.view_evidence",
   escalateCsam: "report.escalate_csam",
+  releaseHold: "report.release_hold",
   resolveTakedown: "takedown.resolve",
 } as const;
 
@@ -213,3 +233,5 @@ export const EVIDENCE_AREA = { general: "general", restricted: "restricted" } as
 export const EVIDENCE_DIR_MODE = 0o700;
 export const EVIDENCE_FILE_MODE = 0o600;
 export const EVIDENCE_EXTENSION = ".jpg";
+/** The only type evidence is stored and served as (S3 ContentType, the admin download route). */
+export const EVIDENCE_CONTENT_TYPE = "image/jpeg";

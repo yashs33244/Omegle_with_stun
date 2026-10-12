@@ -16,6 +16,7 @@ import type { FlagsReader } from "../flags/flags";
 import type { Logger } from "../logger";
 import type { MatchMetrics } from "../match/matchMetrics";
 import type { IceServer } from "../protocol";
+import { ipBuckets } from "../session/geo";
 import { fetchCloudflareIceServers, type FetchFn } from "./cloudflare";
 import {
   CAP_WINDOW_MS,
@@ -85,15 +86,30 @@ export class TurnService {
     return this.config.stunUrls.length > 0 ? [{ urls: [...this.config.stunUrls] }] : [];
   }
 
+  /**
+   * The per-IP cap key for an address: its subscriber (an IPv4 address or an
+   * IPv6 /64, session/geo.ts ipBuckets) as a keyed hash, so rotating
+   * addresses inside one /64 share one budget and no raw IP is stored.
+   */
+  ipKeyFor(ip: string): string {
+    return ipKey(ipBuckets(ip).ip, this.ipSecret);
+  }
+
   /** Remembers which IP (hashed) a device said hello from, for the per-IP cap. */
   async rememberIp(deviceId: string, ip: string): Promise<void> {
     if (this.config.turnProvider === "none") return;
-    await this.store.setDeviceIp(deviceId, ipKey(ip, this.ipSecret), DEVICE_IP_TTL_MS);
+    await this.store.setDeviceIp(deviceId, this.ipKeyFor(ip), DEVICE_IP_TTL_MS);
   }
 
-  async callMedia(deviceId: string): Promise<CallMedia> {
+  /**
+   * Media for one side of a call. `socketIpKey` is ipKeyFor() of the
+   * socket's address (stored on its session at hello), or null when the
+   * address was unknown; it counts the credential when the device's hello
+   * binding has lapsed.
+   */
+  async callMedia(deviceId: string, socketIpKey: string | null): Promise<CallMedia> {
     const flags = this.flags.current();
-    const relay = await this.relayServers(deviceId);
+    const relay = await this.relayServers(deviceId, socketIpKey);
     return {
       iceServers: relay ? [...this.stunServers(), ...relay] : this.stunServers(),
       maxBitrateKbps: flags.video_max_kbps,
@@ -103,7 +119,7 @@ export class TurnService {
   }
 
   /** TURN servers for this device, or null for STUN only. Never throws. */
-  private async relayServers(deviceId: string): Promise<IceServer[] | null> {
+  private async relayServers(deviceId: string, socketIpKey: string | null): Promise<IceServer[] | null> {
     if (this.config.turnProvider === "none") return null;
     if (!this.flags.current().turn_enabled) {
       this.metrics.turnCredentialsTotal.inc({ result: CREDENTIAL_RESULT.disabled });
@@ -111,21 +127,29 @@ export class TurnService {
     }
     const pending = this.inflight.get(deviceId);
     if (pending) return pending;
-    const p = this.issue(deviceId).finally(() => this.inflight.delete(deviceId));
+    const p = this.issue(deviceId, socketIpKey).finally(() => this.inflight.delete(deviceId));
     this.inflight.set(deviceId, p);
     return p;
   }
 
-  private async issue(deviceId: string): Promise<IceServer[] | null> {
+  private async issue(deviceId: string, socketIpKey: string | null): Promise<IceServer[] | null> {
     try {
       const cached = await this.store.getCached(deviceId);
       if (cached) {
         this.metrics.turnCredentialsTotal.inc({ result: CREDENTIAL_RESULT.cached });
         return cached;
       }
+      // Fail closed: a new set is always counted against an address. Without
+      // the hello binding (lapsed after DEVICE_IP_TTL_MS, or never recorded)
+      // the socket's own address counts; with neither, no relay.
+      const ipHash = (await this.store.getDeviceIp(deviceId)) ?? socketIpKey;
+      if (!ipHash) {
+        this.metrics.turnCredentialsTotal.inc({ result: CREDENTIAL_RESULT.noIp });
+        this.log.warn("TURN credentials need a client address; STUN only");
+        return null;
+      }
       const perDevice = await this.store.hit(`dev:${deviceId}`, CAP_WINDOW_MS);
-      const ipHash = await this.store.getDeviceIp(deviceId);
-      const perIp = ipHash ? await this.store.hit(`ip:${ipHash}`, CAP_WINDOW_MS) : 0;
+      const perIp = await this.store.hit(`ip:${ipHash}`, CAP_WINDOW_MS);
       if (perDevice > this.config.turnMaxPerDeviceHour || perIp > this.config.turnMaxPerIpHour) {
         this.metrics.turnCredentialsTotal.inc({ result: CREDENTIAL_RESULT.capped });
         this.log.warn({ perDevice, perIp }, "TURN credential cap reached; STUN only");

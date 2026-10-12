@@ -6,9 +6,10 @@
  * - the session token (24 h): passed as Socket.IO auth;
  * - an under-18 lockout marker, so a locked device does not see the form again.
  *
- * When the socket handshake rejects the token, useSignaling calls
- * invalidateSession(); the gate asks for a fresh one and waitForSession()
- * resolves once it is saved.
+ * When the socket handshake rejects the token, or the server says
+ * `session_expired` on a live socket, useSignaling calls invalidateSession()
+ * with that reason; the gate mints a fresh one (silently for an expired
+ * session when it can) and waitForSession() resolves once it is saved.
  */
 import type { SessionResponse } from "@/lib/protocol";
 

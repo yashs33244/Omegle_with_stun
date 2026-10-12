@@ -51,9 +51,15 @@ function contract(name: string, make: () => EnforcementStore) {
       expect(await s.indexRange(ix)).toEqual(["b", "a", "c"]);
       expect(await s.indexRange(ix, { min: 2 })).toEqual(["a", "c"]);
       expect(await s.indexRange(ix, { max: 4 })).toEqual(["b"]);
+      expect(await s.indexCount(ix)).toBe(3);
+      expect(await s.indexCount(ix, { min: 2 })).toBe(2);
+      expect(await s.indexCount(ix, { max: 4 })).toBe(1);
+      expect(await s.indexCount(ix, { min: 5, max: 9 })).toBe(2);
       await s.removeFromIndex(ix, "a");
       expect(await s.indexRange(ix)).toEqual(["b", "c"]);
+      expect(await s.indexCount(ix)).toBe(2);
       expect(await s.indexRange(`against:${randomUUID()}`)).toEqual([]);
+      expect(await s.indexCount(`against:${randomUUID()}`, { max: 4 })).toBe(0);
     });
 
     test("claims, counters and values expire", async () => {

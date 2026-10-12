@@ -33,6 +33,7 @@ import type {
 import { toDataUrl, type EvidenceFrame, type EvidenceStore } from "./evidence";
 import {
   ADMIN_ERRORS,
+  ADMIN_IDEMPOTENCY_TTL_MS,
   ADMIN_LIST_LIMIT,
   ADMIT_RESULTS,
   APPEALS_PER_DEVICE_PER_DAY,
@@ -55,6 +56,7 @@ import {
   INDEX,
   KEY,
   LAST_ROOM_GRACE_MS,
+  NETWORK_BAN_TTL_MS,
   NETWORK_TTL_MS,
   PERMANENT_SCORE,
   PSEUDONYM_HEX_CHARS,
@@ -89,6 +91,7 @@ import type {
   DeviceNetwork,
   DeviceStats,
   LastRoom,
+  NetworkBan,
   StoredAppeal,
   StoredReport,
   StoredRestriction,
@@ -233,7 +236,8 @@ export class EnforcementService {
   }
 
   /**
-   * Network facts for CSAM packets, kept 24 h. The session lane calls this when it
+   * Network facts for CSAM packets, kept 24 h; a ban placed meanwhile is also
+   * carried to the address (banNetwork). The session lane calls this when it
    * creates a session (it sees the client IP and the Cloudflare country).
    */
   async noteDeviceNetwork(deviceId: string, ip: string | null, country: string | null): Promise<void> {
@@ -289,6 +293,23 @@ export class EnforcementService {
     return found ? toPublic(found) : null;
   }
 
+  /**
+   * A ban recorded against this address (IPv4 address or IPv6 /64, by salted
+   * hash) within NETWORK_BAN_TTL_MS, or null. Checked by POST /api/session so
+   * a banned person cannot mint a fresh device id from the same connection.
+   * Only `ban` restrictions are carried (restrict); a lifted ban stops
+   * counting at once. The view is not the stranger's to appeal or to see
+   * evidence of, and ends when the address is free again.
+   */
+  async activeForNetwork(ip: string): Promise<Restriction | null> {
+    const mark = await this.store.getValue<NetworkBan>(KEY.networkBan(this.network(ip)));
+    const now = this.now();
+    if (!mark || mark.until <= now) return null;
+    const r = await this.store.get<StoredRestriction>("restriction", mark.restrictionId);
+    if (!r || r.kind !== "ban" || !isActive(r, now)) return null;
+    return { ...toPublic(r), until: mark.until, evidenceAvailable: false, appealable: false };
+  }
+
   private async activeOf(ids: string[]): Promise<StoredRestriction | null> {
     const now = this.now();
     const all = await this.store.getMany<StoredRestriction>("restriction", ids);
@@ -325,6 +346,8 @@ export class EnforcementService {
     const otherUnderageReporters = await this.underageReporters(input.reportedDevice, reporterNetwork ?? input.reporterDevice, now);
     const minorSignal = reportedStats.minorFlag || otherUnderageReporters > 0;
     const restricted = routeRestricted({ reason: input.reason, scores, minorSignal });
+    // Read before the frame is stored, so nothing can fail between storing it and saving the record.
+    const reportedNetwork = restricted ? await this.store.getValue<DeviceNetwork>(KEY.network(input.reportedDevice)) : null;
 
     let evidenceId: string | null = null;
     if (input.frame) {
@@ -362,9 +385,19 @@ export class EnforcementService {
       acknowledgedAt: null,
       decidedAt: null,
       restrictionId: null,
-      reportedNetwork: restricted ? await this.store.getValue<DeviceNetwork>(KEY.network(input.reportedDevice)) : null,
+      reportedNetwork,
     };
-    await this.store.put("report", id, report, now);
+    try {
+      await this.store.put("report", id, report, now);
+    } catch (err) {
+      // Without the record nothing would ever point at (or delete) the stored frame.
+      if (evidenceId) {
+        await this.evidence.delete(evidenceId, { restricted }).catch((cleanup: unknown) => {
+          this.log.error({ err: cleanup, restricted }, "could not delete the evidence of an unsaved report");
+        });
+      }
+      throw err;
+    }
     await this.store.addToIndex(KEY.reportsAgainst(input.reportedDevice), id, now);
     await this.store.addToIndex(INDEX.openReports, id, now);
     this.log.info({ reportId: id, reason: input.reason, restricted }, "report stored");
@@ -471,6 +504,7 @@ export class EnforcementService {
     if (r.fingerprintHash && !warning) {
       await this.store.addToIndex(KEY.restrictionsByFingerprint(r.fingerprintHash), r.id, now);
     }
+    if (r.kind === "ban") await this.banNetwork(p.deviceId, r, now);
     if (p.report) {
       p.report.restrictionId = r.id;
       await this.store.put("report", p.report.id, p.report, p.report.createdAt);
@@ -485,6 +519,15 @@ export class EnforcementService {
     const view = toPublic(r);
     await this.sink?.restrictionApplied(p.deviceId, view);
     return view;
+  }
+
+  /** Carries a ban to the address the device last minted a session on (noted 24 h by noteDeviceNetwork). */
+  private async banNetwork(deviceId: string, r: StoredRestriction, now: number): Promise<void> {
+    const ip = (await this.store.getValue<DeviceNetwork>(KEY.network(deviceId)))?.ip;
+    if (!ip) return;
+    const until = Math.min(r.until ?? Number.MAX_SAFE_INTEGER, now + NETWORK_BAN_TTL_MS);
+    const mark: NetworkBan = { restrictionId: r.id, until };
+    await this.store.setValue(KEY.networkBan(this.network(ip)), mark, until - now);
   }
 
   private async lift(r: StoredRestriction): Promise<void> {
@@ -588,6 +631,11 @@ export class EnforcementService {
     await this.store.put("audit", entry.id, entry, entry.ts);
   }
 
+  /** Idempotency for admin writes: true the first time `key` is seen within ADMIN_IDEMPOTENCY_TTL_MS. */
+  async claimAdminRequest(key: string): Promise<boolean> {
+    return this.store.claim(KEY.adminRequest(key), ADMIN_IDEMPOTENCY_TTL_MS);
+  }
+
   async listAudit(limit: number, before?: number): Promise<AdminAuditEntry[]> {
     const ids = await this.store.range("audit", {
       reverse: true,
@@ -598,7 +646,8 @@ export class EnforcementService {
   }
 
   private async toAdmin(r: StoredReport): Promise<AdminReport> {
-    const prior = await this.store.indexRange(KEY.reportsAgainst(r.reportedDevice), { max: r.createdAt - 1 });
+    // A count, not the ids: the queue builds up to ADMIN_LIST_LIMIT of these.
+    const prior = await this.store.indexCount(KEY.reportsAgainst(r.reportedDevice), { max: r.createdAt - 1 });
     return {
       id: r.id,
       createdAt: r.createdAt,
@@ -615,7 +664,7 @@ export class EnforcementService {
       restricted: r.restricted,
       nsfwScore: r.nsfwScore,
       ...reportSla(r.reason, r.restricted, r.createdAt),
-      priorReportsAgainst: prior.length,
+      priorReportsAgainst: prior,
     };
   }
 
@@ -787,6 +836,22 @@ export class EnforcementService {
     return ok({ packet, restriction });
   }
 
+  /**
+   * Ends a legal hold early (the legal process is closed): the report and its
+   * audit trail fall back to normal retention, so a report older than
+   * RETENTION_MS goes at the next sweep. The evidence stays on the restricted path.
+   */
+  async releaseHold(id: string, actor: Actor, note?: string): Promise<AdminResult<AdminReport>> {
+    const r = await this.store.get<StoredReport>("report", id);
+    if (!r) return fail("not_found");
+    if (!r.legalHold) return fail("conflict");
+    r.legalHold = false;
+    r.preservedUntil = null;
+    await this.store.put("report", r.id, r, r.createdAt);
+    await this.audit(AUDIT_ACTION.releaseHold, id, note ?? null, actor.ip);
+    return ok(await this.toAdmin(r));
+  }
+
   async listAppeals(): Promise<AdminAppeal[]> {
     const ids = await this.store.range("appeal", { reverse: true, limit: ADMIN_LIST_LIMIT });
     const appeals = (await this.store.getMany<StoredAppeal>("appeal", ids)).filter(
@@ -869,18 +934,40 @@ export class EnforcementService {
   /* ---------------------------------------------------------------- */
 
   /**
-   * Deletes reports and their evidence older than 1 year (legal-hold items are
-   * kept), restriction records 1 year after they ended (with their appeals),
-   * and takedown tickets resolved over a year ago. Idempotent.
+   * Deletes reports and their evidence older than 1 year, restriction records
+   * 1 year after they ended (with their appeals), takedown tickets resolved
+   * over a year ago and audit entries older than a year (except those about
+   * a report on legal hold). A report on legal hold is kept until its
+   * `preservedUntil` passes (escalating again renews it); an expired hold no
+   * longer protects it. Idempotent. A report whose evidence cannot be deleted
+   * keeps its record (the only pointer to the file) for the next day's sweep;
+   * the rest of the sweep goes on.
    */
-  async sweepRetention(): Promise<{ reports: number; restrictions: number; appeals: number; takedowns: number }> {
-    const cutoff = this.now() - RETENTION_MS;
-    const counts = { reports: 0, restrictions: 0, appeals: 0, takedowns: 0 };
+  async sweepRetention(): Promise<{
+    reports: number;
+    restrictions: number;
+    appeals: number;
+    takedowns: number;
+    audit: number;
+    evidenceErrors: number;
+  }> {
+    const now = this.now();
+    const cutoff = now - RETENTION_MS;
+    const counts = { reports: 0, restrictions: 0, appeals: 0, takedowns: 0, audit: 0, evidenceErrors: 0 };
+    const held = (r: StoredReport | null) => r !== null && r.legalHold && (r.preservedUntil === null || r.preservedUntil > now);
 
     for (const id of await this.store.range("report", { max: cutoff })) {
       const r = await this.store.get<StoredReport>("report", id);
-      if (r?.legalHold) continue;
-      if (r?.evidenceId) await this.evidence.delete(r.evidenceId, { restricted: r.restricted });
+      if (held(r)) continue;
+      if (r?.evidenceId) {
+        try {
+          await this.evidence.delete(r.evidenceId, { restricted: r.restricted });
+        } catch (err) {
+          counts.evidenceErrors++;
+          this.log.error({ err, reportId: id }, "retention: could not delete evidence; the report is kept for the next sweep");
+          continue;
+        }
+      }
       if (r) await this.store.removeFromIndex(KEY.reportsAgainst(r.reportedDevice), id);
       await this.store.removeFromIndex(INDEX.openReports, id);
       await this.store.delete("report", id);
@@ -910,6 +997,14 @@ export class EnforcementService {
       if (t && (t.resolvedAt === null || t.resolvedAt > cutoff)) continue;
       await this.store.delete("takedown", id);
       counts.takedowns++;
+    }
+
+    for (const id of await this.store.range("audit", { max: cutoff })) {
+      const entry = await this.store.get<AdminAuditEntry>("audit", id);
+      // The trail of a report frozen for a legal process stays with it.
+      if (entry && held(await this.store.get<StoredReport>("report", entry.target))) continue;
+      await this.store.delete("audit", id);
+      counts.audit++;
     }
     return counts;
   }

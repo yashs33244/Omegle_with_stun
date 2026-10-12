@@ -123,7 +123,8 @@ export function billingApiRouter(deps: BillingApiDeps): Router {
       case "ignored":
         return void res.json({ ok: true, outcome });
       case "bad_signature":
-        deps.logger.warn({ ip: ipOf(req) }, "razorpay webhook with a bad signature");
+        // No address: the logger never carries IPs (logger.ts), and anyone can trigger this line.
+        deps.logger.warn({ event: "razorpay_webhook_bad_signature" }, "razorpay webhook with a bad signature");
         return sendError(res, "bad_signature");
       case "invalid":
         return sendError(res, "invalid");

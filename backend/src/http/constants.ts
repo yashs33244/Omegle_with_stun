@@ -4,7 +4,7 @@
  * values bound every phase of a request so a slowloris or a lying
  * Content-Length costs at most a few seconds of one socket.
  */
-import { SECOND_MS } from "../session/constants";
+import { HOUR_MS, MINUTE_MS, SECOND_MS } from "../session/constants";
 
 /** A client must finish sending its headers this soon after the first byte. */
 export const HTTP_HEADERS_TIMEOUT_MS = 15 * SECOND_MS;
@@ -36,9 +36,42 @@ export const ADMIN_BODY_LIMIT_BYTES = 16 * 1024;
 export const BILLING_BODY_LIMIT_BYTES = 8 * 1024;
 /** A Razorpay payment.captured event is a few KB; the raw body is kept for the HMAC check. */
 export const WEBHOOK_BODY_LIMIT_BYTES = 64 * 1024;
+
 /**
- * The per-instance burst bucket in front of POST /api/session holds this many
- * minutes of SESSION_RATE_PER_IP_PER_MIN and refills at that rate, so the
- * store-backed limit is the one a client meets first.
+ * Bad admin tokens per subscriber address (IPv4 address, IPv6 /64) before it
+ * gets 429 for the rest of its window (ms, from its first failure).
+ */
+export const ADMIN_MAX_AUTH_FAILURES_PER_IP = 10;
+export const ADMIN_AUTH_FAILURE_WINDOW_MS = 15 * MINUTE_MS;
+/**
+ * Bad admin tokens across all addresses, per instance, per window (ms, from the
+ * first failure). Once spent, every address with a bad token in the window is
+ * locked out until it ends (the per-address threshold drops from 10 to 1), so
+ * each further guess costs a fresh address; an address without a failure
+ * (the owner) is still judged by its token alone.
+ */
+export const ADMIN_MAX_AUTH_FAILURES_GLOBAL = 100;
+export const ADMIN_GLOBAL_FAILURE_WINDOW_MS = HOUR_MS;
+/**
+ * Failure records (one per address, about 100 bytes) kept at most. Records
+ * that no longer lock anything are swept at most every ADMIN_FAILURE_SWEEP_MS
+ * when full. While the records are full a new failure is not recorded:
+ * memory stays bounded and an address without a record (the owner) is still
+ * judged by its token alone. One IPv6 /48 holds 65,536 addresses, so a full
+ * map is cheap; ADMIN_ALLOWED_IPS is what keeps guessers out entirely.
+ */
+export const ADMIN_FAILURE_MAP_MAX = 50_000;
+export const ADMIN_FAILURE_SWEEP_MS = MINUTE_MS;
+/**
+ * The per-instance burst buckets in front of POST /api/session hold this many
+ * minutes of SESSION_RATE_PER_IP_PER_MIN (per address) and
+ * SESSION_RATE_PER_NETWORK_PER_MIN (per network) and refill at those rates,
+ * so the store-backed limits are the ones a client meets first.
  */
 export const SESSION_BURST_FACTOR = 2;
+/**
+ * Keys one per-instance IP bucket map (http/public.ts IpBuckets) holds. At the
+ * cap the map evicts refilled buckets first, then the fullest of the oldest
+ * (rateLimit.ts evictOne): about 100 bytes each, so 5 MB per map at most.
+ */
+export const IP_BUCKETS_MAX_KEYS = 50_000;

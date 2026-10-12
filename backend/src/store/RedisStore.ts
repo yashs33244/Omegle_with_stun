@@ -410,6 +410,10 @@ export class RedisStore implements MatchStore {
     return this.redis.zrange(this.key("waiting"), 0, -1);
   }
 
+  async waitingCount(): Promise<number> {
+    return this.redis.zcard(this.key("waiting"));
+  }
+
   /* ---------------------------------------------------------------- */
   /* Rooms                                                             */
   /* ---------------------------------------------------------------- */

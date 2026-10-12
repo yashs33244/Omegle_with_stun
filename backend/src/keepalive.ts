@@ -27,6 +27,8 @@ export function startKeepalive(deps: KeepaliveDeps): () => void {
   const ping = async () => {
     try {
       const res = await doFetch(deps.url, { method: "GET", signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) });
+      // The body is never read: release it so the connection is freed now, not at garbage collection.
+      await res.body?.cancel();
       if (!res.ok) deps.logger.warn({ url: deps.url, status: res.status }, "keep-alive ping was not ok");
     } catch (err) {
       deps.logger.warn({ err, url: deps.url }, "keep-alive ping failed");

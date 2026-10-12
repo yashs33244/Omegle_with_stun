@@ -3,6 +3,7 @@
  * Request and response shapes come from protocol.ts; the server validates
  * every request again, so the client only checks what it needs to render.
  */
+import { parseRetryAfter } from "@/lib/backoff";
 import { API_URL } from "@/lib/config";
 import type {
   AppealRequest,
@@ -28,9 +29,17 @@ export class ApiError extends Error {
 
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>;
 
+/**
+ * POST /api/session's answer. A transient refusal (`closed` on overload,
+ * `rate_limited`) may carry the server's Retry-After, in milliseconds.
+ */
+export type SessionReply =
+  | Extract<SessionResponse, { ok: true }>
+  | (Extract<SessionResponse, { ok: false }> & { retryAfterMs?: number });
+
 export interface Api {
   getConfig: () => Promise<PublicConfig>;
-  createSession: (req: SessionRequest) => Promise<SessionResponse>;
+  createSession: (req: SessionRequest) => Promise<SessionReply>;
   getRestriction: (id: string, deviceId: string) => Promise<RestrictionView | null>;
   submitAppeal: (req: AppealRequest) => Promise<AppealResponse>;
   submitTakedown: (req: TakedownRequest) => Promise<TakedownResponse>;
@@ -50,7 +59,7 @@ function isOkBody<T>(body: unknown): body is T {
 export function createApi(fetchImpl: FetchLike = (input, init) => fetch(input, init), base: string = API_URL): Api {
   const root = base.replace(/\/+$/, "");
 
-  async function request(path: string, init: RequestInit = {}): Promise<{ status: number; body: unknown }> {
+  async function request(path: string, init: RequestInit = {}): Promise<{ status: number; body: unknown; retryAfterMs: number | null }> {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
     let res: Response;
@@ -72,7 +81,7 @@ export function createApi(fetchImpl: FetchLike = (input, init) => fetch(input, i
     } catch {
       body = null;
     }
-    return { status: res.status, body };
+    return { status: res.status, body, retryAfterMs: parseRetryAfter(res.headers.get("Retry-After")) };
   }
 
   /** POST endpoints whose answer is `{ ok: true, ... } | { ok: false, error }`. */
@@ -92,7 +101,14 @@ export function createApi(fetchImpl: FetchLike = (input, init) => fetch(input, i
       return body as unknown as PublicConfig;
     },
 
-    createSession: (req) => post<SessionResponse>("/api/session", req),
+    async createSession(req) {
+      const { status, body, retryAfterMs } = await request("/api/session", { method: "POST", body: JSON.stringify(req) });
+      let reply: SessionReply;
+      if (isOkBody<SessionResponse>(body)) reply = body;
+      else if (status === 429) reply = { ok: false, error: "rate_limited" };
+      else throw new ApiError("Unexpected answer from /api/session", status);
+      return !reply.ok && retryAfterMs !== null ? { ...reply, retryAfterMs } : reply;
+    },
 
     async getRestriction(id, deviceId) {
       const { status, body } = await request(

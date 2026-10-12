@@ -102,11 +102,18 @@ function isPlatform(word: string): boolean {
   return ALWAYS.has(word) || STRONG.has(word) || WEAK.has(word);
 }
 
+/** Escapes every regex metacharacter (including `\`), every occurrence, so `s` matches literally. */
+export function escapeRegExp(s: string): string {
+  return s.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+}
+
+const SOCIAL_HOST_RES = SOCIAL_HOSTS.map((h) => new RegExp(String.raw`(^|[/.])${escapeRegExp(h)}(\/|$|\?)`));
+
 function urlSpans(text: string, spans: Span[]): void {
   for (const m of text.matchAll(EMAIL_RE)) spans.push({ start: m.index, end: m.index + m[0].length, kind: SPAN_KIND.contact });
   for (const m of text.matchAll(URL_RE)) {
     const lower = m[0].toLowerCase();
-    const social = SOCIAL_HOSTS.some((h) => new RegExp(String.raw`(^|[/.])${h.replace(/\./g, "\\.")}(\/|$|\?)`).test(lower));
+    const social = SOCIAL_HOST_RES.some((re) => re.test(lower));
     spans.push({ start: m.index, end: m.index + m[0].length, kind: social ? SPAN_KIND.contact : SPAN_KIND.link });
   }
 }

@@ -1,11 +1,12 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
 import { createHash, randomUUID } from "node:crypto";
-import { rmSync } from "node:fs";
+import { readdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import type { ReportInput } from "../../src/enforcement/EnforcementService";
 import { parseEvidenceFrame } from "../../src/enforcement/evidence";
-import { ADMIN_LIST_LIMIT, APPEALS_PER_IP_PER_HOUR, AUTO_PAUSE_MS, DAY, MINUTE, YEAR } from "../../src/enforcement/constants";
+import { ADMIN_LIST_LIMIT, APPEALS_PER_IP_PER_HOUR, AUTO_PAUSE_MS, DAY, INDEX, MINUTE, NETWORK_BAN_TTL_MS, YEAR } from "../../src/enforcement/constants";
 import type { StoredReport, StoredRestriction } from "../../src/enforcement/types";
-import { RESTRICTION_DURATIONS_MS, type ReportReason } from "../../src/protocol";
+import { RESTRICTION_DURATIONS_MS, type AdminReportAction, type ReportReason } from "../../src/protocol";
 import { harness, jpegDataUrl, type Harness } from "../enforcementFixtures";
 
 let h: Harness;
@@ -332,6 +333,31 @@ describe("admin review", () => {
     expect((await h.service.queue("all")).length).toBe(ADMIN_LIST_LIMIT);
   });
 
+  test("prior reports are counted in the store, never loaded per queue entry", async () => {
+    h = harness();
+    const target = randomUUID();
+    const ids: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      h.clock.now += 1000;
+      ids.push((await report(target, "spam")).reportId);
+    }
+    const other = await report(randomUUID(), "spam");
+    const counted = spyOn(h.store, "indexCount");
+    const loaded = spyOn(h.store, "indexRange");
+    try {
+      const queue = await h.service.queue();
+      const prior = Object.fromEntries(queue.map((r) => [r.id, r.priorReportsAgainst]));
+      expect(prior).toEqual({ [ids[0]!]: 0, [ids[1]!]: 1, [ids[2]!]: 2, [ids[3]!]: 3, [other.reportId]: 0 });
+      expect((await h.service.report(ids[3]!))?.priorReportsAgainst).toBe(3);
+      expect(counted).toHaveBeenCalledTimes(6);
+      // The only index read is the open-report queue itself.
+      expect(loaded.mock.calls.map(([index]) => index)).toEqual([INDEX.openReports]);
+    } finally {
+      counted.mockRestore();
+      loaded.mockRestore();
+    }
+  });
+
   test("evidence access is audited and marks the report as viewed; restricted access is refused and audited", async () => {
     h = harness();
     const res = await report(randomUUID(), "harassment", { frame: parseEvidenceFrame(jpegDataUrl()) });
@@ -443,6 +469,50 @@ describe("restrictions, fingerprints and appeals", () => {
     expect(found).not.toBeNull();
     expect(await h.service.restrictionView(found!.id, fresh)).not.toBeNull();
     expect(await h.service.activeForDevice(randomUUID())).toBeNull();
+  });
+
+  test("a ban, never a pause or a warning, is carried to the device's address (IPv4 /32, IPv6 /64) for NETWORK_BAN_TTL_MS", async () => {
+    h = harness();
+    const act = async (device: string, o: Partial<AdminReportAction> = {}) => {
+      const res = await h.service.actOnReport((await report(device, "spam")).reportId, { action: "restrict", ...o }, actor);
+      if (!res.ok) throw new Error("restrict failed");
+      return res.value.restriction!;
+    };
+    // Warnings and pauses stay on the device.
+    const paused = randomUUID();
+    await h.service.noteDeviceNetwork(paused, "203.0.113.30", null);
+    await h.service.actOnReport((await report(paused, "spam")).reportId, { action: "warn" }, actor);
+    expect((await act(paused, { durationMs: RESTRICTION_DURATIONS_MS[0] })).kind).toBe("pause");
+    expect(await h.service.activeForNetwork("203.0.113.30")).toBeNull();
+
+    const banned = randomUUID();
+    await h.service.noteDeviceNetwork(banned, "2001:db8:5:6:aaaa::1", "IN");
+    const ban = await act(banned, { durationMs: RESTRICTION_DURATIONS_MS[2] });
+    expect(ban.kind).toBe("ban");
+    // Same /64, another host: refused, with a view that is not the stranger's to appeal.
+    expect(await h.service.activeForNetwork("2001:db8:5:6:bbbb::2")).toEqual({
+      ...ban,
+      until: h.clock.now + NETWORK_BAN_TTL_MS,
+      evidenceAvailable: false,
+      appealable: false,
+    });
+    expect(await h.service.activeForNetwork("2001:db8:5:7::1")).toBeNull();
+    // Only a salted hash of the /64 is stored.
+    expect(await h.store.getValue(`ban-net:${h.service.network("2001:db8:5:6::9")}`)).toMatchObject({ restrictionId: ban.id });
+    h.clock.now += NETWORK_BAN_TTL_MS;
+    expect(await h.service.activeForNetwork("2001:db8:5:6:bbbb::2")).toBeNull();
+    expect((await h.service.activeForDevice(banned))!.id).toBe(ban.id); // the device ban itself goes on
+
+    // An overturned ban stops counting for the address at once.
+    const other = randomUUID();
+    await h.service.noteDeviceNetwork(other, "198.51.100.40", null);
+    const permanent = await act(other, { durationMs: null });
+    expect((await h.service.activeForNetwork("198.51.100.40"))!.id).toBe(permanent.id);
+    expect(await h.service.activeForNetwork("198.51.100.41")).toBeNull(); // IPv4 is per address, not per /24
+    const appeal = await h.service.submitAppeal({ restrictionId: permanent.id, deviceId: other, text: "please review this" }, null);
+    if (!appeal.ok) throw new Error(appeal.error);
+    expect((await h.service.decideAppeal(appeal.appealId, "overturn", undefined, actor)).ok).toBe(true);
+    expect(await h.service.activeForNetwork("198.51.100.40")).toBeNull();
   });
 
   test("one appeal per restriction; overturning lifts it", async () => {
@@ -573,8 +643,14 @@ describe("retention sweep", () => {
     if (!takedown.ok || !appeal.ok) throw new Error("setup failed");
     await h.service.resolveTakedown(takedown.ticketId, "done", actor);
 
+    // Escalating again a month later renews the hold for a year from then.
+    h.clock.now = start + 30 * DAY;
+    await h.service.escalate(held.reportId, actor);
+    const heldEvidence = (await h.store.get<StoredReport>("report", held.reportId))!.evidenceId!;
+
     h.clock.now = start + YEAR - DAY;
-    expect(await h.service.sweepRetention()).toEqual({ reports: 0, restrictions: 0, appeals: 0, takedowns: 0 });
+    const none = { reports: 0, restrictions: 0, appeals: 0, takedowns: 0, audit: 0, evidenceErrors: 0 };
+    expect(await h.service.sweepRetention()).toEqual(none);
 
     h.clock.now = start + YEAR + 11 * MINUTE;
     const counts = await h.service.sweepRetention();
@@ -586,6 +662,101 @@ describe("retention sweep", () => {
     expect(await h.evidence.inner.get(oldEvidence, { restricted: false })).toBeNull();
     expect(await h.store.get("report", held.reportId)).not.toBeNull();
     expect(await h.store.get("restriction", shortId)).toBeNull();
-    expect(await h.service.sweepRetention()).toEqual({ reports: 0, restrictions: 0, appeals: 0, takedowns: 0 });
+    // The audit log ages out too, except the trail of the report on legal hold.
+    expect(counts.audit).toBe(2);
+    expect((await h.service.listAudit(10)).map((e) => [e.action, e.target])).toEqual([
+      ["report.escalate_csam", held.reportId],
+      ["report.escalate_csam", held.reportId],
+    ]);
+    expect(await h.service.sweepRetention()).toEqual(none);
+
+    // Once the renewed hold has passed, the report, its frozen evidence and its trail go.
+    h.clock.now = start + 30 * DAY + YEAR - MINUTE;
+    expect(await h.service.sweepRetention()).toEqual(none);
+    h.clock.now = start + 30 * DAY + YEAR + MINUTE;
+    expect(await h.service.sweepRetention()).toEqual({ ...none, reports: 1, audit: 2 });
+    expect(await h.store.get("report", held.reportId)).toBeNull();
+    expect(await h.evidence.inner.get(heldEvidence, { restricted: true })).toBeNull();
+    expect(await h.service.listAudit(10)).toEqual([]);
+  });
+
+  test("releasing a legal hold is audited and hands the report back to normal retention", async () => {
+    h = harness();
+    const start = h.clock.now;
+    const held = await report(randomUUID(), "underage", { frame: parseEvidenceFrame(jpegDataUrl()) });
+    await h.service.escalate(held.reportId, actor);
+    const plain = await report(randomUUID(), "spam");
+
+    expect(await h.service.releaseHold(plain.reportId, actor)).toEqual({ ok: false, error: "conflict" });
+    expect(await h.service.releaseHold(randomUUID(), actor)).toEqual({ ok: false, error: "not_found" });
+    h.clock.now = start + DAY;
+    const released = await h.service.releaseHold(held.reportId, actor, "case closed");
+    expect(released).toMatchObject({ ok: true, value: { id: held.reportId, status: "escalated" } });
+    expect(await h.store.get<StoredReport>("report", held.reportId)).toMatchObject({ legalHold: false, preservedUntil: null });
+    expect(await h.service.releaseHold(held.reportId, actor)).toEqual({ ok: false, error: "conflict" });
+    const [entry] = await h.service.listAudit(1);
+    expect(entry).toMatchObject({ action: "report.release_hold", target: held.reportId, note: "case closed", ip: actor.ip });
+
+    // Normal retention: a year after the report, not after the hold.
+    h.clock.now = start + YEAR + MINUTE;
+    expect(await h.service.sweepRetention()).toMatchObject({ reports: 2, evidenceErrors: 0 });
+    expect(await h.store.get("report", held.reportId)).toBeNull();
+  });
+
+  test("evidence that cannot be deleted keeps its report for the next sweep; the rest of the sweep goes on", async () => {
+    h = harness();
+    const start = h.clock.now;
+    const stuck = await report(randomUUID(), "spam", { frame: parseEvidenceFrame(jpegDataUrl()) });
+    const fine = await report(randomUUID(), "spam", { frame: parseEvidenceFrame(jpegDataUrl()) });
+    const stuckEvidence = (await h.store.get<StoredReport>("report", stuck.reportId))!.evidenceId!;
+    const fineEvidence = (await h.store.get<StoredReport>("report", fine.reportId))!.evidenceId!;
+    const remove = h.evidence.delete.bind(h.evidence);
+    let down = true;
+    h.evidence.delete = async (id, where) => {
+      if (down && id === stuckEvidence) throw new Error("bucket unavailable");
+      return remove(id, where);
+    };
+
+    h.clock.now = start + YEAR + DAY;
+    expect(await h.service.sweepRetention()).toMatchObject({ reports: 1, evidenceErrors: 1 });
+    expect(await h.store.get("report", fine.reportId)).toBeNull();
+    expect(await h.evidence.inner.get(fineEvidence, { restricted: false })).toBeNull();
+    // Still pointing at its file, so the next sweep can finish the job.
+    expect(await h.store.get("report", stuck.reportId)).not.toBeNull();
+
+    down = false;
+    expect(await h.service.sweepRetention()).toMatchObject({ reports: 1, evidenceErrors: 0 });
+    expect(await h.evidence.inner.get(stuckEvidence, { restricted: false })).toBeNull();
+  });
+});
+
+describe("evidence lifecycle", () => {
+  const storedFrames = () => readdirSync(join(h.dir, "general")).length + readdirSync(join(h.dir, "restricted")).length;
+
+  test("a report the store fails to save takes its stored frame with it", async () => {
+    h = harness();
+    const put = h.store.put.bind(h.store);
+    h.store.put = async (col, id, doc, score) => {
+      if (col === "report") throw new Error("store down");
+      return put(col, id, doc, score);
+    };
+    await expect(report(randomUUID(), "spam", { frame: parseEvidenceFrame(jpegDataUrl()) })).rejects.toThrow("store down");
+    expect(storedFrames()).toBe(0);
+  });
+
+  test("an escalation that failed half way (frame copied, original not deleted) succeeds when retried", async () => {
+    h = harness();
+    const { reportId } = await report(randomUUID(), "harassment", { frame: parseEvidenceFrame(jpegDataUrl()) });
+    const evidenceId = (await h.store.get<StoredReport>("report", reportId))!.evidenceId!;
+    const remove = h.evidence.delete.bind(h.evidence);
+    h.evidence.delete = async () => {
+      throw new Error("disk busy");
+    };
+    await expect(h.service.escalate(reportId, actor)).rejects.toThrow("disk busy");
+    h.evidence.delete = remove;
+    expect((await h.service.escalate(reportId, actor)).ok).toBe(true);
+    expect(await h.evidence.inner.get(evidenceId, { restricted: false })).toBeNull();
+    expect(await h.evidence.inner.get(evidenceId, { restricted: true })).not.toBeNull();
+    expect((await h.store.get<StoredReport>("report", reportId))!.restricted).toBe(true);
   });
 });

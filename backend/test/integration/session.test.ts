@@ -3,16 +3,17 @@
  * Socket.IO handshake, the matching gate (kill switch, staffed hours,
  * max_waiting, hourly caps) and the status broadcast.
  */
-import { afterEach, describe, expect, test } from "bun:test";
-import { randomUUID } from "node:crypto";
+import { afterEach, describe, expect, spyOn, test } from "bun:test";
+import { randomBytes, randomUUID } from "node:crypto";
 import Redis from "ioredis";
 import { io as ioClient } from "socket.io-client";
 import type { Config } from "../../src/config";
 import { FlagsReader, MemoryFlagsStore } from "../../src/flags/flags";
-import { TOS_VERSION, type PublicConfig, type Restriction } from "../../src/protocol";
+import { TOS_VERSION, type PublicConfig, type Restriction, type RestrictionDurationMs } from "../../src/protocol";
 import { startMatchingBroadcast } from "../../src/session/broadcast";
 import { TokenSigner } from "../../src/session/tokens";
 import type { FetchFn } from "../../src/turn/cloudflare";
+import { TurnService } from "../../src/turn/TurnService";
 import {
   type Client,
   arrives,
@@ -205,6 +206,7 @@ describe("POST /api/session", () => {
             seen.push(fingerprint);
             return deviceId === restricted ? restriction : null;
           },
+          activeForNetwork: async () => null,
           noteDeviceNetwork: async (deviceId, ip, country) => {
             noted.push([deviceId, ip, country]);
           },
@@ -226,38 +228,127 @@ describe("POST /api/session", () => {
     expect(await postSession(ts, sessionBody())).toEqual({ status: 429, body: { ok: false, error: "rate_limited" } });
   });
 
-  test("without an injected checker the gate uses the enforcement lane: a restriction follows the device and its fingerprint", async () => {
-    ts = await gated({ sessionRatePerIpPerMin: 100 });
-    const fingerprint = "f".repeat(64);
-    const banned = sessionBody({ fingerprint });
-    expect((await postSession(ts, banned)).status).toBe(200);
-    // Another device of the same browser was seen before the restriction.
-    const sibling = sessionBody({ fingerprint });
-    expect((await postSession(ts, sibling)).status).toBe(200);
-
+  /** A harassment report against `deviceId`, restricted by an admin for `durationMs`. */
+  async function adminRestrict(deviceId: string, durationMs: RestrictionDurationMs | null): Promise<{ reportId: string; restriction: Restriction }> {
     const { reportId } = await ts.server.enforcement.submitReport({
       roomId: randomUUID(),
       reporterDevice: randomUUID(),
       reporterIp: null,
-      reportedDevice: banned.deviceId,
+      reportedDevice: deviceId,
       reason: "harassment",
       frame: null,
       activeSince: Date.now() - 60_000,
       endedAt: null,
     });
-    const action = await ts.server.enforcement.actOnReport(reportId, { action: "restrict", durationMs: 86_400_000 }, { ip: null });
+    const action = await ts.server.enforcement.actOnReport(reportId, { action: "restrict", durationMs }, { ip: null });
     if (!action.ok || !action.value.restriction) throw new Error("restrict did not apply");
-    const id = action.value.restriction.id;
+    return { reportId, restriction: action.value.restriction };
+  }
 
-    expect(await postSession(ts, banned)).toMatchObject({ status: 403, body: { ok: false, error: "banned", restriction: { id } } });
-    expect(await postSession(ts, sessionBody({ fingerprint }))).toMatchObject({ status: 403, body: { error: "banned", restriction: { id } } });
-    expect((await postSession(ts, sessionBody({ fingerprint: "e".repeat(64) }))).status).toBe(200);
+  test("without an injected checker the gate uses the enforcement lane: a restriction follows the device and its fingerprint", async () => {
+    ts = await gated({ sessionRatePerIpPerMin: 100, proxyIpHeader: "x-real-ip" });
+    const home = { "x-real-ip": "203.0.113.60" };
+    const elsewhere = { "x-real-ip": "198.51.100.60" };
+    const fingerprint = "f".repeat(64);
+    const banned = sessionBody({ fingerprint });
+    expect((await postSession(ts, banned, home)).status).toBe(200);
+    // Another device of the same browser was seen before the restriction.
+    const sibling = sessionBody({ fingerprint });
+    expect((await postSession(ts, sibling, home)).status).toBe(200);
+
+    const { reportId, restriction } = await adminRestrict(banned.deviceId, 86_400_000);
+    const id = restriction.id;
+
+    expect(await postSession(ts, banned, elsewhere)).toMatchObject({ status: 403, body: { ok: false, error: "banned", restriction: { id } } });
+    expect(await postSession(ts, sessionBody({ fingerprint }), elsewhere)).toMatchObject({ status: 403, body: { error: "banned", restriction: { id } } });
+    expect((await postSession(ts, sessionBody({ fingerprint: "e".repeat(64) }), elsewhere)).status).toBe(200);
     // The sibling device got its token before the restriction: hello still refuses it via the stored link.
     expect(await ts.server.enforcement.activeForDevice(sibling.deviceId)).toMatchObject({ id });
     // Network facts noted at the gate reach the CSAM packet.
     const escalated = await ts.server.enforcement.escalate(reportId, { ip: null });
     if (!escalated.ok) throw new Error(escalated.error);
-    expect(escalated.value.packet).toMatchObject({ reportedIpAddress: "127.0.0.1", reportedCountry: null });
+    expect(escalated.value.packet).toMatchObject({ reportedIpAddress: "203.0.113.60", reportedCountry: null });
+  });
+
+  test("a ban, not a pause, refuses fresh device ids on the banned device's address for 6 h; other addresses and issued tokens are unaffected", async () => {
+    let offset = 0;
+    const now = () => Date.now() + offset;
+    ts = await gated({ sessionRatePerIpPerMin: 100, proxyIpHeader: "x-real-ip" }, { now, enforcement: { now } });
+    const home = { "x-real-ip": "203.0.113.61" };
+    const pausedHome = { "x-real-ip": "203.0.113.62" };
+    // Distinct browsers, so only the address links them.
+    const browser = () => sessionBody({ fingerprint: randomBytes(32).toString("hex") });
+    const neighbour = browser();
+    const issued = await postSession(ts, neighbour, home);
+    if (!issued.body.ok) throw new Error(issued.body.error);
+    const banned = browser();
+    const paused = browser();
+    expect((await postSession(ts, banned, home)).status).toBe(200);
+    expect((await postSession(ts, paused, pausedHome)).status).toBe(200);
+
+    expect((await adminRestrict(paused.deviceId, 600_000)).restriction.kind).toBe("pause");
+    expect((await postSession(ts, browser(), pausedHome)).status).toBe(200);
+
+    const { restriction } = await adminRestrict(banned.deviceId, null);
+    const fresh = await postSession(ts, browser(), home);
+    expect(fresh).toMatchObject({
+      status: 403,
+      body: { ok: false, error: "banned", restriction: { id: restriction.id, kind: "ban", appealable: false, evidenceAvailable: false } },
+    });
+    if (fresh.body.ok || !fresh.body.restriction) throw new Error("expected a restriction");
+    expect(fresh.body.restriction.until! - Date.now()).toBeGreaterThan(5.9 * 3600_000);
+    expect(fresh.body.restriction.until! - Date.now()).toBeLessThanOrEqual(6 * 3600_000);
+    expect((await postSession(ts, browser(), { "x-real-ip": "203.0.113.63" })).status).toBe(200);
+    // A neighbour's token issued before the ban still connects.
+    expect(await tryConnect(ts, { auth: { sessionToken: issued.body.sessionToken }, headers: home })).toBe("connected");
+
+    offset = 6 * 3600_000;
+    expect((await postSession(ts, browser(), home)).status).toBe(200);
+    expect((await postSession(ts, banned, home)).status).toBe(403); // the device ban itself is permanent
+  });
+
+  test("distinct new device ids per address and UTC day are capped; a repeated date of birth and age-token renewals never count", async () => {
+    let offset = 0;
+    ts = await gated(
+      { sessionRatePerIpPerMin: 100, sessionNewDevicesPerNetworkPerDay: 3, proxyIpHeader: "x-real-ip" },
+      { now: () => Date.now() + offset },
+    );
+    // Hosts of one IPv6 /64 are one subscriber.
+    const host = (n: number) => ({ "x-real-ip": `2001:db8:77:1::${n}` });
+    const first = sessionBody();
+    const res = await postSession(ts, first, host(1));
+    if (!res.body.ok) throw new Error(res.body.error);
+    expect((await postSession(ts, sessionBody(), host(2))).status).toBe(200);
+    expect((await postSession(ts, sessionBody(), host(3))).status).toBe(200);
+    expect(await postSession(ts, sessionBody(), host(4))).toEqual({ status: 429, body: { ok: false, error: "rate_limited" } });
+    // The first device again, by date of birth or by its age token.
+    expect((await postSession(ts, first, host(5))).status).toBe(200);
+    const renewal = { ...first, age: { ageToken: res.body.ageToken, tosVersion: TOS_VERSION } };
+    expect((await postSession(ts, renewal, host(6))).status).toBe(200);
+    // Another /64 and an IPv4 address have their own budgets.
+    expect((await postSession(ts, sessionBody(), { "x-real-ip": "2001:db8:77:2::1" })).status).toBe(200);
+    expect((await postSession(ts, sessionBody(), { "x-real-ip": "203.0.113.64" })).status).toBe(200);
+    // A new UTC day starts a new window.
+    offset = 24 * 3600_000;
+    expect((await postSession(ts, sessionBody(), host(7))).status).toBe(200);
+  });
+
+  test("the new-device cap's 429 carries Retry-After until UTC midnight", async () => {
+    const elevenPm = Date.UTC(2026, 9, 12, 23, 0, 0);
+    ts = await gated(
+      { sessionRatePerIpPerMin: 100, sessionNewDevicesPerNetworkPerDay: 1, proxyIpHeader: "x-real-ip" },
+      { now: () => elevenPm },
+    );
+    const from = { "x-real-ip": "203.0.113.65" };
+    expect((await postSession(ts, sessionBody(), from)).status).toBe(200);
+    const refused = await fetch(`${ts.url}/api/session`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...from },
+      body: JSON.stringify(sessionBody()),
+    });
+    expect(refused.status).toBe(429);
+    expect(await refused.json()).toEqual({ ok: false, error: "rate_limited" });
+    expect(refused.headers.get("retry-after")).toBe("3600");
   });
 });
 
@@ -361,6 +452,26 @@ describe("Socket.IO handshake", () => {
     expect(await sendHello(b.client, hello({ deviceId: b.deviceId }))).toMatchObject({ ok: true });
     expect((await found).roomId).toBeString();
   });
+
+  test("a connected socket gets server:error session_expired at its token's expiry, then is dropped; a fresh token is not", async () => {
+    let offset = 0;
+    ts = await gated({}, { now: () => Date.now() + offset });
+    const early = await connectWithSession(ts);
+    expect(await sendHello(early.client, hello({ deviceId: early.deviceId }))).toMatchObject({ ok: true });
+    // A session minted now, connected 300 ms before its 24 h are up.
+    const body = sessionBody();
+    const res = await postSession(ts, body);
+    if (!res.body.ok) throw new Error(res.body.error);
+    offset = res.body.sessionExpiresAt - Date.now() - 300;
+    const late = await ts.connect({ auth: { sessionToken: res.body.sessionToken } });
+    const errors = record(late, "server:error");
+    const dropped = new Promise<string>((resolve) => late.once("disconnect", (reason) => resolve(reason)));
+    expect(await sendHello(late, hello({ deviceId: body.deviceId }))).toMatchObject({ ok: true });
+    expect(await dropped).toBe("io server disconnect");
+    expect(errors).toEqual([{ code: "session_expired", message: "session token expired" }]);
+    // The socket connected with a full day left is still up.
+    expect(early.client.connected).toBe(true);
+  });
 });
 
 describe("matching gate", () => {
@@ -410,6 +521,40 @@ describe("matching gate", () => {
     const res = await sendHello(b.client, hello({ deviceId: b.deviceId }));
     expect(res).toMatchObject({ ok: false, error: "matching_closed" });
     expect((res as { message?: string }).message).toMatch(/try again/i);
+  });
+
+  test("a hello past max_waiting is refused before any store write or the match lock", async () => {
+    ts = await gated();
+    await ts.server.flags.set({ max_waiting: 1 });
+    const a = await connectWithSession(ts);
+    const b = await connectWithSession(ts);
+    await sendHello(a.client, hello({ deviceId: a.deviceId, preferences: { genderFilter: "all", languageFilter: "hi" } }));
+
+    // The sweeper runs on its own timer (and takes the lock), so count only
+    // calls that carry b's device or socket id.
+    const spies = [
+      spyOn(ts.store, "setDeviceSocket"),
+      spyOn(ts.store, "putSession"),
+      spyOn(ts.store, "setPhoto"),
+      spyOn(ts.store, "addWaiting"),
+      // The first read inside the match lock: proves the hello never took it.
+      spyOn(ts.store, "getSession"),
+      spyOn(ts.server.enforcement, "noteDeviceSeen"),
+      spyOn(TurnService.prototype, "rememberIp"),
+    ];
+    const counted = spyOn(ts.store, "waitingCount");
+    try {
+      const res = await sendHello(b.client, hello({ deviceId: b.deviceId }));
+      expect(res).toMatchObject({ ok: false, error: "matching_closed" });
+      expect(counted).toHaveBeenCalled();
+      const ids = [b.deviceId, b.client.id!];
+      const touched = spies.filter((spy) =>
+        spy.mock.calls.some((args: unknown[]) => ids.some((id) => JSON.stringify(args).includes(id))),
+      );
+      expect(touched).toEqual([]);
+    } finally {
+      for (const spy of [...spies, counted]) spy.mockRestore();
+    }
   });
 
   test("hourly match caps: the re-queue and new hellos are refused with rate_limited", async () => {

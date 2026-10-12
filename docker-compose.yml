@@ -92,6 +92,16 @@ services:
       MAX_CONNECTIONS_PER_IP: ${MAX_CONNECTIONS_PER_IP:-10}
       CONNECT_BURST_PER_IP: ${CONNECT_BURST_PER_IP:-}
       CONNECT_RATE_PER_IP_PER_SEC: ${CONNECT_RATE_PER_IP_PER_SEC:-}
+      MAX_CONNECTIONS_PER_NETWORK: ${MAX_CONNECTIONS_PER_NETWORK:-}
+      CONNECT_BURST_PER_NETWORK: ${CONNECT_BURST_PER_NETWORK:-}
+      CONNECT_RATE_PER_NETWORK_PER_SEC: ${CONNECT_RATE_PER_NETWORK_PER_SEC:-}
+      MAX_CONNECTIONS_TOTAL: ${MAX_CONNECTIONS_TOTAL:-}
+      SESSION_RATE_TOTAL_PER_SEC: ${SESSION_RATE_TOTAL_PER_SEC:-}
+      SHED_HEAP_LIMIT_MB: ${SHED_HEAP_LIMIT_MB:-}
+      # Node 22 sizes V8's heap from the host's memory, not the container
+      # limit below; cap old space so V8 collects hard (and shedding trips)
+      # before the container is OOM-killed. Empty: this default.
+      NODE_OPTIONS: ${NODE_OPTIONS:---max-old-space-size=320}
       MATCH_ACCEPT_TIMEOUT_MS: ${MATCH_ACCEPT_TIMEOUT_MS:-30000}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       METRICS_TOKEN: ${METRICS_TOKEN:-}
@@ -106,9 +116,11 @@ services:
       TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
       TURNSTILE_DISABLED: ${TURNSTILE_DISABLED:-false}
       # Per client IP and per /24 (or /48) network limits on POST /api/session,
-      # hourly match caps per IP and per device, and skips per minute per device.
+      # new device ids per address per day, hourly match caps per IP and per
+      # device, and skips per minute per device.
       SESSION_RATE_PER_IP_PER_MIN: ${SESSION_RATE_PER_IP_PER_MIN:-}
       SESSION_RATE_PER_NETWORK_PER_MIN: ${SESSION_RATE_PER_NETWORK_PER_MIN:-}
+      SESSION_NEW_DEVICES_PER_NETWORK_PER_DAY: ${SESSION_NEW_DEVICES_PER_NETWORK_PER_DAY:-}
       MATCH_CAP_PER_DEVICE_PER_HOUR: ${MATCH_CAP_PER_DEVICE_PER_HOUR:-}
       MATCH_CAP_PER_IP_PER_HOUR: ${MATCH_CAP_PER_IP_PER_HOUR:-}
       MATCH_CAP_PER_DEVICE_PER_MIN: ${MATCH_CAP_PER_DEVICE_PER_MIN:-}
@@ -167,9 +179,10 @@ services:
         hard: 65535
     deploy:
       replicas: ${BACKEND_REPLICAS:-2}
-      # Per replica. Node sizes its heap from this limit; a replica that grows
-      # past it (a leak, or far more sockets than the host can serve) is
-      # restarted instead of pushing the host into swap.
+      # Per replica. Node does not size its heap from this limit (NODE_OPTIONS
+      # above caps it); a replica that grows past it (a leak, or far more
+      # sockets than the host can serve) is restarted instead of pushing the
+      # host into swap.
       resources:
         limits:
           memory: 768M
@@ -259,8 +272,14 @@ services:
         target: /etc/nginx/conf.d
         tmpfs:
           mode: 01777
+      # The gateway's Cloudflare ranges (deploy/cloudflare-ips.sh), for the
+      # per-client connection limit key in new-frontend/nginx.conf.
+      - ./deploy/nginx:/etc/nginx/chizzy:ro
     tmpfs:
       - /tmp
+    # Recreated with the gateway when deploy/nginx/ changes (see the gateway).
+    labels:
+      chizzy.gateway-conf-version: ${GATEWAY_CONF_VERSION:-local}
     # Static files only: it talks to nothing, so it shares no network with
     # the backend or Redis.
     networks:

@@ -43,6 +43,8 @@ class FakeSocket {
   }
   /** Simulate a server -> client event. */
   fire(event: string, ...args: unknown[]) {
+    if (event === "disconnect" || event === "connect_error") this.connected = false;
+    if (event === "connect") this.connected = true;
     act(() => {
       (this.handlers.get(event) ?? []).forEach((h) => h(...args));
       this.anyHandlers.forEach((h) => h(event, ...args));
@@ -69,6 +71,7 @@ describe("useSignaling (socket wiring)", () => {
   });
   afterEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
   });
 
   it("connects with the websocket transport only", () => {
@@ -165,12 +168,77 @@ describe("useSignaling (socket wiring)", () => {
     expect(socket.emitted.filter((e) => e.event === "moderation:signal")).toHaveLength(1);
   });
 
-  it("reconnects by itself after a server-initiated disconnect", () => {
+  it("reconnects after a jittered delay after a server-initiated disconnect, not at once", () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
     renderHook(() => useSignaling(profile, preferences));
     socket.fire("connect");
     socket.connect.mockClear();
     socket.fire("disconnect", "io server disconnect");
+    expect(socket.connect).not.toHaveBeenCalled();
+    // 250 ms + 0.5 * (2000 - 250) ms.
+    act(() => vi.advanceTimersByTime(1_124));
+    expect(socket.connect).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(1));
     expect(socket.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it("brings clients dropped together back at different times", () => {
+    vi.useFakeTimers();
+    // Each client draws its own delay: the first one to drop draws 0.05, the second 0.95.
+    vi.spyOn(Math, "random").mockReturnValueOnce(0.05).mockReturnValueOnce(0.95);
+    const sockets = [new FakeSocket(), new FakeSocket()];
+    const reconnectedAt: number[] = [];
+    sockets.forEach((s, i) => {
+      socket = s;
+      renderHook(() => useSignaling(profile, preferences));
+      s.fire("connect");
+      s.connect.mockImplementation(() => {
+        reconnectedAt[i] = Date.now();
+        return s;
+      });
+    });
+    const start = Date.now();
+    sockets.forEach((s) => s.fire("disconnect", "transport close"));
+    act(() => vi.advanceTimersByTime(2_000));
+    expect(reconnectedAt.map((t) => t - start)).toEqual([338, 1913]);
+  });
+
+  it("caps connection attempts at 6 per minute while the server keeps refusing", () => {
+    vi.useFakeTimers();
+    // The shortest delay every time: only the cap holds the client back.
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const start = Date.now();
+    const attempts = [0];
+    renderHook(() => useSignaling(profile, preferences));
+    socket.connect.mockImplementation(() => {
+      attempts.push(Date.now() - start);
+      // An upgrade refused with 503 reaches the client as a plain websocket error.
+      socket.fire("connect_error", new Error("websocket error"));
+      return socket;
+    });
+    socket.fire("connect_error", new Error("websocket error"));
+    act(() => vi.advanceTimersByTime(119_000));
+    // Without the cap: one attempt every 250 ms.
+    expect(attempts).toEqual([0, 250, 500, 750, 1_000, 1_250, 60_000, 60_250, 60_500, 60_750, 61_000, 61_250]);
+  });
+
+  it("says the server is busy from the second failure in a row until a hello succeeds", () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    const { result } = renderHook(() => useSignaling(profile, preferences));
+    socket.fire("connect_error", new Error("websocket error"));
+    expect(result.current.state.busyRetryAt).toBeNull();
+    expect(result.current.state.error).toBe("Cannot reach the server. Retrying...");
+    act(() => vi.advanceTimersByTime(250));
+    socket.fire("connect_error", new Error("websocket error"));
+    expect(result.current.state.busyRetryAt).toBe(Date.now() + 250);
+
+    act(() => vi.advanceTimersByTime(250));
+    socket.fire("connect");
+    expect(result.current.state.busyRetryAt).toBeNull();
+    act(() => socket.hellos()[0].ack?.(null, { ok: true, coins: 1, iceServers: [], mode: "preview", genderFilter: "all" }));
+    expect(result.current.state.status).toBe("waiting");
   });
 
   it("does not reconnect after the session was replaced", () => {

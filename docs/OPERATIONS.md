@@ -162,6 +162,53 @@ Names only. Values live where the table says and nowhere in the repository.
 Render's API key and the Vercel token live in each founder's own CLI login
 (`render login`, `vercel login`), not in CI.
 
+## Admin API
+
+On Render there is no Cloudflare Access in front of `/admin/api` and
+`ADMIN_ALLOWED_IPS` is unset, so the backend logs `ADMIN API WARNING:
+ADMIN_ALLOWED_IPS is empty` at every start. The API is then guarded by
+`ADMIN_TOKEN` (at least 32 characters in production) and two in-memory
+failure limits per subscriber address, an IPv4 address or an IPv6 /64
+(`backend/src/http/constants.ts`, reset by a restart or deploy):
+
+| limit | value | answer |
+|---|---|---|
+| bad tokens per address | 10 per 15 min from that address's first failure | 429 with `Retry-After` for that address, right token included |
+| bad tokens across all addresses | 100 per hour from the first failure; once spent, 1 bad token per address for the rest of the hour | 429 with `Retry-After` for every address that had a bad token this hour, right token included; logged once at error, `event: "admin_auth_budget_exhausted"`. An address without a failure still gets in with the right token |
+
+When the console answers 429:
+
+1. You most likely sent a bad token yourself from this address (a stale
+   saved token, a typo) after someone else spent the budget. Try from
+   another network (phone hotspot): an address with no failure is judged by
+   the token alone.
+2. `render logs -r srv-db5nnass728c738ek0o0 --tail` and look for
+   `admin_auth_budget_exhausted` (someone is guessing from many addresses) or
+   repeated `admin_auth_failed`.
+3. Either wait for `Retry-After`, or lock the API to yourself: set
+   `ADMIN_ALLOWED_IPS` in the Render env to your address or block (CIDR is
+   accepted, e.g. `203.0.113.0/24` or `2001:db8:1::/48`); saving the env
+   restarts the service, which also clears the counters. A clean address is
+   never made to wait: once the failure records are full
+   (`ADMIN_FAILURE_MAP_MAX`, 50,000 addresses) new failures are not recorded.
+4. If the token may have leaked (successful requests you did not make in the
+   audit log), rotate `ADMIN_TOKEN` (Secrets inventory above).
+
+## Session gate limits worth knowing on a bad day
+
+- A socket is disconnected when its 24 h session token expires: the client
+  gets `server:error` `session_expired` and mints a new session. A wave of
+  reconnects exactly 24 h after a busy hour is this, not an outage.
+- A ban (24 h or longer, set in `/admin`) also refuses new sessions from the
+  address the banned device last used (IPv4 address or IPv6 /64) for 6 h.
+  Users behind the same carrier NAT who already hold a session are not
+  affected; new ones on that address see the restriction page without an
+  appeal button for those hours. Lifting the ban lifts this at once.
+- At most `SESSION_NEW_DEVICES_PER_NETWORK_PER_DAY` (50) new device ids per
+  address per UTC day get a session (429 `rate_limited` beyond). If
+  `chizzy_session_requests_total{result="rate_limited"}` climbs without an
+  attack (a campus or carrier NAT), raise it in the Render env.
+
 ## Backups
 
 There is nothing to back up on the current production: the Render service
