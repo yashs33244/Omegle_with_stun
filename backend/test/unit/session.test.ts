@@ -287,23 +287,37 @@ function kvSuite(name: string, make: (clock: () => number) => SessionKv | null, 
     test("hourly match caps per device and per IP", async () => {
       let now = NOW;
       const kv = make(() => now)!;
-      const caps = new MatchCaps(kv, deriveSalt(randomUUID(), "x"), { perDevicePerHour: 2, perIpPerHour: 3 }, () => now);
+      const caps = new MatchCaps(kv, deriveSalt(randomUUID(), "x"), { perDevicePerHour: 2, perIpPerHour: 3, perDevicePerMinute: 100 }, () => now);
       const [a, b] = [randomUUID(), randomUUID()];
       await caps.bindIp(a, "192.0.2.1");
       await caps.bindIp(b, "192.0.2.1");
       await caps.recordMatch(a);
-      expect(await caps.overCap(a)).toBe(false);
+      expect(await caps.overCap(a)).toBeNull();
       await caps.recordMatch(a);
-      expect(await caps.overCap(a)).toBe(true); // device cap
-      expect(await caps.overCap(b)).toBe(false);
+      expect(await caps.overCap(a)).toBe("hour"); // device cap
+      expect(await caps.overCap(b)).toBeNull();
       await caps.recordMatch(b);
-      expect(await caps.overCap(b)).toBe(true); // shared IP cap
+      expect(await caps.overCap(b)).toBe("hour"); // shared IP cap
       // An unbound device is capped per device only.
       const c = randomUUID();
       await caps.recordMatch(c);
-      expect(await caps.overCap(c)).toBe(false);
+      expect(await caps.overCap(c)).toBeNull();
       now += 60 * 60_000;
-      expect(await caps.overCap(a)).toBe(false);
+      expect(await caps.overCap(a)).toBeNull();
+    });
+
+    test("the per-minute match cap is a fixed one-minute window per device", async () => {
+      let now = NOW;
+      const kv = make(() => now)!;
+      const caps = new MatchCaps(kv, deriveSalt(randomUUID(), "x"), { perDevicePerHour: 100, perIpPerHour: 100, perDevicePerMinute: 2 }, () => now);
+      const a = randomUUID();
+      await caps.bindIp(a, "192.0.2.1");
+      await caps.recordMatch(a);
+      expect(await caps.overCap(a)).toBeNull();
+      await caps.recordMatch(a);
+      expect(await caps.overCap(a)).toBe("minute");
+      now += 60_000;
+      expect(await caps.overCap(a)).toBeNull();
     });
   });
 }

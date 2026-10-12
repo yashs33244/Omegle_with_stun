@@ -6,6 +6,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { MATCH_ENV, matchConfigFromEnv, refineMatchEnv, type MatchConfig } from "./match/matchConfig";
+import { MATCH_CAP_PER_DEVICE_PER_MIN } from "./session/constants";
 
 const LOG_LEVELS = ["fatal", "error", "warn", "info", "debug", "trace", "silent"] as const;
 
@@ -255,6 +256,12 @@ export interface Config extends MatchConfig {
    * virtual user comes from one address.
    */
   connectRatePerIp: { capacity: number; refillPerSec: number };
+  /**
+   * A socket that has not sent a well-formed session:hello this long after
+   * connecting is disconnected (realtime/socket.ts). Not an env var; the SPA
+   * sends hello on connect, tests shrink it.
+   */
+  helloTimeoutMs: number;
   stunUrls: string[];
   turnUrls: string[];
   turnSecret?: string;
@@ -279,6 +286,8 @@ export interface Config extends MatchConfig {
   sessionRatePerNetworkPerMin: number;
   matchCapPerDevicePerHour: number;
   matchCapPerIpPerHour: number;
+  /** Matches per device per minute (session/constants.ts). Not an env var; tests shrink it. */
+  matchCapPerDevicePerMin: number;
   sentryDsn?: string;
   sentryDsnFrontend?: string;
   posthogKey?: string;
@@ -387,6 +396,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     keepaliveUrl: e.KEEPALIVE_URL ?? (e.RENDER_EXTERNAL_URL ? `${e.RENDER_EXTERNAL_URL.replace(/\/$/, "")}/healthz` : undefined),
     maxConnectionsPerIp: e.MAX_CONNECTIONS_PER_IP,
     connectRatePerIp: { capacity: e.CONNECT_BURST_PER_IP, refillPerSec: e.CONNECT_RATE_PER_IP_PER_SEC },
+    helloTimeoutMs: 30_000,
     stunUrls: csv(e.STUN_URLS),
     turnUrls: csv(e.TURN_URLS),
     turnSecret: e.TURN_SECRET,
@@ -406,6 +416,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     sessionRatePerNetworkPerMin: e.SESSION_RATE_PER_NETWORK_PER_MIN,
     matchCapPerDevicePerHour: e.MATCH_CAP_PER_DEVICE_PER_HOUR,
     matchCapPerIpPerHour: e.MATCH_CAP_PER_IP_PER_HOUR,
+    matchCapPerDevicePerMin: MATCH_CAP_PER_DEVICE_PER_MIN,
     sentryDsn: e.SENTRY_DSN,
     sentryDsnFrontend: e.SENTRY_DSN_FRONTEND,
     posthogKey: e.POSTHOG_KEY,

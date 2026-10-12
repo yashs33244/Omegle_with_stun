@@ -14,6 +14,7 @@ import {
   matchedPair,
   next,
   profile,
+  rawUpgrade,
   record,
   sendHello,
   startServer,
@@ -196,7 +197,9 @@ describe("connection limits", () => {
     const headers = { "X-Real-IP": "203.0.113.7" };
     await ts.connect({ headers });
     const second = await ts.connect({ headers });
-    await expect(ts.connect({ headers })).rejects.toThrow("too_many_connections");
+    // Refused at the HTTP upgrade: a 400 naming the reason, no Engine.IO connection.
+    expect(await rawUpgrade(ts, headers)).toEqual({ status: 400, body: "too_many_connections" });
+    await expect(ts.connect({ headers })).rejects.toThrow();
     await ts.connect({ headers: { "X-Real-IP": "203.0.113.8" } });
 
     // Closing a connection frees a slot.
@@ -205,20 +208,26 @@ describe("connection limits", () => {
     await ts.connect({ headers });
   });
 
+  test("a refused upgrade holds no connection: the cap cannot be exhausted by rejected attempts", async () => {
+    ts = await startServer({ proxyIpHeader: "x-real-ip", maxConnectionsPerIp: 1 });
+    const headers = { "X-Real-IP": "203.0.113.17" };
+    const first = await ts.connect({ headers });
+    for (let i = 0; i < 20; i++) expect((await rawUpgrade(ts, headers)).body).toBe("too_many_connections");
+    expect(ts.server.io.engine.clientsCount).toBe(1);
+    first.disconnect();
+    await delay(100);
+    expect((await rawUpgrade(ts, headers)).status).toBe(101);
+  });
+
   test("reconnecting does not refill the rate limits: new connections per IP are rate limited", async () => {
     ts = await startServer({ proxyIpHeader: "x-real-ip", connectRatePerIp: loadConfig({}).connectRatePerIp });
     const headers = { "X-Real-IP": "203.0.113.9" };
-    let refused: unknown;
+    let refused: { status: number; body: string } | undefined;
     for (let i = 0; i < 50 && refused === undefined; i++) {
-      try {
-        const c = await ts.connect({ headers });
-        expect(await sendHello(c, hello())).toMatchObject({ ok: true });
-        c.disconnect();
-      } catch (err) {
-        refused = err;
-      }
+      const res = await rawUpgrade(ts, headers);
+      if (res.status !== 101) refused = res;
     }
-    expect(String(refused)).toContain("rate_limited");
+    expect(refused).toEqual({ status: 400, body: "rate_limited" });
     // Other addresses are unaffected.
     await ts.connect({ headers: { "X-Real-IP": "203.0.113.10" } });
   });
@@ -227,19 +236,22 @@ describe("connection limits", () => {
     ts = await startServer({ proxyIpHeader: null, maxConnectionsPerIp: 2 });
     await ts.connect({ headers: { "X-Real-IP": "203.0.113.1" } });
     await ts.connect({ headers: { "X-Real-IP": "203.0.113.2" } });
-    await expect(ts.connect({ headers: { "X-Real-IP": "203.0.113.3" } })).rejects.toThrow("too_many_connections");
+    expect(await rawUpgrade(ts, { "X-Real-IP": "203.0.113.3" })).toEqual({ status: 400, body: "too_many_connections" });
   });
 
-  test("CORS allowlist rejects other origins for polling handshakes", async () => {
+  test("long polling is not offered: only websocket upgrades are served", async () => {
+    ts = await startServer();
+    const polling = await fetch(`${ts.url}/socket.io/?EIO=4&transport=polling`);
+    expect(polling.status).toBe(400);
+    expect(await polling.json()).toMatchObject({ code: 0, message: "Transport unknown" });
+    expect(ts.server.io.engine.clientsCount).toBe(0);
+    await ts.connect();
+  });
+
+  test("CORS allowlist rejects other origins (checked on every upgrade)", async () => {
     ts = await startServer({ corsOrigins: ["https://chizzy.example.com"] });
-    const ok = await fetch(`${ts.url}/socket.io/?EIO=4&transport=polling`, {
-      headers: { Origin: "https://chizzy.example.com" },
-    });
-    expect(ok.headers.get("access-control-allow-origin")).toBe("https://chizzy.example.com");
-    const bad = await fetch(`${ts.url}/socket.io/?EIO=4&transport=polling`, {
-      headers: { Origin: "https://evil.example.com" },
-    });
-    expect(bad.headers.get("access-control-allow-origin")).toBeNull();
+    expect((await rawUpgrade(ts, { Origin: "https://chizzy.example.com" })).status).toBe(101);
+    expect(await rawUpgrade(ts, { Origin: "https://evil.example.com" })).toEqual({ status: 400, body: "origin not allowed" });
   });
 
   test("WebSocket handshakes from origins outside the allowlist are refused", async () => {

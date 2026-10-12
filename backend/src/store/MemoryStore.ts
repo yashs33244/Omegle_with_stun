@@ -19,7 +19,9 @@ export class MemoryStore implements MatchStore {
   private readonly sessions = new Map<string, Session>();
   private readonly photos = new Map<string, string>();
   private readonly devices = new Map<string, string>();
-  private readonly waiting = new Map<string, number>();
+  /** The queue, oldest first; `waitingSince` is the position key. Kept sorted so a pass never sorts it. */
+  private readonly waiting: { socketId: string; since: number }[] = [];
+  private readonly waitingSince = new Map<string, number>();
   private readonly rooms = new Map<string, Room>();
   private readonly coins = new Map<string, number>();
   private readonly friends = new Set<string>();
@@ -93,17 +95,45 @@ export class MemoryStore implements MatchStore {
   }
 
   async addWaiting(socketId: string, since: number): Promise<void> {
-    this.waiting.delete(socketId);
-    this.waiting.set(socketId, since);
+    this.removeFromQueue(socketId);
+    // First index whose key is greater: equal keys keep arrival order.
+    let lo = 0;
+    let hi = this.waiting.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (this.waiting[mid]!.since <= since) lo = mid + 1;
+      else hi = mid;
+    }
+    this.waiting.splice(lo, 0, { socketId, since });
+    this.waitingSince.set(socketId, since);
   }
 
   async removeWaiting(socketId: string): Promise<void> {
-    this.waiting.delete(socketId);
+    this.removeFromQueue(socketId);
+  }
+
+  private removeFromQueue(socketId: string): void {
+    const since = this.waitingSince.get(socketId);
+    if (since === undefined) return;
+    this.waitingSince.delete(socketId);
+    // Binary search to the first entry with this key, then scan the equal run.
+    let lo = 0;
+    let hi = this.waiting.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (this.waiting[mid]!.since < since) lo = mid + 1;
+      else hi = mid;
+    }
+    for (let i = lo; i < this.waiting.length && this.waiting[i]!.since === since; i++) {
+      if (this.waiting[i]!.socketId === socketId) {
+        this.waiting.splice(i, 1);
+        return;
+      }
+    }
   }
 
   async listWaiting(): Promise<string[]> {
-    // Array.prototype.sort is stable, so equal scores keep insertion order.
-    return [...this.waiting.entries()].sort((a, b) => a[1] - b[1]).map(([id]) => id);
+    return this.waiting.map((entry) => entry.socketId);
   }
 
   async getRoom(roomId: string): Promise<Room | null> {
@@ -234,7 +264,7 @@ export class MemoryStore implements MatchStore {
       if (r.state === "pending") pendingRooms++;
       else activeRooms++;
     }
-    return { sessions: this.sessions.size, waiting: this.waiting.size, pendingRooms, activeRooms };
+    return { sessions: this.sessions.size, waiting: this.waiting.length, pendingRooms, activeRooms };
   }
 
   async close(): Promise<void> {

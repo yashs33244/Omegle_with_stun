@@ -32,7 +32,7 @@ import { TurnSpendPoller, cloudflareEgressQuery } from "./turn/spendPoller";
 import { MemoryTurnStore, RedisTurnStore } from "./turn/store";
 import { TurnService } from "./turn/TurnService";
 import { SparkService } from "./spark/SparkService";
-import { attachHandlers, createEmitter, createSocketServer, type AppServer } from "./realtime/socket";
+import { ConnectionGate, attachHandlers, createEmitter, createSocketServer, type AppServer } from "./realtime/socket";
 import { createSessionFeature, sessionWarnings, type RestrictionChecker } from "./session";
 import type { MatchStore } from "./store/MatchStore";
 
@@ -155,7 +155,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
   httpServer.keepAliveTimeout = HTTP_KEEP_ALIVE_TIMEOUT_MS;
   httpServer.maxHeadersCount = HTTP_MAX_HEADERS_COUNT;
   httpServer.maxRequestsPerSocket = HTTP_MAX_REQUESTS_PER_SOCKET;
-  const io = createSocketServer(httpServer, config);
+  const io = createSocketServer(httpServer, config, new ConnectionGate(config, metrics));
   deps.configureIo?.(io);
   const emitter = createEmitter(io);
   live.emitter = emitter;

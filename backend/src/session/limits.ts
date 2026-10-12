@@ -12,6 +12,7 @@ import {
   FINGERPRINT_LOCKOUT_MS,
   KEY,
   MATCH_CAP_IP_BINDING_TTL_MS,
+  MATCH_CAP_MINUTE_WINDOW_MS,
   MATCH_CAP_WINDOW_MS,
   SALT_DOMAIN,
   SESSION_RATE_WINDOW_MS,
@@ -88,12 +89,17 @@ export class SessionRateLimiter {
 export interface MatchCapLimits {
   perDevicePerHour: number;
   perIpPerHour: number;
+  perDevicePerMinute: number;
 }
+
+/** Which cap a device is over: the hourly ones (device or its IP) or the per-minute one. */
+export type MatchCapHit = "hour" | "minute";
 
 /**
  * Hourly match caps (LB-10): a level no human reaches, so scripted clients
  * cannot harvest faces and IPs. The handshake binds each device to its IP;
- * every match then counts against both.
+ * every match then counts against both. The per-minute device cap stops a
+ * skip bot from spending the hourly one in a burst.
  */
 export class MatchCaps {
   constructor(
@@ -107,23 +113,29 @@ export class MatchCaps {
     return Math.floor(this.clock() / MATCH_CAP_WINDOW_MS);
   }
 
+  private minute(): number {
+    return Math.floor(this.clock() / MATCH_CAP_MINUTE_WINDOW_MS);
+  }
+
   async bindIp(deviceId: string, rawIp: string): Promise<void> {
     await this.kv.set(KEY.capIpOf(deviceId), saltedHash(this.salt, ipBuckets(rawIp).ip), MATCH_CAP_IP_BINDING_TTL_MS);
   }
 
-  async overCap(deviceId: string): Promise<boolean> {
+  async overCap(deviceId: string): Promise<MatchCapHit | null> {
     const hour = this.hour();
     const ipHash = await this.kv.get(KEY.capIpOf(deviceId));
-    const keys = [KEY.capDevice(deviceId, hour)];
+    const keys = [KEY.capDevice(deviceId, hour), KEY.capDeviceMinute(deviceId, this.minute())];
     if (ipHash) keys.push(KEY.capIp(ipHash, hour));
-    const [byDevice, byIp] = await this.kv.mget(keys);
-    return Number(byDevice ?? 0) >= this.limits.perDevicePerHour || Number(byIp ?? 0) >= this.limits.perIpPerHour;
+    const [byDevice, byMinute, byIp] = await this.kv.mget(keys);
+    if (Number(byDevice ?? 0) >= this.limits.perDevicePerHour || Number(byIp ?? 0) >= this.limits.perIpPerHour) return "hour";
+    return Number(byMinute ?? 0) >= this.limits.perDevicePerMinute ? "minute" : null;
   }
 
   async recordMatch(deviceId: string): Promise<void> {
     const hour = this.hour();
     const ipHash = await this.kv.get(KEY.capIpOf(deviceId));
     await this.kv.incr(KEY.capDevice(deviceId, hour), MATCH_CAP_WINDOW_MS);
+    await this.kv.incr(KEY.capDeviceMinute(deviceId, this.minute()), MATCH_CAP_MINUTE_WINDOW_MS);
     if (ipHash) await this.kv.incr(KEY.capIp(ipHash, hour), MATCH_CAP_WINDOW_MS);
   }
 }

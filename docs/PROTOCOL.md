@@ -14,22 +14,27 @@ Source of truth: `backend/src/protocol.ts` (`PROTOCOL_VERSION = 3`). The fronten
 |---|---|---|
 | Library | Socket.IO 4 server (`socket.io`), client `socket.io-client` | `backend/src/realtime/socket.ts`, `new-frontend/src/hooks/useSignaling.ts` |
 | Path | Socket.IO default `/socket.io/`; the gateway proxies that prefix with 1 h read/send timeouts and `proxy_connect_timeout 1s` | `deploy/nginx/gateway.conf` `location /socket.io/` |
-| Transports | client: `transports: ["websocket"]` (no long-polling, no upgrade) | `useSignaling.ts` `io(API_URL, …)` |
+| Transports | server: `transports: ["websocket"]` (long polling is never served; a polling handshake gets HTTP 400 "Transport unknown"); client: `transports: ["websocket"]` (no long-polling, no upgrade) | `socket.ts` `createSocketServer`, `useSignaling.ts` `io(API_URL, …)` |
 | Why websocket only | the gateway uses `least_conn` with no sticky sessions; long-polling would need every poll of one session to hit the same replica. `ip_hash` is not an option because behind the EC2 host proxy all traffic arrives from one address | header comment of `deploy/nginx/gateway.conf` |
-| CORS | `cors.origin` = `CORS_ORIGINS` (`*` only outside production); browsers do not apply CORS to WebSocket upgrades, so `allowRequest` re-checks the `Origin` header on every handshake. Requests without `Origin` are allowed | `socket.ts` `originAllowed`, `config.ts` (`CORS_ORIGINS` required and must not contain `*` in production) |
+| CORS | `cors.origin` = `CORS_ORIGINS` (`*` only outside production); browsers do not apply CORS to WebSocket upgrades, so `allowRequest` re-checks the `Origin` header on every upgrade and answers HTTP 400 `origin not allowed`. Requests without `Origin` are allowed | `socket.ts` `originAllowed`, `config.ts` (`CORS_ORIGINS` required and must not contain `*` in production) |
+| Per-IP cap and connect rate | also in `allowRequest`, before any Engine.IO connection exists (see 1.2) | `socket.ts` `ConnectionGate` |
 | Max packet | `MAX_HTTP_BUFFER_SIZE = 256 * 1024` bytes, applied as `maxHttpBufferSize` and inside `limitedParser` | `socket.ts` |
-| limitedParser | a `socket.io-parser` `Decoder` subclass: throws on any non-string chunk, on `BINARY_EVENT`/`BINARY_ACK` packets, and on packets over 256 KiB. A throw makes Socket.IO close that connection before any handler runs. It exists because under Bun the `ws` `maxPayload` limit is not enforced, and because binary attachment counts could be abused to buffer unbounded frames | `backend/src/realtime/limitedParser.ts` |
+| limitedParser | a `socket.io-parser` `Decoder` subclass: throws on any non-string chunk, on `BINARY_EVENT`/`BINARY_ACK` packets, on packets over 256 KiB, and when the connection's packet budget (`PACKET_RATE_PER_CONNECTION`: 400 burst, 100/s) or byte budget (`PACKET_BYTES_PER_CONNECTION`: 1 MiB burst, 128 KiB/s) runs out. A throw makes Socket.IO close that connection before any handler runs. It exists because under Bun the `ws` `maxPayload` limit is not enforced, because binary attachment counts could be abused to buffer unbounded frames, and because every packet is JSON-parsed before the per-event buckets see it (unknown events never reach a bucket) | `backend/src/realtime/limitedParser.ts`, `rateLimit.ts` |
 | Heartbeat | server `pingInterval: 20_000`, `pingTimeout: 20_000`, `connectTimeout: 10_000` (ms) | `socket.ts` `createSocketServer` |
+| Hello deadline | a connected socket that has not sent a well-formed `session:hello` within `helloTimeoutMs` (30 s, `config.ts`) is disconnected (`chizzy_rate_limited_total{event="hello_timeout"}`); a malformed hello does not stop the clock | `socket.ts` `attachHandlers` |
 | Multi-instance | `io.to(socketId).emit` through the Redis adapter, so an emit reaches a socket held by another replica | `socket.ts` `createEmitter`, `realtime/redisAdapter.ts` |
 
 ### 1.2 Handshake
 
-The connection goes through two `io.use` middlewares in this order (`socket.ts` `attachHandlers`):
+The upgrade is checked in `allowRequest` first, then the connection goes through two `io.use` middlewares (`socket.ts` `createSocketServer`, `attachHandlers`):
 
+0. Per-IP cap and connect rate (`socket.ts` `ConnectionGate.admit`, in `allowRequest`). Client IP = `PROXY_IP_HEADER` (default `x-real-ip`) when `TRUST_PROXY=true` and the header holds exactly one IP literal (`session/geo.ts` `requestIp`; IPv4-mapped prefix and IPv6 zone id dropped), else the TCP peer. A missing or malformed header (a list, a hostname, junk) never becomes an identity; `x-forwarded-for`/`forwarded`/`via` are refused at boot because clients can prepend to them. A refusal is an HTTP 400 on the upgrade whose body names the reason; no Engine.IO connection, Socket.IO client or session-gate work exists for it, and the Socket.IO client reports a generic `websocket error`.
+   - Open connections per IP >= `MAX_CONNECTIONS_PER_IP` (default `10`, `config.ts`) → 400 `too_many_connections`. Connections are counted from the engine's `connection` event and released on its `close`.
+   - Connect token bucket per IP: capacity `CONNECT_BURST_PER_IP` (default `20`), refill `CONNECT_RATE_PER_IP_PER_SEC` (default `1`) → 400 `rate_limited`. Full buckets are pruned every 60 s.
 1. Session gate (`backend/src/session/handshake.ts` `sessionHandshake`). Reads `socket.handshake.auth.sessionToken`, verifies it with `TokenSigner.verifySession` (signed token from `POST /api/session`, TTL `SESSION_TOKEN_TTL_MS = 1 day`, `session/constants.ts`). Missing or invalid: `connect_error` with `data.code = "session_required"`. Then the country from the token and the current `cf-ipcountry` header (only trusted with `TRUST_CLOUDFLARE=true`) are both checked against the `blocked_countries` flag: `data.code = "region_blocked"`. On success `socket.data.session = { deviceId, country }` and the device is bound to the IP for the hourly match caps (`caps.bindIp`; a store failure here is logged and ignored).
-2. Per-IP cap and connect rate (`socket.ts`). Client IP = `PROXY_IP_HEADER` (default `x-real-ip`) when `TRUST_PROXY=true` and the header holds exactly one IP literal (`session/geo.ts` `requestIp`; IPv4-mapped prefix and IPv6 zone id dropped), else the TCP peer. A missing or malformed header (a list, a hostname, junk) never becomes an identity; `x-forwarded-for`/`forwarded`/`via` are refused at boot because clients can prepend to them.
-   - Open connections per IP >= `MAX_CONNECTIONS_PER_IP` (default `10`, `config.ts`) → `connect_error` "too_many_connections". The count is released on the underlying connection's `close`.
-   - Connect token bucket per IP: capacity `CONNECT_BURST_PER_IP` (default `20`), refill `CONNECT_RATE_PER_IP_PER_SEC` (default `1`) → `connect_error` "rate_limited". Full buckets are pruned every 60 s.
+2. Per-session socket cap (`socket.ts`): more than `MAX_SOCKETS_PER_SESSION` (3, `rateLimit.ts`) open sockets for the token's `deviceId` on this instance → `connect_error` "too_many_connections". Skipped when the session gate is off.
+
+A middleware refusal (1 or 2) sends `CONNECT_ERROR` and then closes the connection on the next tick; Socket.IO would otherwise keep it open for `connectTimeout` in case the client joins another namespace, which this server does not have.
 
 The client (`useSignaling.ts`) supplies `auth` as a function so every (re)connect sends the current token. On `connect_error` with `session_required` or `region_blocked` it invalidates the stored session, waits for a new `POST /api/session` to succeed (`waitForSession()`), then calls `socket.connect()` again. Socket.IO does not retry handshake rejections by itself.
 
@@ -53,12 +58,12 @@ Server side, a disconnect ends any room with `partner-left` for the partner and 
 
 ### 1.5 Per-event rate classes (`backend/src/rateLimit.ts`)
 
-One token bucket per class per socket; each event takes one token; an empty bucket answers `rate_limited` (ack if the event has one, else `server:error`).
+One token bucket per class per socket; each event takes one token; an empty bucket answers `rate_limited` (ack if the event has one, else `server:error`). Events with no handler (unknown names, acks for nothing) are ignored by Socket.IO without reaching a bucket; only the per-connection packet budget (1.1) bounds them.
 
 | Class | Capacity | Refill per second | Events |
 |---|---|---|---|
 | `hello` | 5 | 0.5 | `session:hello` |
-| `preferences` | 5 | 1 | `session:preferences` |
+| `preferences` | 5 | 1 | `session:preferences` (an unchanged preference set is acknowledged without touching the queue) |
 | `control` | 10 | 2 | `match:accept`, `match:decline`, `call:connected`, `call:skip`, `spark:request` |
 | `signal` | 200 | 50 | `rtc:signal`, `caption:segment` (outer bucket; `CaptionRelay` adds its own `CAPTIONS.maxPerSec = 10` bucket) |
 | `chat` | 10 | 2 | `chat:send` |
@@ -128,7 +133,7 @@ Types below are the zod schemas / TypeScript interfaces in `backend/src/protocol
 | Code | Meaning | Where |
 |---|---|---|
 | `invalid_payload` | zod parse failed, or `deviceId` differs from the session token, or the evidence frame is not a JPEG | `socket.ts`, hello, report |
-| `rate_limited` | per-socket bucket empty; hourly match cap (`CAP_MESSAGE`); report quota; Spark cooldown | `socket.ts`, `queueGate.ts`, `SparkService` |
+| `rate_limited` | per-socket bucket empty; hourly match cap (`CAP_MESSAGE`); per-minute match cap (`MINUTE_CAP_MESSAGE`, `MATCH_CAP_PER_DEVICE_PER_MIN = 20`); accept-timeout cooldown ("You let 3 matches expire…", `ACCEPT_TIMEOUT_*` in `safety/constants.ts`); report quota; Spark cooldown | `socket.ts`, `queueGate.ts`, `MatchService.hello`, `SparkService` |
 | `not_in_room` | the room is not the sender's, is not active, or the accept window has passed | chat, report, spark, accept |
 | `bad_state` | hello not sent yet, deviceId change on a live socket, duplicate report, socket gone during hello | `MatchService` |
 | `unsupported_version` | `protocolVersion !== 3` | `socket.ts` |
@@ -169,7 +174,7 @@ sequenceDiagram
     S-->>B: call:start {initiator: false, ...}
 ```
 
-If only one side accepts before `expiresAt + 750 ms`, the sweeper (`sweepIntervalMs = 500`) ends the room: the accepter gets `match:ended {reason: "timeout"}` and is re-queued; the other gets `accept-timeout` and stays idle (`MatchService.runSweep`).
+If only one side accepts before `expiresAt + 750 ms`, the sweeper (`sweepIntervalMs = 500`) ends the room: the accepter gets `match:ended {reason: "timeout"}` and is re-queued; the other gets `accept-timeout` and stays idle (`MatchService.runSweep`). Each side that never pressed Accept also gets a strike (`SafetySignals.acceptTimedOut`); the third strike within 10 minutes starts a 60 s cooldown during which `session:hello` answers `rate_limited` (`ACCEPT_TIMEOUT_STRIKES`, `ACCEPT_TIMEOUT_WINDOW_MS`, `ACCEPT_TIMEOUT_COOLDOWN_MS` in `safety/constants.ts`). Instant-mode sides are accepted by the server and never strike.
 
 Instant mode (`mode: "instant"`, or the `default_mode` flag forcing nothing; a `preview` flag overrides both sides to preview, `effectiveMode`):
 

@@ -47,6 +47,15 @@ export const NUDGE_COOLDOWN_MS = 60_000;
 export const DEDUPE_MAX = 50_000;
 /** Default Redis key prefix of the signal store. */
 export const SIGNALS_KEY_PREFIX = "chizzy:signals:";
+/**
+ * Letting the accept window expire wastes a partner's wait. A device that
+ * lets ACCEPT_TIMEOUT_STRIKES matches expire within ACCEPT_TIMEOUT_WINDOW_MS
+ * is kept out of the queue for ACCEPT_TIMEOUT_COOLDOWN_MS (hello answers
+ * rate_limited). Instant-mode sides are accepted by the server and never strike.
+ */
+export const ACCEPT_TIMEOUT_STRIKES = 3;
+export const ACCEPT_TIMEOUT_WINDOW_MS = 10 * 60_000;
+export const ACCEPT_TIMEOUT_COOLDOWN_MS = 60_000;
 
 /** Why a device was given low priority; the label of chizzy_low_priority_total. */
 export const LOW_PRIORITY_CAUSE = { risk: "risk", earlySkip: "early-skip" } as const;

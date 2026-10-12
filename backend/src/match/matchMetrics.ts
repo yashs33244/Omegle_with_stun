@@ -16,6 +16,8 @@ export interface MatchMetrics {
   namesReplacedTotal: Counter;
   earlySkipsTotal: Counter;
   lowPriorityTotal: Counter<"cause">;
+  /** Devices put on an accept-timeout cooldown (let too many accept windows expire). */
+  acceptCooldownsTotal: Counter;
   turnCredentialsTotal: Counter<"result">;
   turnSpendStepsTotal: Counter<"step">;
   turnSpendPollErrorsTotal: Counter;
@@ -74,6 +76,11 @@ export function createMatchMetrics(registry: Registry): MatchMetrics {
       name: "chizzy_low_priority_total",
       help: "Devices given low matching priority, by cause (never a ban)",
       labelNames: ["cause"],
+      registers,
+    }),
+    acceptCooldownsTotal: new Counter({
+      name: "chizzy_accept_cooldowns_total",
+      help: "Devices kept out of the queue for letting too many accept windows expire",
       registers,
     }),
     turnCredentialsTotal: new Counter({
