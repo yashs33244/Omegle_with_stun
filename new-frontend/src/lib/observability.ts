@@ -126,6 +126,21 @@ export function scrubEvent<E extends ScrubbableEvent>(event: E): E {
   return out;
 }
 
+/**
+ * Sentry events one page load may send; later ones are dropped, so an error
+ * loop in one tab cannot use up the project's quota (the backend has its own
+ * per-process budget, backend/src/observability/constants.ts).
+ */
+export const SENTRY_EVENTS_PER_PAGE = 20;
+let sentryEventsSent = 0;
+
+/** Sentry beforeSend: drops events past SENTRY_EVENTS_PER_PAGE, scrubs the rest. */
+export function beforeSendEvent<E extends ScrubbableEvent>(event: E): E | null {
+  if (sentryEventsSent >= SENTRY_EVENTS_PER_PAGE) return null;
+  sentryEventsSent++;
+  return scrubEvent(event);
+}
+
 /** PostHog properties that identify a person or a network location. */
 export const POSTHOG_DENYLIST = ["$ip", "$current_url", "$referrer", "$referring_domain", "$initial_referrer", "$initial_referring_domain"];
 
@@ -148,7 +163,7 @@ async function initSentry(dsn: string): Promise<void> {
     },
     tracesSampleRate: 0,
     // Default integrations include breadcrumbs; scrubEvent filters what they carry.
-    beforeSend: (event) => scrubEvent(event),
+    beforeSend: (event) => beforeSendEvent(event),
     beforeBreadcrumb: (crumb) => (DROPPED_BREADCRUMBS.has(crumb.category ?? "") ? null : crumb),
   });
   captureErrorImpl = (error) => Sentry.captureException(error);
@@ -220,6 +235,8 @@ export function resetObservabilityForTests(): void {
   captureErrorImpl = null;
   started = false;
   queue = [];
+  errorQueue = [];
+  sentryEventsSent = 0;
   onceFired.clear();
 }
 
