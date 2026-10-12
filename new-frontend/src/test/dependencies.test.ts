@@ -26,7 +26,7 @@ const code = [...sourceFiles(join(root, "src")), ...configFiles].map((f) => read
 
 /** Static imports, side-effect imports and lazy `import("...")` calls (Sentry and PostHog load on demand). */
 function isImported(name: string): boolean {
-  const escaped = name.replace(/[/.]/g, "\\$&");
+  const escaped = name.replace(/[\\^$.*+?()[\]{}|/]/g, "\\$&");
   const spec = `["']${escaped}(/[^"']*)?["']`;
   return new RegExp(`from ${spec}|import ${spec}|import\\(\\s*${spec}\\s*\\)`).test(code);
 }
