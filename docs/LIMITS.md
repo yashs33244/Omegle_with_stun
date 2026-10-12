@@ -301,6 +301,7 @@ prepend to them.
 | Early skip | a partner leaving within 3 s counts; share over 0.6 after 10 calls gives low priority for 1 h | `match/matchConfig.ts:113-117` | slower matches | code |
 | Risk score | 6 soft points in 24 h gives low priority (never a ban) | `matchConfig.ts:116`, `safety/constants.ts:39` | slower matches | code |
 | Topics / name / photo | up to 10 topics, 32-char name, 150,000-char photo data URL (about 110 KB JPEG) | `protocol.ts:51-55` | `invalid_payload` | code |
+| Pattern-checked strings | a max ahead of every pattern: language code 12, country 2, caption segment id 64, date of birth 10, fingerprint 64, coin pack id 32, flags `blocked_countries` 750 and `staffed_hours` 64; every string and array in `protocol.ts` needs a max (`test/property/schemas.test.ts` introspects the schemas and fails otherwise) | `protocol.ts:97-98,261,484-485,594,706-707` | `invalid_payload` / 400 `invalid` | code |
 | Instance heartbeat / TTL | 5 s / 15 s | `config.ts:382-383` | sessions of a silent instance removed, partners get `partner-unavailable` | code |
 | Chat guard | links, handles and phone numbers hidden for the first 2 min of a call | `matchConfig.ts:112` | text masked | code |
 
