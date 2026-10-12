@@ -1,10 +1,12 @@
 #!/usr/bin/env sh
 # Checks the gateway's abuse limits (deploy/nginx): per-client rate limits,
-# the exemption for local peers, the 404 for unknown paths and the slow
-# client timeouts. Runs the gateway image from docker-compose.yml with the
-# real nginx.conf and gateway.conf in a throwaway compose project, next to a
-# stub "backend" that answers 200 to everything, and talks to the gateway on
-# a loopback port. Needs docker (compose v2) and curl.
+# the exemption for local peers, the 404 for unknown paths, the slow client
+# timeouts and the retry of a handshake a full replica refused. Runs the
+# gateway image from docker-compose.yml with the real nginx.conf and
+# gateway.conf in a throwaway compose project, next to two stub replicas
+# behind the name "backend": one answers 200 to everything, the other ("full")
+# answers 503 to /socket.io/ like a replica at its socket cap. Talks to the
+# gateway on a loopback port. Needs docker (compose v2) and curl.
 #
 #   sh scripts/test-gateway-limits.sh [port]      (default 38080)
 set -eu
@@ -26,12 +28,32 @@ server {
     }
 }
 EOF
+cat >"$dir/full.conf" <<'EOF'
+server {
+    listen 3004;
+    location /socket.io/ {
+        default_type text/plain;
+        return 503 "server_full\n";
+    }
+    location / {
+        default_type text/plain;
+        return 200 "stub\n";
+    }
+}
+EOF
 cat >"$dir/docker-compose.yml" <<EOF
 services:
   backend:
     image: $image
     volumes:
       - $dir/stub.conf:/etc/nginx/conf.d/default.conf:ro
+  full:
+    image: $image
+    volumes:
+      - $dir/full.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      default:
+        aliases: [backend]
   gateway:
     image: $image
     volumes:
@@ -39,10 +61,10 @@ services:
       - $root/deploy/nginx:/etc/nginx/chizzy:ro
     ports:
       - "127.0.0.1:$port:8080"
-    depends_on: [backend]
+    depends_on: [backend, full]
 EOF
 chmod 755 "$dir"
-chmod 644 "$dir/stub.conf" "$dir/docker-compose.yml"
+chmod 644 "$dir/stub.conf" "$dir/full.conf" "$dir/docker-compose.yml"
 docker compose -p "$project" -f "$dir/docker-compose.yml" up -d >/dev/null 2>&1
 
 base="http://127.0.0.1:$port"
@@ -135,6 +157,17 @@ if [ "$(count "$got" 429 | sed "s/^$/0/")" -ge 10 ]; then
   ok "socket handshakes from one public address: $(count "$got" 429) limited"
 else
   fail "socket handshakes from one public address were not limited: $(printf '%s' "$got" | tr '\n' ' ')"
+fi
+
+# A handshake the full replica refuses with 503 is retried on the other one
+# (proxy_next_upstream http_503): no client sees the 503, and the full
+# replica did refuse some of them (the flood above spread across both).
+got=$(codes 10 -H 'X-Forwarded-For: 198.51.100.13' "$base/socket.io/?EIO=4&transport=websocket")
+refused=$(docker compose -p "$project" -f "$dir/docker-compose.yml" logs --no-color full 2>/dev/null | grep -c '"GET /socket.io/[^"]*" 503 ' || true)
+if [ "$(count "$got" 200)" = 10 ] && [ "${refused:-0}" -ge 1 ]; then
+  ok "handshakes a full replica refused are retried on another ($refused refused, clients saw none)"
+else
+  fail "503 retry: want 10 x 200 and at least one 503 at the full replica, got: $(printf '%s' "$got" | tr '\n' ' ')/ $refused refused"
 fi
 
 # Only the backend's routes are proxied.
