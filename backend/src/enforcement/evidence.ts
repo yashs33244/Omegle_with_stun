@@ -7,13 +7,15 @@
  * admin console can never read (see EnforcementService.evidenceImage).
  *
  * Two backends: a local directory (0700) or S3 with server-side encryption.
- * Evidence bytes never go to Redis.
+ * Evidence bytes never go to Redis. Reads are capped at EVIDENCE_MAX_BYTES
+ * and must still be a JPEG: the admin route serves them as image/jpeg.
  */
 import { createHash } from "node:crypto";
-import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdir, open, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import {
   EVIDENCE_AREA,
+  EVIDENCE_CONTENT_TYPE,
   EVIDENCE_DIR_MODE,
   EVIDENCE_EXTENSION,
   EVIDENCE_FILE_MODE,
@@ -39,8 +41,19 @@ export function parseEvidenceFrame(dataUrl: string): EvidenceFrame | null {
   if (b64.length === 0 || b64.length % 4 !== 0 || !/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) return null;
   const bytes = new Uint8Array(Buffer.from(b64, "base64"));
   if (bytes.length < EVIDENCE_MIN_BYTES || bytes.length > EVIDENCE_MAX_BYTES) return null;
-  if (JPEG_MAGIC.some((byte, i) => bytes[i] !== byte)) return null;
+  if (!isJpeg(bytes)) return null;
   return { bytes, sha256: createHash("sha256").update(bytes).digest("hex") };
+}
+
+function isJpeg(bytes: Uint8Array): boolean {
+  return JPEG_MAGIC.every((byte, i) => bytes[i] === byte);
+}
+
+/** Bytes read back from storage: over the cap or not a JPEG means the store was tampered with or corrupted. */
+function checkStored(bytes: Uint8Array): Uint8Array {
+  if (bytes.length > EVIDENCE_MAX_BYTES) throw new Error("stored evidence exceeds the size cap");
+  if (!isJpeg(bytes)) throw new Error("stored evidence is not a JPEG");
+  return bytes;
 }
 
 export function toDataUrl(bytes: Uint8Array): string {
@@ -91,25 +104,48 @@ export class FsEvidenceStore implements EvidenceStore {
     return this.ready;
   }
 
+  /**
+   * Write-once. Writing the same bytes again succeeds, so a retried escalation
+   * (copy to restricted, then delete general) can finish after a partial failure.
+   */
   async put(id: string, bytes: Uint8Array, where: EvidenceLocation): Promise<void> {
     checkId(id);
     await this.ensureDirs();
-    await writeFile(join(this.sub(where), `${id}${EVIDENCE_EXTENSION}`), bytes, { mode: EVIDENCE_FILE_MODE, flag: "wx" });
+    const path = this.path(id, where);
+    try {
+      await writeFile(path, bytes, { mode: EVIDENCE_FILE_MODE, flag: "wx" });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      if (!Buffer.from(await readFile(path)).equals(bytes)) throw err;
+    }
   }
 
   async get(id: string, where: EvidenceLocation): Promise<Uint8Array | null> {
     checkId(id);
+    let file;
     try {
-      return new Uint8Array(await readFile(join(this.sub(where), `${id}${EVIDENCE_EXTENSION}`)));
+      file = await open(this.path(id, where), "r");
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
       throw err;
+    }
+    try {
+      // Checked before reading, so an oversized file is never loaded.
+      if ((await file.stat()).size > EVIDENCE_MAX_BYTES) throw new Error("stored evidence exceeds the size cap");
+      return checkStored(new Uint8Array(await file.readFile()));
+    } finally {
+      await file.close();
     }
   }
 
   async delete(id: string, where: EvidenceLocation): Promise<void> {
     checkId(id);
-    await rm(join(this.sub(where), `${id}${EVIDENCE_EXTENSION}`), { force: true });
+    await rm(this.path(id, where), { force: true });
+  }
+
+  /** `id` must have passed checkId: it then has no separators or dots and stays inside the area directory. */
+  private path(id: string, where: EvidenceLocation): string {
+    return join(this.sub(where), `${id}${EVIDENCE_EXTENSION}`);
   }
 }
 
@@ -155,7 +191,7 @@ export class S3EvidenceStore implements EvidenceStore {
         Bucket: this.opts.bucket,
         Key: this.key(id, where),
         Body: bytes,
-        ContentType: "image/jpeg",
+        ContentType: EVIDENCE_CONTENT_TYPE,
         ...sse,
       }),
     );
@@ -163,10 +199,15 @@ export class S3EvidenceStore implements EvidenceStore {
 
   async get(id: string, where: EvidenceLocation): Promise<Uint8Array | null> {
     try {
+      // One byte past the cap: enough to tell an oversized object apart without downloading it.
       const res = (await this.client.send(
-        new this.opts.commands.GetObjectCommand({ Bucket: this.opts.bucket, Key: this.key(id, where) }),
+        new this.opts.commands.GetObjectCommand({
+          Bucket: this.opts.bucket,
+          Key: this.key(id, where),
+          Range: `bytes=0-${EVIDENCE_MAX_BYTES}`,
+        }),
       )) as { Body?: { transformToByteArray(): Promise<Uint8Array> } };
-      return res.Body ? await res.Body.transformToByteArray() : null;
+      return res.Body ? checkStored(await res.Body.transformToByteArray()) : null;
     } catch (err) {
       const name = (err as { name?: string }).name;
       if (name === "NoSuchKey" || name === "NotFound") return null;

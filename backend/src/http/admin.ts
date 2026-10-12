@@ -9,7 +9,7 @@
  *
  *   GET  /queue?status=            review queue (severity, then due clock)
  *   GET  /reports/:id              one report
- *   GET  /reports/:id/evidence     evidence JPEG (never restricted items; audited)
+ *   GET  /reports/:id/evidence     evidence JPEG download (never restricted items; audited)
  *   POST /reports/:id/action       adminReportActionSchema
  *   POST /reports/:id/escalate     CSAM escalation; returns the report packet
  *   GET  /appeals                  POST /appeals/:id/decision
@@ -17,14 +17,16 @@
  *   GET  /flags                    PUT /flags (partial, validated by flagsSchema)
  *   GET  /audit?limit=&before=     audit log, newest first
  *   GET  /wallets/:deviceId        coins, active unlocks and ledger; POST /wallets/:deviceId/adjust {delta, note}
+ *                                  (optional Idempotency-Key header: a repeated key is 409 duplicate, applied once)
  *   GET  /billing/orders?limit=    Razorpay orders, newest first
- * Every state change writes an audit entry.
+ * Every state change writes an audit entry (actor: the client IP; there is one admin token).
  */
 import { createHash, timingSafeEqual } from "node:crypto";
 import express, { type Request, type RequestHandler, type Response, type Router } from "express";
 import { z } from "zod";
 import type { BillingService } from "../billing/BillingService";
 import type { Config } from "../config";
+import { EVIDENCE_CONTENT_TYPE, EVIDENCE_EXTENSION } from "../enforcement/constants";
 import type { AdminError, AdminResult, EnforcementService } from "../enforcement/EnforcementService";
 import type { FlagsReader } from "../flags/flags";
 import type { Logger } from "../logger";
@@ -64,6 +66,8 @@ function tokenMatches(header: string | undefined, token: string): boolean {
 
 const STATUS: Record<AdminError, number> = { not_found: 404, conflict: 409, restricted: 403 };
 const uuid = z.string().uuid();
+/** Idempotency-Key header of the wallet adjust: a client-generated token (a UUID fits). */
+const idempotencyKey = z.string().regex(/^[A-Za-z0-9_-]{8,64}$/);
 const queueStatus = z.enum(["open", "acknowledged", "actioned", "dismissed", "escalated", "all"]).optional();
 const auditQuery = z.object({
   limit: z.coerce.number().int().min(1).max(500).default(100),
@@ -108,7 +112,9 @@ export function adminApiRouter(deps: AdminApiDeps): Router {
     if (!requests.allow(ip)) return void res.status(429).json({ error: "rate_limited" });
     next();
   };
-  router.use(apiCors(deps.corsOrigins, { methods: "GET, POST, PUT, OPTIONS", headers: "Authorization, Content-Type" }));
+  router.use(
+    apiCors(deps.corsOrigins, { methods: "GET, POST, PUT, OPTIONS", headers: "Authorization, Content-Type, Idempotency-Key" }),
+  );
   router.use(guard);
 
   /** Ids are UUIDs; anything else is a 404 without touching the store. */
@@ -137,7 +143,16 @@ export function adminApiRouter(deps: AdminApiDeps): Router {
     if (!id) return;
     const result = await deps.enforcement.evidenceImage(id, actor(req));
     if (!result.ok) return void res.status(STATUS[result.error]).json({ error: result.error });
-    res.set("Content-Type", "image/jpeg").send(Buffer.from(result.value));
+    // The bytes came from a reporter: the type is fixed server side (the store re-checks the JPEG magic
+    // and the size cap), browsers must not sniff or render it inline, and nothing may cache it.
+    res
+      .set({
+        "Content-Type": EVIDENCE_CONTENT_TYPE,
+        "Content-Disposition": `attachment; filename="evidence-${id}${EVIDENCE_EXTENSION}"`,
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "no-store",
+      })
+      .send(Buffer.from(result.value));
   });
 
   router.post("/reports/:id/action", json, async (req, res) => {
@@ -211,7 +226,13 @@ export function adminApiRouter(deps: AdminApiDeps): Router {
     const deviceId = idParam(req, res);
     if (!deviceId) return;
     const body = adminWalletAdjustSchema.safeParse(req.body);
-    if (!body.success) return void res.status(400).json({ error: "invalid" });
+    const key = req.get("idempotency-key");
+    const parsedKey = key === undefined ? null : idempotencyKey.safeParse(key);
+    if (!body.success || (parsedKey && !parsedKey.success)) return void res.status(400).json({ error: "invalid" });
+    // A double-clicked or retried submit applies once. A request that failed after the claim needs a new key.
+    if (parsedKey?.success && !(await deps.enforcement.claimAdminRequest(`wallet.adjust:${deviceId}:${parsedKey.data}`))) {
+      return void res.status(409).json({ error: "duplicate" });
+    }
     const view = await deps.billing.adjust(deviceId, body.data.delta, body.data.note);
     await deps.enforcement.audit("wallet.adjust", deviceId, `${body.data.delta > 0 ? "+" : ""}${body.data.delta}: ${body.data.note}`, actor(req).ip);
     res.json({ deviceId, ...view, ledger: await deps.billing.ledger(deviceId) } satisfies AdminWalletView);
