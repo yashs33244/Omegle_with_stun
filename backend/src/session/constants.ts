@@ -84,11 +84,19 @@ export const KEY = {
 export const SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 /** Timeout (ms) for Siteverify; a slow answer counts as a failure (fail closed). */
 export const TURNSTILE_TIMEOUT_MS = 5 * SECOND_MS;
+/**
+ * Siteverify calls in flight at once, session gate and takedown form together.
+ * Beyond this a request fails closed at once instead of opening one more
+ * outbound socket (a few hundred verifications per second at a 200 ms RTT).
+ */
+export const TURNSTILE_MAX_INFLIGHT = 64;
 /** Local error codes, alongside the ones Cloudflare returns. */
 export const TURNSTILE_LOCAL_ERROR = {
   missingToken: "missing-input-response",
   badResponse: "bad-response",
   networkError: "network-error",
+  /** TURNSTILE_MAX_INFLIGHT reached; the request was not sent. */
+  overloaded: "overloaded",
 } as const;
 
 /* ------------------------------------------------------------------ */

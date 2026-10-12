@@ -36,6 +36,8 @@ import {
   flagsSchema,
   type AdminWalletView,
 } from "../protocol";
+import { jsonBody } from "./body";
+import { ADMIN_BODY_LIMIT_BYTES } from "./constants";
 import { IpBuckets, jsonErrors, requestIp } from "./public";
 import { apiCors } from "./session";
 
@@ -75,7 +77,7 @@ function send<T>(res: Response, result: AdminResult<T>): void {
 
 export function adminApiRouter(deps: AdminApiDeps): Router {
   const router = express.Router();
-  const json = express.json({ limit: "16kb" });
+  const json = jsonBody(ADMIN_BODY_LIMIT_BYTES);
   const clock = deps.clock ?? Date.now;
   const requests = new IpBuckets({ capacity: 120, refillPerSec: 2 }, clock);
   const failures = new Map<string, { count: number; resetAt: number }>();

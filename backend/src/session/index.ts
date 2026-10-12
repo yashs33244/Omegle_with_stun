@@ -83,7 +83,7 @@ export function createSessionFeature(deps: SessionFeatureDeps) {
     tokens,
     caps,
     service,
-    router: createSessionRouter({ config, flags, service, logger }),
+    router: createSessionRouter({ config, flags, service, logger, onRateLimited: () => sessionRequests.inc({ result: "rate_limited" }) }),
     handshake: sessionHandshake({
       tokens,
       flags,

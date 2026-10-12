@@ -4,8 +4,11 @@
  *
  * Fails closed: a network error, timeout or odd response counts as a failure.
  * Shared by the session gate and the takedown form (enforcement/turnstile.ts).
+ * At most TURNSTILE_MAX_INFLIGHT requests are in flight at once (process
+ * wide, the callers share the outbound socket pool); the rest fail closed
+ * with `overloaded` without touching the network.
  */
-import { SITEVERIFY_URL, TURNSTILE_LOCAL_ERROR, TURNSTILE_TIMEOUT_MS } from "./constants";
+import { SITEVERIFY_URL, TURNSTILE_LOCAL_ERROR, TURNSTILE_MAX_INFLIGHT, TURNSTILE_TIMEOUT_MS } from "./constants";
 
 export type FetchLike = (input: string, init: { method: string; body: URLSearchParams; signal: AbortSignal }) => Promise<{
   ok: boolean;
@@ -18,6 +21,8 @@ export interface TurnstileResult {
   errors: string[];
 }
 
+let inflight = 0;
+
 export async function verifyTurnstile(opts: {
   secret: string;
   token: string | undefined;
@@ -26,9 +31,11 @@ export async function verifyTurnstile(opts: {
   timeoutMs?: number;
 }): Promise<TurnstileResult> {
   if (!opts.token) return { success: false, errors: [TURNSTILE_LOCAL_ERROR.missingToken] };
+  if (inflight >= TURNSTILE_MAX_INFLIGHT) return { success: false, errors: [TURNSTILE_LOCAL_ERROR.overloaded] };
   const body = new URLSearchParams({ secret: opts.secret, response: opts.token });
   if (opts.remoteIp) body.set("remoteip", opts.remoteIp);
   let data: unknown;
+  inflight++;
   try {
     const res = await opts.fetch(SITEVERIFY_URL, {
       method: "POST",
@@ -39,6 +46,8 @@ export async function verifyTurnstile(opts: {
     data = await res.json();
   } catch {
     return { success: false, errors: [TURNSTILE_LOCAL_ERROR.networkError] };
+  } finally {
+    inflight--;
   }
   if (typeof data !== "object" || data === null) return { success: false, errors: [TURNSTILE_LOCAL_ERROR.badResponse] };
   const d = data as { success?: unknown; "error-codes"?: unknown };

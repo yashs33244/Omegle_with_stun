@@ -11,6 +11,9 @@ import type { Logger } from "../logger";
 import { TOS_VERSION, type PublicConfig } from "../protocol";
 import { requestCountry, requestIp } from "../session/geo";
 import type { SessionService } from "../session/SessionService";
+import { jsonBody } from "./body";
+import { SESSION_BODY_LIMIT_BYTES, SESSION_BURST_FACTOR } from "./constants";
+import { IpBuckets, requestIp as bucketIp } from "./public";
 
 export function apiCors(
   allowed: Config["corsOrigins"],
@@ -58,6 +61,8 @@ export interface SessionRouterDeps {
   flags: FlagsReader;
   service: SessionService;
   logger: Logger;
+  /** Counts requests the per-instance burst cap refused (they never reach the service). */
+  onRateLimited?: () => void;
 }
 
 export function createSessionRouter(deps: SessionRouterDeps): Router {
@@ -69,7 +74,20 @@ export function createSessionRouter(deps: SessionRouterDeps): Router {
     res.set("Cache-Control", "public, max-age=30").json(publicConfig(config, flags));
   });
 
-  router.post("/api/session", express.json({ limit: "8kb" }), async (req, res) => {
+  // Per-instance burst cap in front of the store-backed per-minute limits: a
+  // flood from one address is answered here, before the body is parsed and
+  // without a store round trip. Looser than the store limit so it never bites first.
+  const burst = new IpBuckets({
+    capacity: SESSION_BURST_FACTOR * config.sessionRatePerIpPerMin,
+    refillPerSec: config.sessionRatePerIpPerMin / 60,
+  });
+  const burstCap: RequestHandler = (req, res, next) => {
+    if (burst.allow(bucketIp(req, config.proxyIpHeader))) return next();
+    deps.onRateLimited?.();
+    res.set("Cache-Control", "no-store").status(429).json({ ok: false, error: "rate_limited" });
+  };
+
+  router.post("/api/session", burstCap, jsonBody(SESSION_BODY_LIMIT_BYTES), async (req, res) => {
     res.set("Cache-Control", "no-store");
     const result = await service.create(req.body, {
       ip: requestIp(req.headers, req.socket.remoteAddress, config.proxyIpHeader),
@@ -81,10 +99,10 @@ export function createSessionRouter(deps: SessionRouterDeps): Router {
   // Body parser errors carry the raw body, which may hold a date of birth: answer
   // without logging the error object.
   const bodyErrors: ErrorRequestHandler = (err, _req, res, next) => {
-    const type = (err as { type?: unknown }).type;
-    if (typeof type !== "string" || !type.startsWith("entity.")) return next(err);
+    const { type, status } = err as { type?: unknown; status?: unknown };
+    if (typeof type !== "string" || (status !== 400 && status !== 413 && status !== 415)) return next(err);
     logger.debug({ type }, "rejected a malformed session request body");
-    res.status(type === "entity.too.large" ? 413 : 400).json({ ok: false, error: "invalid" });
+    res.status(status).json({ ok: false, error: "invalid" });
   };
   router.use("/api/session", bodyErrors);
 

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import Redis from "ioredis";
 import { describeStaffedHours } from "../../src/flags/flags";
 import { ageInYears } from "../../src/session/age";
-import { DEVICE_LOCKOUT_MS, FINGERPRINT_LOCKOUT_MS, SITEVERIFY_URL } from "../../src/session/constants";
+import { DEVICE_LOCKOUT_MS, FINGERPRINT_LOCKOUT_MS, SITEVERIFY_URL, TURNSTILE_MAX_INFLIGHT } from "../../src/session/constants";
 import { ipBuckets, isCountryBlocked, requestCountry, requestIp } from "../../src/session/geo";
 import { Lockout, MatchCaps, SessionRateLimiter, deriveSalt } from "../../src/session/limits";
 import { MemoryKv } from "../../src/session/MemoryKv";
@@ -212,6 +212,24 @@ describe("turnstile", () => {
     expect((await verifyTurnstile({ secret: "s", token: "t", fetch: fake({ success: "true" }) })).success).toBe(false);
     const notOk: FetchLike = async () => ({ ok: false, json: async () => ({ success: true }) });
     expect((await verifyTurnstile({ secret: "s", token: "t", fetch: notOk })).success).toBe(false);
+  });
+
+  test("at most TURNSTILE_MAX_INFLIGHT Siteverify calls run at once; the rest fail closed without a request", async () => {
+    const held: ((r: { ok: boolean; json(): Promise<unknown> }) => void)[] = [];
+    const hanging: FetchLike = () => {
+      const call = Promise.withResolvers<{ ok: boolean; json(): Promise<unknown> }>();
+      held.push(call.resolve);
+      return call.promise;
+    };
+    const inflight = Array.from({ length: TURNSTILE_MAX_INFLIGHT }, () => verifyTurnstile({ secret: "s", token: "t", fetch: hanging }));
+    expect(held).toHaveLength(TURNSTILE_MAX_INFLIGHT);
+    expect(await verifyTurnstile({ secret: "s", token: "t", fetch: hanging })).toEqual({ success: false, errors: ["overloaded"] });
+    expect(held).toHaveLength(TURNSTILE_MAX_INFLIGHT);
+    for (const resolve of held) resolve({ ok: true, json: async () => ({ success: true }) });
+    for (const r of await Promise.all(inflight)) expect(r.success).toBe(true);
+    // A finished call frees its slot, also when it failed.
+    expect((await verifyTurnstile({ secret: "s", token: "t", fetch: fake(new Error("down")) })).errors).toEqual(["network-error"]);
+    expect((await verifyTurnstile({ secret: "s", token: "t", fetch: fake({ success: true }) })).success).toBe(true);
   });
 });
 

@@ -368,22 +368,22 @@ Sources: `backend/src/http/billing.ts`, `backend/src/billing/BillingService.ts`,
 
 ## 4. REST API
 
-All routes live on the backend origin (same as the socket). `backend/src/http/app.ts` mounts health/metrics first, then the session router (which adds CORS for `/api/*`: `Access-Control-Allow-Origin` for allowed origins, `Access-Control-Max-Age: 600`), then the public, billing and admin routers (`backend/src/server.ts`), then a JSON 404. Bodies are JSON unless stated. "Per-instance" buckets are `IpBuckets` in `backend/src/http/public.ts` (cleared when they exceed 50 000 keys). Client IP comes from `PROXY_IP_HEADER` when `TRUST_PROXY=true` and it holds one IP literal, else the TCP peer (section 1, step 2).
+All routes live on the backend origin (same as the socket). `backend/src/http/app.ts` mounts health/metrics first, then the session router (which adds CORS for `/api/*`: `Access-Control-Allow-Origin` for allowed origins, `Access-Control-Max-Age: 600`), then the public, billing and admin routers (`backend/src/server.ts`), then a JSON 404. Bodies are JSON unless stated; the session, public and admin routers parse through `backend/src/http/body.ts`, which refuses an over-cap `Content-Length` before reading the body (413 with `Connection: close`) and any `Content-Encoding` (415). "Per-instance" buckets are `IpBuckets` in `backend/src/http/public.ts` (cleared when they exceed 50 000 keys). Client IP comes from `PROXY_IP_HEADER` when `TRUST_PROXY=true` and it holds one IP literal, else the TCP peer (section 1, step 2; `X-Forwarded-For` is refused by `config.ts`). The http server runs with the deadlines in `backend/src/http/constants.ts` (headers 15 s, whole request 30 s, idle keep-alive 65 s, 100 headers, 1 000 requests per socket).
 
 ### 4.1 Health and metrics (`backend/src/http/app.ts`)
 
 | Route | Auth | Response | Notes |
 |---|---|---|---|
 | `GET /healthz`, `GET /health` | public | `{ status: "ok" }` | liveness; `Cache-Control: no-store` |
-| `GET /readyz` | public | `{ status: "ready" }` or 503 `{ status: "unavailable" }` | `store.ping()` with `readyTimeoutMs` (default 1000 ms) |
-| `GET /metrics` | `Authorization: Bearer METRICS_TOKEN` when `METRICS_TOKEN` is set, else open | Prometheus text | the gateway returns 404 for `/metrics` publicly (`gateway.conf`); scrape replicas directly |
+| `GET /readyz` | public | `{ status: "ready" }` or 503 `{ status: "unavailable" }` | `store.ping()` with `readyTimeoutMs` (default 1000 ms); concurrent requests share one ping |
+| `GET /metrics` | `Authorization: Bearer METRICS_TOKEN`; without `METRICS_TOKEN` the route is open outside production and 404 in production | Prometheus text; `Cache-Control: no-store` | the gateway returns 404 for `/metrics` publicly (`gateway.conf`); scrape replicas directly |
 
 ### 4.2 Session gate (`backend/src/http/session.ts`, `backend/src/session/SessionService.ts`)
 
 | Route | Auth | Body | Response | Limits |
 |---|---|---|---|---|
 | `GET /api/config` | public | — | `PublicConfig`: `{ tosVersion, turnstileSiteKey, sentryDsn, posthogKey, posthogHost, banner, matchingOpen, staffedHours, reopensAt, defaultMode, privateModeEnabled }` | `Cache-Control: public, max-age=30` |
-| `POST /api/session` | public (Turnstile token unless `TURNSTILE_SECRET` is unset) | `SessionRequest`: `{ deviceId: uuid, fingerprint: sha256 hex, turnstileToken?<=4096, age: { dob: YYYY-MM-DD, attest18: true, tosVersion } \| { ageToken, tosVersion } }` | 200 `{ ok: true, sessionToken, sessionExpiresAt, ageToken, ageExpiresAt, country }` or `{ ok: false, error: SessionError, restriction? }` | body `8kb` (413 → `invalid`); `SESSION_RATE_PER_IP_PER_MIN` default `10`, `SESSION_RATE_PER_NETWORK_PER_MIN` (IPv4 /24, IPv6 /48) default `60`, fixed 1-minute windows |
+| `POST /api/session` | public (Turnstile token unless `TURNSTILE_SECRET` is unset) | `SessionRequest`: `{ deviceId: uuid, fingerprint: sha256 hex, turnstileToken?<=4096, age: { dob: YYYY-MM-DD, attest18: true, tosVersion } \| { ageToken, tosVersion } }` | 200 `{ ok: true, sessionToken, sessionExpiresAt, ageToken, ageExpiresAt, country }` or `{ ok: false, error: SessionError, restriction? }` | body `SESSION_BODY_LIMIT_BYTES` 8 KiB (413 / 415 → `invalid`); `SESSION_RATE_PER_IP_PER_MIN` default `10`, `SESSION_RATE_PER_NETWORK_PER_MIN` (IPv4 /24, IPv6 /48) default `60`, fixed 1-minute windows; `TURNSTILE_MAX_INFLIGHT` 64 Siteverify calls in flight, beyond that 503 `closed` |
 
 Checks run in this order (`SessionService.create`): rate limit (`rate_limited` 429) → `new_sessions_enabled` flag (`closed` 503) → `blocked_countries` (`region_blocked` 403) → device/fingerprint lockout (`locked` 403; device lockout 365 days, fingerprint 30 days) → Turnstile (`turnstile_failed` 403, 5 s timeout fails closed) → age: DOB under 18 → `underage` 403 and lockout; `tosVersion !== TOS_VERSION ("2026-10-draft")` → `tos_outdated` 400; bad or foreign `ageToken` → `age_token_invalid` 401; active restriction (`EnforcementService.activeForDevice` by device id and by the fingerprint, which it links to the device for 180 days so a restriction follows the browser to a fresh device id) → `banned` 403. On success the device's IP and edge country are noted for 24 h (CSAM packets only). Status map: `session/constants.ts` `SESSION_ERROR_STATUS`. The date of birth is never stored.
 
