@@ -11,6 +11,8 @@ import type { EnforcementService } from "../enforcement/EnforcementService";
 import type { Logger } from "../logger";
 import { appealRequestSchema, takedownRequestSchema, type AppealResponse, type TakedownResponse } from "../protocol";
 import { TokenBucket, type BucketSpec } from "../rateLimit";
+import { jsonBody } from "./body";
+import { ENFORCEMENT_BODY_LIMIT_BYTES } from "./constants";
 
 /** Client IP: the trusted proxy header when TRUST_PROXY is on, else the TCP peer. IPv4-mapped IPv6 is unwrapped. */
 export function requestIp(req: Request, proxyIpHeader: string | null): string | null {
@@ -70,7 +72,7 @@ const TAKEDOWN_STATUS: Record<Exclude<TakedownResponse, { ok: true }>["error"], 
 
 export function publicApiRouter(deps: PublicApiDeps): Router {
   const router = express.Router();
-  const json = express.json({ limit: "16kb" });
+  const json = jsonBody(ENFORCEMENT_BODY_LIMIT_BYTES);
   // Per-instance burst cap in front of the store-backed limits in EnforcementService.
   const reads = new IpBuckets({ capacity: 30, refillPerSec: 0.5 });
   const writes = new IpBuckets({ capacity: 10, refillPerSec: 0.1 });

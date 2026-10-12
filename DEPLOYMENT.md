@@ -111,7 +111,7 @@ launch build"); the backend itself also refuses to start without them.
 | `BIND_ADDRESS` | `0.0.0.0` | host address the gateway (3004) and frontend (5173) ports bind to. Set `127.0.0.1` when the host proxy runs on the same host and connects via localhost, so the ports are not reachable around it |
 | `BACKEND_PORT`, `FRONTEND_PORT` | `3004`, `5173` | host ports of the gateway and the frontend (the host proxy must point at them) |
 | `REDIS_PASSWORD` | unset | optional Redis password, URL safe (`openssl rand -hex 32`) |
-| `METRICS_TOKEN` | unset | bearer token for `GET /metrics` on the replicas |
+| `METRICS_TOKEN` | unset | bearer token for `GET /metrics` on the replicas; unset in production, the route answers 404 (never open on a host without the gateway) |
 | `LOG_LEVEL` | `info` | pino log level |
 | `MAX_CONNECTIONS_PER_IP` | `10` | Socket.IO connections allowed per client IP on each backend replica. Raise it if many users share one address (office NAT, mobile carrier NAT). Needs the real client IP, see [Behind Cloudflare](#cloudflare-in-front) |
 | `CONNECT_BURST_PER_IP`, `CONNECT_RATE_PER_IP_PER_SEC` | `20`, `1` | new socket connections per client IP on each replica: a burst, then a steady rate per second. Raise both only for load tests |

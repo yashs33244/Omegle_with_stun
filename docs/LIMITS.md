@@ -226,9 +226,36 @@ Each socket has one bucket per class; an empty bucket answers
 | Age token TTL | 180 days, never slides | `session/constants.ts:40`, `SessionService.ts:121` | re-enter date of birth | code |
 | Under-18 lockout | device 365 days, fingerprint 30 days | `session/constants.ts:47,53` | 403 `locked` / `underage` | code |
 | Turnstile token | max 4,096 chars; required in production unless `TURNSTILE_DISABLED=true` | `protocol.ts:484`, `config.ts` superRefine | 403 `turnstile_failed` | env |
+| Siteverify calls in flight | `TURNSTILE_MAX_INFLIGHT` 64 process-wide (session gate and takedown form), 5 s timeout each | `session/constants.ts`, `session/turnstile.ts` | 503 `closed` (takedowns: 403 `turnstile_failed`) without an outbound request | code |
+| Request body | `SESSION_BODY_LIMIT_BYTES` 8 KiB; an over-cap `Content-Length` is refused before the body is read and the connection closed; compressed bodies refused | `http/constants.ts`, `http/body.ts` | 413 / 415 `invalid` | code |
 | Queue size | flag `max_waiting` 5,000 (schema max 1,000,000) | `protocol.ts:664,688` | hello `matching_closed` "full" | flag |
 | Matches per device / IP per hour | 200 / 200 (fixed 1 h window; device-IP binding kept 24 h) | `config.ts:55-56`, `session/constants.ts:57,59` | `rate_limited` on hello or re-queue | env `MATCH_CAP_PER_*_PER_HOUR` |
 | Kill switch, staffed hours | flags `matching_enabled`, `staffed_hours`, `new_sessions_enabled` | `protocol.ts:663-683`, `flags/flags.ts:141` | `matching_closed` with the banner, or 503 `closed` | flag |
+
+### REST (`backend/src/http`)
+
+Every JSON route parses through `http/body.ts`: the cap is checked against
+`Content-Length` first (413 and `Connection: close` before a byte of body is
+read), then `express.json` enforces it on chunked bodies, and `inflate` is off
+(415 for `Content-Encoding`). The client IP for every per-IP bucket is the
+TCP peer, or `PROXY_IP_HEADER` only with `TRUST_PROXY=true`; the header must
+be single-valued (`x-real-ip`, `true-client-ip`, `cf-connecting-ip`), list
+headers such as `X-Forwarded-For` are refused at startup because a client can
+prepend to them.
+
+| Limit | Value | Source | When exceeded | Change |
+|---|---|---|---|---|
+| Header phase | `HTTP_HEADERS_TIMEOUT_MS` 15 s from the first byte | `http/constants.ts`, `server.ts` | 408, socket closed | code |
+| Whole request | `HTTP_REQUEST_TIMEOUT_MS` 30 s (headers and body); checked every `HTTP_CONNECTIONS_CHECK_INTERVAL_MS` 5 s | same | 408, socket closed | code |
+| Idle keep-alive | `HTTP_KEEP_ALIVE_TIMEOUT_MS` 65 s (above the gateway's 60 s so the proxy closes first) | same | socket closed | code |
+| Headers per request | `HTTP_MAX_HEADERS_COUNT` 100; Node's 16 KiB header block | same | 431 | code |
+| Requests per socket | `HTTP_MAX_REQUESTS_PER_SOCKET` 1,000 | same | `Connection: close` on the last one | code |
+| Enforcement bodies | `ENFORCEMENT_BODY_LIMIT_BYTES` 16 KiB (`/api/appeals`, `/api/takedowns`) | `http/constants.ts` | 413 `too_large` | code |
+| Enforcement reads / writes per IP | 30 burst, 0.5/s; 10 burst, 0.1/s (per instance) | `http/public.ts:77-78` | 429 `rate_limited` | code |
+| Admin bodies, requests | `ADMIN_BODY_LIMIT_BYTES` 16 KiB; 120 burst, 2/s per IP after auth; 10 bad tokens per 15 min | `http/constants.ts`, `http/admin.ts:55-56,82` | 413, 429 | code |
+| Per-IP bucket maps | cleared at 50,000 keys (`IpBuckets`), admin failures at 10,000 | `http/public.ts:43`, `http/admin.ts:103` | limits reset for everyone on that instance | code |
+| `/readyz` | one `store.ping()` in flight at a time (concurrent hits share it); 1 s timeout | `http/app.ts` | 503 `unavailable` | code |
+| `/metrics` | `METRICS_TOKEN` bearer; in production an unset token answers 404 (the route is closed, not open); `/healthz` does no I/O | `http/app.ts`, `server.ts` | 401 / 404 | env `METRICS_TOKEN` |
 
 ### Matching
 

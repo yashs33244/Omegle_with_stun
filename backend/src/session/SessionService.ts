@@ -15,7 +15,7 @@ import {
   type SessionResponse,
 } from "../protocol";
 import { ageInYears } from "./age";
-import { ADULT_AGE, AGE_TOKEN_TTL_MS, SESSION_ERROR_STATUS, SESSION_TOKEN_TTL_MS } from "./constants";
+import { ADULT_AGE, AGE_TOKEN_TTL_MS, SESSION_ERROR_STATUS, SESSION_TOKEN_TTL_MS, TURNSTILE_LOCAL_ERROR } from "./constants";
 import { isCountryBlocked } from "./geo";
 import type { Lockout, SessionRateLimiter } from "./limits";
 import type { TokenSigner } from "./tokens";
@@ -88,7 +88,8 @@ export class SessionService {
       });
       if (!result.success) {
         deps.logger.info({ errors: result.errors }, "turnstile check failed");
-        return fail("turnstile_failed");
+        // Saturated outbound verification is our problem, not the client's: 503, retry later.
+        return fail(result.errors.includes(TURNSTILE_LOCAL_ERROR.overloaded) ? "closed" : "turnstile_failed");
       }
     }
 

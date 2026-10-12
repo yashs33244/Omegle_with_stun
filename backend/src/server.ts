@@ -14,6 +14,14 @@ import { FlagsReader, MemoryFlagsStore, type FlagsStore } from "./flags/flags";
 import { adminApiRouter } from "./http/admin";
 import { billingApiRouter } from "./http/billing";
 import { createApp } from "./http/app";
+import {
+  HTTP_CONNECTIONS_CHECK_INTERVAL_MS,
+  HTTP_HEADERS_TIMEOUT_MS,
+  HTTP_KEEP_ALIVE_TIMEOUT_MS,
+  HTTP_MAX_HEADERS_COUNT,
+  HTTP_MAX_REQUESTS_PER_SOCKET,
+  HTTP_REQUEST_TIMEOUT_MS,
+} from "./http/constants";
 import { publicApiRouter } from "./http/public";
 import type { Logger } from "./logger";
 import { MatchService, type Emitter } from "./match/MatchService";
@@ -118,6 +126,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     registry: metrics.registry,
     logger,
     metricsToken: config.metricsToken,
+    metricsRequireToken: config.nodeEnv === "production",
     session: session.router,
     routes: (a) => {
       a.use(publicApiRouter({ enforcement, proxyIpHeader: config.proxyIpHeader, logger }));
@@ -137,7 +146,15 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
       );
     },
   });
-  const httpServer = createHttpServer(app);
+  if (config.nodeEnv === "production" && !config.metricsToken) logger.warn("METRICS_TOKEN is unset: GET /metrics answers 404");
+  const httpServer = createHttpServer({ connectionsCheckingInterval: HTTP_CONNECTIONS_CHECK_INTERVAL_MS }, app);
+  // Node's defaults (requestTimeout 300 s, unlimited requests per socket) let
+  // one slow client hold a socket for minutes; see http/constants.ts.
+  httpServer.headersTimeout = HTTP_HEADERS_TIMEOUT_MS;
+  httpServer.requestTimeout = HTTP_REQUEST_TIMEOUT_MS;
+  httpServer.keepAliveTimeout = HTTP_KEEP_ALIVE_TIMEOUT_MS;
+  httpServer.maxHeadersCount = HTTP_MAX_HEADERS_COUNT;
+  httpServer.maxRequestsPerSocket = HTTP_MAX_REQUESTS_PER_SOCKET;
   const io = createSocketServer(httpServer, config);
   deps.configureIo?.(io);
   const emitter = createEmitter(io);

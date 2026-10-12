@@ -96,6 +96,15 @@ const envSchema = z
         });
       }
     }
+    // The header is used verbatim as the client IP; a list header keeps the
+    // client's own prefix, so TRUST_PROXY would let it pick its rate-limit key.
+    if (["x-forwarded-for", "forwarded", "via"].includes(env.PROXY_IP_HEADER.toLowerCase())) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["PROXY_IP_HEADER"],
+        message: "must be a single-address header set by the proxy (x-real-ip, true-client-ip, cf-connecting-ip), not a forwarding list",
+      });
+    }
     for (const origin of origins) {
       if (origin !== "*" && !/^https?:\/\/[^/\s]+$/.test(origin)) {
         ctx.addIssue({
