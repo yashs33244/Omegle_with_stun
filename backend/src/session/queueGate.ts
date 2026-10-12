@@ -25,6 +25,12 @@ export interface QueueRefusal {
 }
 
 export interface QueueGate {
+  /**
+   * The checks that need no per-device lookup: closed, or the queue at
+   * max_waiting (one O(1) store read). MatchService runs it before any store
+   * write or the match lock, so a crowd hitting a full queue costs no writes.
+   */
+  precheck(): Promise<QueueRefusal | null>;
   /** A new hello: closed, full or over a cap refuses it. */
   admit(deviceId: string): Promise<QueueRefusal | null>;
   /**
@@ -41,13 +47,13 @@ export interface QueueGate {
 export class SessionQueueGate implements QueueGate {
   constructor(
     private readonly flags: FlagsReader,
-    private readonly store: Pick<MatchStore, "stats">,
+    private readonly store: Pick<MatchStore, "waitingCount">,
     private readonly caps: MatchCaps,
     private readonly logger: Logger,
     private readonly now: () => number = Date.now,
   ) {}
 
-  async admit(deviceId: string): Promise<QueueRefusal | null> {
+  async precheck(): Promise<QueueRefusal | null> {
     const status = this.flags.status(this.now());
     if (!status.open) {
       const hours = describeStaffedHours(this.flags.current().staffed_hours);
@@ -55,9 +61,14 @@ export class SessionQueueGate implements QueueGate {
         status.message ?? (hours ? `Matching is open ${hours}. See you then.` : CLOSED_MESSAGE);
       return { error: "matching_closed", message };
     }
-    const { waiting } = await this.store.stats();
-    if (waiting >= this.flags.current().max_waiting) return { error: "matching_closed", message: FULL_MESSAGE };
-    return this.check(deviceId, true);
+    if ((await this.store.waitingCount()) >= this.flags.current().max_waiting) {
+      return { error: "matching_closed", message: FULL_MESSAGE };
+    }
+    return null;
+  }
+
+  async admit(deviceId: string): Promise<QueueRefusal | null> {
+    return (await this.precheck()) ?? this.check(deviceId, true);
   }
 
   async requeue(deviceId: string, reason: MatchEndReason): Promise<QueueRefusal | null> {

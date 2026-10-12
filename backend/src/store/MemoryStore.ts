@@ -138,6 +138,10 @@ export class MemoryStore implements MatchStore {
     return this.waiting.map((entry) => entry.socketId);
   }
 
+  async waitingCount(): Promise<number> {
+    return this.waiting.length;
+  }
+
   async getRoom(roomId: string): Promise<Room | null> {
     const r = this.rooms.get(roomId);
     return r ? copy(r) : null;

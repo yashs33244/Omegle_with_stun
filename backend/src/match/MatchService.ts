@@ -262,6 +262,13 @@ export class MatchService implements RestrictionSink {
       if (restriction) return reply({ ok: false, error: "banned", restriction });
     }
     if (await this.store.getBan(deviceId)) return reply({ ok: false, error: "banned" });
+    // A socket without a session would join the queue: refuse a closed or
+    // full queue before any write below and before the match lock. admit()
+    // inside the lock checks again (and covers idle re-hellos).
+    if (!this.local.has(socketId)) {
+      const refused = await this.gate?.precheck();
+      if (refused) return reply({ ok: false, ...refused });
+    }
     if (ip) {
       await this.turn.rememberIp(deviceId, ip).catch((err: unknown) => this.log.warn({ err }, "remember ip failed"));
     }
@@ -272,6 +279,7 @@ export class MatchService implements RestrictionSink {
       payload.preferences.genderFilter !== "all" && !(await this.billing.mayUseGenderFilter(deviceId))
         ? { ...payload.preferences, genderFilter: "all" as const }
         : payload.preferences;
+    const ipKey = ip ? this.turn.ipKeyFor(ip) : undefined;
 
     await this.store.withLock(async () => {
       // The socket may have disconnected while we waited for the lock.
@@ -314,12 +322,14 @@ export class MatchService implements RestrictionSink {
           mode: payload.mode,
           state: "idle",
           connectedAt: now,
+          ...(ipKey && { ipKey }),
         };
         await this.store.setDeviceSocket(deviceId, socketId);
       } else {
         session.profile = profile;
         session.preferences = preferences;
         session.mode = payload.mode;
+        if (ipKey) session.ipKey = ipKey;
       }
       await this.store.putSession(session);
       this.releasePhoto(socketId);
@@ -908,18 +918,21 @@ export class MatchService implements RestrictionSink {
     }
     this.safety.callStarted(room.devices);
     this.log.info({ roomId: room.id }, "call started");
+    // getSessions answers in room.members order, which is room.devices order.
+    const ipKeys = sessions.map((s) => s?.ipKey ?? null);
     // Not awaited: it takes the lock again after the network calls.
-    void this.startCall(room);
+    void this.startCall(room, ipKeys);
   }
 
   /**
    * Per-call ICE servers (TURN credentials may need an API call) are fetched
    * without holding the matchmaking lock; call:start is then emitted under the
    * lock only if the room is still active, so it never follows match:ended.
+   * `ipKeys[i]` is the stored address key of room.members[i] (TURN per-IP cap).
    */
-  private async startCall(room: Room): Promise<void> {
+  private async startCall(room: Room, ipKeys: (string | null)[]): Promise<void> {
     try {
-      const [mediaA, mediaB] = await Promise.all(room.devices.map((d) => this.turn.callMedia(d)));
+      const [mediaA, mediaB] = await Promise.all(room.devices.map((d, i) => this.turn.callMedia(d, ipKeys[i] ?? null)));
       if (this.stopped) return;
       await this.store.withLock(async () => {
         const current = await this.store.getRoom(room.id);

@@ -37,6 +37,8 @@ export const CREDENTIAL_RESULT = {
   cached: "cached",
   /** Over the per-device or per-IP hourly cap. */
   capped: "capped",
+  /** No address to count the set against (no hello binding, no socket address): refused. */
+  noIp: "no_ip",
   issued: "issued",
   error: "error",
 } as const;
