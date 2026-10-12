@@ -71,9 +71,42 @@ export class TokenBucket {
 
   /** True once refilled to capacity, when dropping the bucket loses nothing. */
   full(now: number): boolean {
-    const elapsedSec = Math.max(0, now - this.last) / MS_PER_SECOND;
-    return this.tokens + elapsedSec * this.spec.refillPerSec >= this.spec.capacity;
+    return this.fill(now) >= 1;
   }
+
+  /** Share of capacity currently available (0 empty, 1 full). */
+  fill(now: number): number {
+    const elapsedSec = Math.max(0, now - this.last) / MS_PER_SECOND;
+    return Math.min(1, (this.tokens + elapsedSec * this.spec.refillPerSec) / this.spec.capacity);
+  }
+}
+
+/**
+ * Entries a bounded map inspects, oldest first, to choose an eviction victim.
+ * Keeps the cost of an insert at the cap constant however full the map is.
+ */
+export const EVICTION_SCAN = 64;
+
+/**
+ * Deletes one entry from `map` (kept in least-recently-used order: callers
+ * re-insert on access). Among the oldest `scan` entries it drops the one with
+ * the highest `score` (Infinity: drop at once, e.g. a refilled bucket), the
+ * oldest on ties, so a full map sheds the entries whose loss matters least
+ * instead of resetting every limit.
+ */
+export function evictOne<K, V>(map: Map<K, V>, score: (value: V) => number, scan = EVICTION_SCAN): void {
+  let victim: K | undefined;
+  let best = -Infinity;
+  let seen = 0;
+  for (const [key, value] of map) {
+    const s = score(value);
+    if (victim === undefined || s > best) {
+      victim = key;
+      best = s;
+    }
+    if (s === Infinity || ++seen >= scan) break;
+  }
+  if (victim !== undefined) map.delete(victim);
 }
 
 /** All buckets of one socket. Created lazily per class. */

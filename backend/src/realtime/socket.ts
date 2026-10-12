@@ -34,7 +34,7 @@ import {
   type ServerToClientEvents,
 } from "../protocol";
 import { MAX_SOCKETS_PER_SESSION, SocketRateLimiter, TokenBucket, type EventClass } from "../rateLimit";
-import { requestIp, socketIp } from "../session/geo";
+import { ipBuckets, requestIp, socketIp } from "../session/geo";
 import { handshakeSession } from "../session/handshake";
 import { limitedParser } from "./limitedParser";
 
@@ -56,7 +56,8 @@ export function originAllowed(origin: string | undefined, allowed: Config["corsO
 export type ConnectionRefusal = "too_many_connections" | "rate_limited";
 
 /**
- * Per-IP connection cap and connect rate, checked in allowRequest, i.e. on
+ * Per-IP connection cap and connect rate (keyed by subscriber: an IPv4
+ * address or an IPv6 /64, session/geo.ts ipBuckets), checked in allowRequest, i.e. on
  * the HTTP upgrade before any Engine.IO connection or Socket.IO client
  * exists. A refusal there is a plain HTTP 400 whose body names the reason
  * and costs nothing after it (the Socket.IO client only sees "websocket error"); a
@@ -81,7 +82,8 @@ export class ConnectionGate {
   }
 
   /** Why a new connection from `ip` is refused, or null to let it through. */
-  admit(ip: string): ConnectionRefusal | null {
+  admit(rawIp: string): ConnectionRefusal | null {
+    const ip = ipBuckets(rawIp).ip;
     if ((this.perIp.get(ip) ?? 0) >= this.config.maxConnectionsPerIp) {
       this.metrics.rateLimitedTotal.inc({ event: "connection" });
       return "too_many_connections";
@@ -106,11 +108,13 @@ export class ConnectionGate {
     return null;
   }
 
-  opened(ip: string): void {
+  opened(rawIp: string): void {
+    const ip = ipBuckets(rawIp).ip;
     this.perIp.set(ip, (this.perIp.get(ip) ?? 0) + 1);
   }
 
-  closed(ip: string): void {
+  closed(rawIp: string): void {
+    const ip = ipBuckets(rawIp).ip;
     const left = (this.perIp.get(ip) ?? 1) - 1;
     if (left <= 0) this.perIp.delete(ip);
     else this.perIp.set(ip, left);

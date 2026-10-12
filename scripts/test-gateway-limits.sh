@@ -113,6 +113,22 @@ else
   fail "a local peer was limited: $(printf '%s' "$got" | tr '\n' ' ')"
 fi
 
+# IPv6 clients are limited per /64: another address in the same /64 shares
+# the exhausted budget, an address in the next /64 does not.
+codes 40 -X POST -H 'Content-Type: application/json' -H 'X-Forwarded-For: 2001:db8:0:1::a' -d '{}' "$base/api/session" >/dev/null
+got=$(codes 5 -X POST -H 'Content-Type: application/json' -H 'X-Forwarded-For: 2001:db8:0:1:ffff::b' -d '{}' "$base/api/session")
+if [ "$(count "$got" 429)" -ge 4 ]; then
+  ok "another address in the same IPv6 /64 shares the limit"
+else
+  fail "another address in the same IPv6 /64 was not limited: $(printf '%s' "$got" | tr '\n' ' ')"
+fi
+got=$(codes 5 -X POST -H 'Content-Type: application/json' -H 'X-Forwarded-For: 2001:db8:0:2::a' -d '{}' "$base/api/session")
+if [ "$(count "$got" 200)" = 5 ]; then
+  ok "an address in another IPv6 /64 is not affected"
+else
+  fail "an address in another IPv6 /64 was limited: $(printf '%s' "$got" | tr '\n' ' ')"
+fi
+
 # Socket.IO handshakes: burst 20, then 5/s.
 got=$(codes 40 -H 'X-Forwarded-For: 198.51.100.10' "$base/socket.io/?EIO=4&transport=websocket")
 if [ "$(count "$got" 429 | sed "s/^$/0/")" -ge 10 ]; then

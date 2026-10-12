@@ -42,3 +42,11 @@ export const WEBHOOK_BODY_LIMIT_BYTES = 64 * 1024;
  * store-backed limit is the one a client meets first.
  */
 export const SESSION_BURST_FACTOR = 2;
+/**
+ * Keys one per-instance IP bucket map (http/public.ts IpBuckets) holds. At the
+ * cap the map evicts refilled buckets first, then the fullest of the oldest
+ * (rateLimit.ts evictOne): about 100 bytes each, so 5 MB per map at most.
+ */
+export const IP_BUCKETS_MAX_KEYS = 50_000;
+/** Addresses the admin auth-failure map holds (http/admin.ts); lockouts are evicted last. */
+export const ADMIN_FAILURES_MAX_KEYS = 10_000;

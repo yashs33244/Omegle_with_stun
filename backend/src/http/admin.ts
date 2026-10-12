@@ -36,8 +36,10 @@ import {
   flagsSchema,
   type AdminWalletView,
 } from "../protocol";
+import { evictOne } from "../rateLimit";
+import { ipBuckets } from "../session/geo";
 import { jsonBody } from "./body";
-import { ADMIN_BODY_LIMIT_BYTES } from "./constants";
+import { ADMIN_BODY_LIMIT_BYTES, ADMIN_FAILURES_MAX_KEYS } from "./constants";
 import { IpBuckets, jsonErrors, requestIp } from "./public";
 import { apiCors } from "./session";
 
@@ -51,6 +53,8 @@ export interface AdminApiDeps {
   proxyIpHeader: string | null;
   corsOrigins: Config["corsOrigins"];
   clock?: () => number;
+  /** Test seam: addresses the auth-failure map holds (ADMIN_FAILURES_MAX_KEYS). */
+  maxFailureKeys?: number;
 }
 
 /** Failed logins per IP before it is locked out for the rest of the window. */
@@ -81,6 +85,7 @@ export function adminApiRouter(deps: AdminApiDeps): Router {
   const clock = deps.clock ?? Date.now;
   const requests = new IpBuckets({ capacity: 120, refillPerSec: 2 }, clock);
   const failures = new Map<string, { count: number; resetAt: number }>();
+  const maxFailureKeys = deps.maxFailureKeys ?? ADMIN_FAILURES_MAX_KEYS;
   const ipOf = (req: Request) => requestIp(req, deps.proxyIpHeader);
   const actor = (req: Request) => ({ ip: ipOf(req) });
   const allowed = new Set(deps.adminAllowedIps);
@@ -89,7 +94,7 @@ export function adminApiRouter(deps: AdminApiDeps): Router {
     res.set("Cache-Control", "no-store");
     if (!deps.adminToken) return void res.status(503).json({ error: "admin_disabled" });
     const ip = ipOf(req);
-    const key = ip ?? "unknown";
+    const key = ip === null ? "unknown" : ipBuckets(ip).ip;
     if (allowed.size > 0 && (!ip || !allowed.has(ip))) return void res.status(403).json({ error: "forbidden" });
     const now = clock();
     const f = failures.get(key);
@@ -100,7 +105,17 @@ export function adminApiRouter(deps: AdminApiDeps): Router {
     if (!tokenMatches(req.get("authorization"), deps.adminToken)) {
       const entry = failures.get(key) ?? { count: 0, resetAt: now + AUTH_FAILURE_WINDOW_MS };
       entry.count++;
-      if (failures.size >= 10_000) failures.clear();
+      failures.delete(key);
+      // At the cap drop an expired window first, then the fewest failures; a
+      // locked-out address goes last. The whole map is scanned: it is small and
+      // only failed logins insert.
+      if (failures.size >= maxFailureKeys) {
+        evictOne(
+          failures,
+          (e) => (e.resetAt <= now ? Infinity : e.count >= MAX_AUTH_FAILURES ? -1 : MAX_AUTH_FAILURES - e.count),
+          Infinity,
+        );
+      }
       failures.set(key, entry);
       deps.logger.warn({ event: "admin_auth_failed" }, "admin auth failed");
       return void res.status(401).set("WWW-Authenticate", "Bearer").json({ error: "unauthorized" });

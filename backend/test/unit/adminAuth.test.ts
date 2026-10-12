@@ -146,4 +146,24 @@ describe("admin router auth", () => {
     // After the window the right token reaches the route body (the tripwire deps turn that into a 500).
     expect((await fetch(`${base}/queue`, { headers: { authorization: `Bearer ${TOKEN}` } })).status).toBe(500);
   });
+
+  test("a full failure map evicts other addresses before a locked-out one", async () => {
+    const base = await listen(build({ proxyIpHeader: "x-real-ip", maxFailureKeys: 3 }));
+    const from = (ip: string, token = "nope") => ({ authorization: `Bearer ${token}`, "x-real-ip": ip });
+    for (let i = 0; i < 10; i++) await fetch(`${base}/queue`, { headers: from("203.0.113.1") });
+    for (let i = 2; i < 20; i++) {
+      expect((await fetch(`${base}/queue`, { headers: from(`203.0.113.${i}`) })).status).toBe(401);
+    }
+    expect((await fetch(`${base}/queue`, { headers: from("203.0.113.1", TOKEN) })).status).toBe(429);
+  });
+
+  test("a lockout covers the whole IPv6 /64, not the next /64", async () => {
+    const base = await listen(build({ proxyIpHeader: "x-real-ip" }));
+    for (let i = 0; i < 10; i++) {
+      await fetch(`${base}/queue`, { headers: { authorization: "Bearer nope", "x-real-ip": `2001:db8:0:1::${i + 1}` } });
+    }
+    const ok = { authorization: `Bearer ${TOKEN}` };
+    expect((await fetch(`${base}/queue`, { headers: { ...ok, "x-real-ip": "2001:db8:0:1:ffff::9" } })).status).toBe(429);
+    expect((await fetch(`${base}/queue`, { headers: { ...ok, "x-real-ip": "2001:db8:0:2::1" } })).status).toBe(500);
+  });
 });
