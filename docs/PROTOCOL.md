@@ -425,7 +425,7 @@ Guard, in order: 503 `admin_disabled` when `ADMIN_TOKEN` is unset (required in p
 |---|---|---|
 | `GET /queue?status=open\|acknowledged\|actioned\|dismissed\|escalated\|all` | — | `AdminReport[]` |
 | `GET /reports/:id` | — | `AdminReport` |
-| `GET /reports/:id/evidence` | — | `image/jpeg` bytes; 403 `restricted` for CSAM-routed reports (never served) |
+| `GET /reports/:id/evidence` | — | `image/jpeg` bytes as a download (`Content-Disposition: attachment; filename="evidence-<id>.jpg"`, `X-Content-Type-Options: nosniff`, `Cache-Control: no-store`); 403 `restricted` for CSAM-routed reports (never served); 500 when the stored object is over 96 KiB or not a JPEG |
 | `POST /reports/:id/action` | `AdminReportAction`: `{ action: "acknowledge" \| "dismiss" \| "warn" \| "restrict" \| "escalate_csam", reason?: RestrictionReason, durationMs?: 600000 \| 86400000 \| 604800000 \| null (`RESTRICTION_DURATIONS_MS`; null = permanent; omitted = next ladder rung), note?<=2000 }` | result of the action |
 | `POST /reports/:id/escalate` | `{ note?<=2000 }` | result |
 | `GET /appeals` | — | `AdminAppeal[]` |
@@ -436,7 +436,7 @@ Guard, in order: 503 `admin_disabled` when `ADMIN_TOKEN` is unset (required in p
 | `PUT /flags` | partial `Flags`, strict (unknown keys → 400), at least one key | full `Flags`; audited as `flags.update` |
 | `GET /audit?limit=1..500 (100)&before=<ts>` | — | `AdminAuditEntry[]` |
 | `GET /wallets/:deviceId` | — | `AdminWalletView`: `{ deviceId, coins, unlocks, ledger: WalletLedgerEntry[] }` |
-| `POST /wallets/:deviceId/adjust` | `{ delta: non-zero int within ±1_000_000, note: 1..500 }` | `AdminWalletView`; audited as `wallet.adjust` |
+| `POST /wallets/:deviceId/adjust` | `{ delta: non-zero int within ±1_000_000, note: 1..500 }`; optional header `Idempotency-Key: [A-Za-z0-9_-]{8,64}` | `AdminWalletView`; audited as `wallet.adjust`. With a key, a repeat within 24 h is 409 `duplicate` and is not applied (a request that failed needs a new key); a malformed key is 400 |
 | `GET /billing/orders?limit=` | — | `BillingOrderRecord[]`, newest first |
 
 ### 4.6 Route map
