@@ -20,14 +20,30 @@ x-logging: &logging
     max-size: "10m"
     max-file: "3"
 
+# Every container: no capabilities (none of them binds a privileged port or
+# changes users at runtime; redis and nginx-unprivileged start as their own
+# user, the backend image sets USER node), no privilege escalation through
+# setuid binaries, and a read-only root filesystem (writable paths are listed
+# per service). Memory and process limits keep one runaway container from
+# taking the host down with it; a container over its memory limit is killed
+# and restarted (restart: unless-stopped).
+x-hardening: &hardening
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  read_only: true
+
 services:
   redis:
+    <<: *hardening
     image: redis:7.4.11-alpine
     # The image only drops root itself when the command is redis-server; this
     # command goes through sh, so set the user here (it owns /data).
     user: redis
-    # Append-only persistence on a named volume. REDIS_PASSWORD is optional
-    # (Redis is only reachable on the internal compose network).
+    # Append-only persistence on a named volume. REDIS_PASSWORD is optional:
+    # Redis is only reachable by the backend replicas (the data network below;
+    # the gateway and the frontend cannot open a connection to it).
     command:
       - sh
       - -c
@@ -36,6 +52,14 @@ services:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     volumes:
       - redis-data:/data
+    networks:
+      - data
+    # Dataset plus the fork for AOF rewrites and BGSAVE (scripts/backup-redis.sh).
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          pids: 128
     healthcheck:
       test: ["CMD-SHELL", "redis-cli $${REDIS_PASSWORD:+--no-auth-warning -a \"$$REDIS_PASSWORD\"} ping | grep -q PONG"]
       interval: 5s
@@ -45,12 +69,18 @@ services:
     logging: *logging
 
   backend:
+    <<: *hardening
     image: ${BACKEND_IMAGE:-chizzy-backend}:${IMAGE_TAG:-latest}
     build:
       context: ./backend
     # No host port: only the gateway talks to the replicas.
     expose:
       - "3004"
+    networks:
+      - data
+      - proxy
+    tmpfs:
+      - /tmp
     environment:
       NODE_ENV: production
       PORT: "3004"
@@ -76,11 +106,12 @@ services:
       TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
       TURNSTILE_DISABLED: ${TURNSTILE_DISABLED:-false}
       # Per client IP and per /24 (or /48) network limits on POST /api/session,
-      # and hourly match caps per IP and per device.
+      # hourly match caps per IP and per device, and skips per minute per device.
       SESSION_RATE_PER_IP_PER_MIN: ${SESSION_RATE_PER_IP_PER_MIN:-}
       SESSION_RATE_PER_NETWORK_PER_MIN: ${SESSION_RATE_PER_NETWORK_PER_MIN:-}
       MATCH_CAP_PER_DEVICE_PER_HOUR: ${MATCH_CAP_PER_DEVICE_PER_HOUR:-}
       MATCH_CAP_PER_IP_PER_HOUR: ${MATCH_CAP_PER_IP_PER_HOUR:-}
+      MATCH_CAP_PER_DEVICE_PER_MIN: ${MATCH_CAP_PER_DEVICE_PER_MIN:-}
       # true only when Cloudflare proxies the API hostname (CF-IPCountry is used
       # for the country blocklist). The gateway forwards CF-* headers only for
       # requests that really came from a Cloudflare address.
@@ -136,6 +167,13 @@ services:
         hard: 65535
     deploy:
       replicas: ${BACKEND_REPLICAS:-2}
+      # Per replica. Node sizes its heap from this limit; a replica that grows
+      # past it (a leak, or far more sockets than the host can serve) is
+      # restarted instead of pushing the host into swap.
+      resources:
+        limits:
+          memory: 768M
+          pids: 512
     healthcheck:
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3004/healthz').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
       interval: 10s
@@ -153,11 +191,24 @@ services:
     logging: *logging
 
   gateway:
+    <<: *hardening
     image: nginxinc/nginx-unprivileged:1.28.2-alpine3.23
     volumes:
       # nginx.conf (worker limits) includes /etc/nginx/chizzy/gateway.conf.
       - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./deploy/nginx:/etc/nginx/chizzy:ro
+    # pid file and the proxy/body temp paths (nginx.conf); the image entrypoint
+    # only edits files under /etc/nginx/conf.d when they exist, and the
+    # gateway has none.
+    tmpfs:
+      - /tmp
+    networks:
+      - proxy
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          pids: 256
     # deploy/deploy.sh sets this to a checksum of deploy/nginx/, so a changed
     # config recreates the container (a bind mount does not see new files once
     # the directory is replaced on disk).
@@ -168,10 +219,14 @@ services:
       nofile:
         soft: 65535
         hard: 65535
-    # Set BIND_ADDRESS=127.0.0.1 when a host proxy (TLS) is in front, so the
-    # stack cannot be reached around it.
+    # Loopback by default: the host proxy (TLS) is the only thing meant to
+    # reach this port, and it is the only hop whose X-Forwarded-For the
+    # gateway believes (gateway.conf set_real_ip_from). A port published on
+    # 0.0.0.0 would let any direct IPv6 or hairpin connection, which Docker
+    # relays from a private address, name its own client IP in that header.
+    # BIND_ADDRESS=0.0.0.0 publishes it on every interface (no TLS, no proxy).
     ports:
-      - "${BIND_ADDRESS:-0.0.0.0}:${BACKEND_PORT:-3004}:8080"
+      - "${BIND_ADDRESS:-127.0.0.1}:${BACKEND_PORT:-3004}:8080"
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/gateway-healthz"]
       interval: 10s
@@ -184,6 +239,7 @@ services:
     logging: *logging
 
   frontend:
+    <<: *hardening
     image: ${FRONTEND_IMAGE:-chizzy-frontend}:${IMAGE_TAG:-latest}
     build:
       context: ./new-frontend
@@ -193,11 +249,31 @@ services:
         # Public URL of the site, for the canonical/link preview URLs and the sitemap.
         VITE_SITE_URL: ${VITE_SITE_URL:-http://localhost:5173}
     ports:
-      - "${BIND_ADDRESS:-0.0.0.0}:${FRONTEND_PORT:-5173}:8080"
+      - "${BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-5173}:8080"
+    # The image entrypoint renders /etc/nginx/templates/* into conf.d at
+    # start (new-frontend/Dockerfile), as the nginx user, so that tmpfs must
+    # be writable by it (a plain tmpfs is root-owned). /tmp holds the pid
+    # and temp files.
+    volumes:
+      - type: tmpfs
+        target: /etc/nginx/conf.d
+        tmpfs:
+          mode: 01777
+    tmpfs:
+      - /tmp
+    # Static files only: it talks to nothing, so it shares no network with
+    # the backend or Redis.
+    networks:
+      - web
     ulimits:
       nofile:
         soft: 65535
         hard: 65535
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          pids: 256
     restart: unless-stopped
     logging: *logging
 
@@ -208,3 +284,10 @@ volumes:
   # Report evidence (frames and chat lines) when EVIDENCE_S3_BUCKET is unset.
   # Retention is enforced by the backend (docs/retention.md). Never prune.
   evidence-data:
+
+# A frontend or gateway container that gets taken over cannot reach Redis:
+# only the backend replicas are on the data network.
+networks:
+  data:
+  proxy:
+  web:

@@ -53,8 +53,16 @@ export const DEVICE_LOCKOUT_MS = 365 * DAY_MS;
 export const FINGERPRINT_LOCKOUT_MS = 30 * DAY_MS;
 /** Session rate limits use fixed windows of this length (ms). */
 export const SESSION_RATE_WINDOW_MS = MINUTE_MS;
-/** Match caps use fixed windows of this length (ms). */
+/** Hourly match caps use fixed windows of this length (ms). */
 export const MATCH_CAP_WINDOW_MS = HOUR_MS;
+/**
+ * The per-minute cap (`MATCH_CAP_PER_DEVICE_PER_MIN`, config.ts) counts the
+ * rooms a device ended itself (call:skip, match:decline) in fixed windows
+ * of this length (ms). The hourly cap is a harvesting ceiling; this one stops
+ * a skip bot from spending it in the first minutes, sending every waiter a
+ * match:found that ends at once. Being skipped never counts.
+ */
+export const MATCH_CAP_MINUTE_WINDOW_MS = MINUTE_MS;
 /** The device -> IP-hash binding made at the handshake lives this long (ms). */
 export const MATCH_CAP_IP_BINDING_TTL_MS = DAY_MS;
 /** Domain separator for salts derived from SESSION_SECRET. */
@@ -74,6 +82,7 @@ export const KEY = {
   networkRate: (networkHash: string, window: number) => `rl:net:${networkHash}:${window}`,
   capIpOf: (deviceId: string) => `cap:ipof:${deviceId}`,
   capDevice: (deviceId: string, hour: number) => `cap:d:${deviceId}:${hour}`,
+  capDeviceMinute: (deviceId: string, minute: number) => `cap:dm:${deviceId}:${minute}`,
   capIp: (ipHash: string, hour: number) => `cap:i:${ipHash}:${hour}`,
 } as const;
 
@@ -84,11 +93,19 @@ export const KEY = {
 export const SITEVERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 /** Timeout (ms) for Siteverify; a slow answer counts as a failure (fail closed). */
 export const TURNSTILE_TIMEOUT_MS = 5 * SECOND_MS;
+/**
+ * Siteverify calls in flight at once, session gate and takedown form together.
+ * Beyond this a request fails closed at once instead of opening one more
+ * outbound socket (a few hundred verifications per second at a 200 ms RTT).
+ */
+export const TURNSTILE_MAX_INFLIGHT = 64;
 /** Local error codes, alongside the ones Cloudflare returns. */
 export const TURNSTILE_LOCAL_ERROR = {
   missingToken: "missing-input-response",
   badResponse: "bad-response",
   networkError: "network-error",
+  /** TURNSTILE_MAX_INFLIGHT reached; the request was not sent. */
+  overloaded: "overloaded",
 } as const;
 
 /* ------------------------------------------------------------------ */
@@ -137,5 +154,6 @@ export const HANDSHAKE_REJECT_CODES = ["session_required", "region_blocked"] as 
 /* ------------------------------------------------------------------ */
 
 export const CAP_MESSAGE = "You have had a lot of matches this hour. Take a break and try again later.";
+export const MINUTE_CAP_MESSAGE = "You are skipping very fast. Wait a minute and try again.";
 export const FULL_MESSAGE = "A lot of people are waiting right now. Try again in a few minutes.";
 export const CLOSED_MESSAGE = "Matching is closed right now.";

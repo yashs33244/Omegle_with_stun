@@ -74,12 +74,18 @@ export const SPARK = {
   historySize: 20,
 } as const;
 
-/** Live captions: the sender's browser transcribes its own speech; the server only relays. */
+/**
+ * Live captions: the sender's browser transcribes its own speech; the server only
+ * relays. Captions must never be a wider channel than chat: the server applies the
+ * chat guard to them and caps the bytes per second it relays per socket.
+ */
 export const CAPTIONS = {
   /** UTF-8 bytes of one segment's text. */
   maxBytes: 1_024,
   /** Segments per second per socket; the rest are dropped. */
   maxPerSec: 10,
+  /** Relayed caption text per socket, UTF-8 bytes per second (bursts up to twice this); the rest is dropped. */
+  maxBytesPerSec: 2_048,
   /** Interim segments are sent at most this often; finals go out at once. */
   interimEveryMs: 250,
 } as const;
@@ -257,6 +263,8 @@ export const captionSegmentSchema = z.object({
     .string()
     .trim()
     .min(1)
+    // UTF-16 units never exceed UTF-8 bytes, so this is a free upper bound before encoding.
+    .max(CAPTIONS.maxBytes)
     .refine((text) => utf8Bytes(text) <= CAPTIONS.maxBytes, { message: `text must be at most ${CAPTIONS.maxBytes} bytes` }),
   final: z.boolean(),
   /** Language the sender's recogniser ran in; the receiver translates from it. */
@@ -309,6 +317,10 @@ export const RESTRICTION_REASONS = [
   "other",
 ] as const;
 export type RestrictionReason = (typeof RESTRICTION_REASONS)[number];
+
+/** Timed rungs of the restriction ladder (ms): 10 min, 24 h, 7 days. A permanent restriction is `null`. */
+export const RESTRICTION_DURATIONS_MS = [600_000, 86_400_000, 604_800_000] as const;
+export type RestrictionDurationMs = (typeof RESTRICTION_DURATIONS_MS)[number];
 
 export interface Restriction {
   id: string;
@@ -761,8 +773,11 @@ export interface AdminTakedown {
 export const adminReportActionSchema = z.object({
   action: z.enum(["acknowledge", "dismiss", "warn", "restrict", "escalate_csam"]),
   reason: z.enum(RESTRICTION_REASONS).optional(),
-  /** For restrict: milliseconds, or null for permanent (humans only, which is every admin action). */
-  durationMs: z.number().int().positive().nullable().optional(),
+  /** For restrict: one of RESTRICTION_DURATIONS_MS, or null for permanent. Omitted: the next rung for the device. */
+  durationMs: z
+    .union([z.literal(RESTRICTION_DURATIONS_MS[0]), z.literal(RESTRICTION_DURATIONS_MS[1]), z.literal(RESTRICTION_DURATIONS_MS[2])])
+    .nullable()
+    .optional(),
   note: z.string().max(2_000).optional(),
 });
 export type AdminReportAction = z.infer<typeof adminReportActionSchema>;

@@ -3,8 +3,8 @@ import { randomUUID } from "node:crypto";
 import Redis from "ioredis";
 import { describeStaffedHours } from "../../src/flags/flags";
 import { ageInYears } from "../../src/session/age";
-import { DEVICE_LOCKOUT_MS, FINGERPRINT_LOCKOUT_MS, SITEVERIFY_URL } from "../../src/session/constants";
-import { ipBuckets, isCountryBlocked, requestCountry, requestIp } from "../../src/session/geo";
+import { DEVICE_LOCKOUT_MS, FINGERPRINT_LOCKOUT_MS, SITEVERIFY_URL, TURNSTILE_MAX_INFLIGHT } from "../../src/session/constants";
+import { ipBuckets, isCountryBlocked, knownIp, requestCountry, requestIp, socketIp } from "../../src/session/geo";
 import { Lockout, MatchCaps, SessionRateLimiter, deriveSalt } from "../../src/session/limits";
 import { MemoryKv } from "../../src/session/MemoryKv";
 import { RedisKv } from "../../src/session/RedisKv";
@@ -142,12 +142,37 @@ describe("geo", () => {
     expect(isCountryBlocked("GB", { ...flags, blocked_countries: "" })).toBe(false);
   });
 
-  test("only the configured proxy header is believed, and only behind the trusted proxy", () => {
+  test("only the configured proxy header is believed, only behind the trusted proxy, and only as one IP literal", () => {
     const headers = { "x-real-ip": "1.2.3.4", "true-client-ip": "5.6.7.8", "x-forwarded-for": "9.9.9.9" };
     expect(requestIp(headers, "10.0.0.1", null)).toBe("10.0.0.1");
     expect(requestIp(headers, "10.0.0.1", "x-real-ip")).toBe("1.2.3.4");
     expect(requestIp(headers, "10.0.0.1", "true-client-ip")).toBe("5.6.7.8");
     expect(requestIp({ "x-real-ip": " " }, "10.0.0.1", "x-real-ip")).toBe("10.0.0.1");
+    // Not an address: a list, a hostname, junk, an address with a port. The TCP peer is the identity instead.
+    for (const bad of ["9.9.9.9, 10.0.0.1", "evil.example", "not-an-ip-7f3a", "1.2.3.4:443", "1.2.3", "::ffff:1.2.3"]) {
+      expect(requestIp({ "x-real-ip": bad }, "10.0.0.1", "x-real-ip")).toBe("10.0.0.1");
+    }
+    // A zone id is not part of the identity, so it cannot mint fresh ones.
+    expect(requestIp({ "x-real-ip": "FE80::1%eth0" }, "10.0.0.1", "x-real-ip")).toBe("fe80::1");
+    expect(requestIp({ "x-real-ip": ["7.7.7.7", "8.8.8.8"] }, "10.0.0.1", "x-real-ip")).toBe("7.7.7.7");
+    // IPv4-mapped addresses are unwrapped wherever they come from.
+    expect(requestIp({ "x-real-ip": "::ffff:203.0.113.9" }, "10.0.0.1", "x-real-ip")).toBe("203.0.113.9");
+    expect(requestIp({}, "::ffff:203.0.113.9", "x-real-ip")).toBe("203.0.113.9");
+    expect(requestIp({ "x-real-ip": "2001:db8::1" }, "10.0.0.1", "x-real-ip")).toBe("2001:db8::1");
+    expect(requestIp({}, undefined, null)).toBe("unknown");
+    expect(requestIp({}, "garbage", null)).toBe("unknown");
+  });
+
+  test("socketIp and knownIp map the unknown sentinel to null so per-IP buckets never pool unknown clients", () => {
+    const socket = (headers: Record<string, string>, address: string | undefined) =>
+      ({ handshake: { headers, address } }) as unknown as Parameters<typeof socketIp>[0];
+    expect(socketIp(socket({ "x-real-ip": "1.2.3.4" }, "10.0.0.1"), "x-real-ip")).toBe("1.2.3.4");
+    expect(socketIp(socket({ "x-real-ip": "1.2.3.4" }, "10.0.0.1"), null)).toBe("10.0.0.1");
+    expect(socketIp(socket({}, "::ffff:203.0.113.9"), null)).toBe("203.0.113.9");
+    expect(socketIp(socket({}, undefined), null)).toBeNull();
+    expect(socketIp(socket({ "x-real-ip": "evil.example" }, "garbage"), "x-real-ip")).toBeNull();
+    expect(knownIp({}, "garbage", null)).toBeNull();
+    expect(knownIp({}, "10.0.0.1", null)).toBe("10.0.0.1");
   });
 
   test("ip and network buckets", () => {
@@ -199,6 +224,24 @@ describe("turnstile", () => {
     expect((await verifyTurnstile({ secret: "s", token: "t", fetch: fake({ success: "true" }) })).success).toBe(false);
     const notOk: FetchLike = async () => ({ ok: false, json: async () => ({ success: true }) });
     expect((await verifyTurnstile({ secret: "s", token: "t", fetch: notOk })).success).toBe(false);
+  });
+
+  test("at most TURNSTILE_MAX_INFLIGHT Siteverify calls run at once; the rest fail closed without a request", async () => {
+    const held: ((r: { ok: boolean; json(): Promise<unknown> }) => void)[] = [];
+    const hanging: FetchLike = () => {
+      const call = Promise.withResolvers<{ ok: boolean; json(): Promise<unknown> }>();
+      held.push(call.resolve);
+      return call.promise;
+    };
+    const inflight = Array.from({ length: TURNSTILE_MAX_INFLIGHT }, () => verifyTurnstile({ secret: "s", token: "t", fetch: hanging }));
+    expect(held).toHaveLength(TURNSTILE_MAX_INFLIGHT);
+    expect(await verifyTurnstile({ secret: "s", token: "t", fetch: hanging })).toEqual({ success: false, errors: ["overloaded"] });
+    expect(held).toHaveLength(TURNSTILE_MAX_INFLIGHT);
+    for (const resolve of held) resolve({ ok: true, json: async () => ({ success: true }) });
+    for (const r of await Promise.all(inflight)) expect(r.success).toBe(true);
+    // A finished call frees its slot, also when it failed.
+    expect((await verifyTurnstile({ secret: "s", token: "t", fetch: fake(new Error("down")) })).errors).toEqual(["network-error"]);
+    expect((await verifyTurnstile({ secret: "s", token: "t", fetch: fake({ success: true }) })).success).toBe(true);
   });
 });
 
@@ -256,23 +299,41 @@ function kvSuite(name: string, make: (clock: () => number) => SessionKv | null, 
     test("hourly match caps per device and per IP", async () => {
       let now = NOW;
       const kv = make(() => now)!;
-      const caps = new MatchCaps(kv, deriveSalt(randomUUID(), "x"), { perDevicePerHour: 2, perIpPerHour: 3 }, () => now);
+      const caps = new MatchCaps(kv, deriveSalt(randomUUID(), "x"), { perDevicePerHour: 2, perIpPerHour: 3, perDevicePerMinute: 100 }, () => now);
       const [a, b] = [randomUUID(), randomUUID()];
       await caps.bindIp(a, "192.0.2.1");
       await caps.bindIp(b, "192.0.2.1");
       await caps.recordMatch(a);
-      expect(await caps.overCap(a)).toBe(false);
+      expect(await caps.overCap(a)).toBeNull();
       await caps.recordMatch(a);
-      expect(await caps.overCap(a)).toBe(true); // device cap
-      expect(await caps.overCap(b)).toBe(false);
+      expect(await caps.overCap(a)).toBe("hour"); // device cap
+      expect(await caps.overCap(b)).toBeNull();
       await caps.recordMatch(b);
-      expect(await caps.overCap(b)).toBe(true); // shared IP cap
+      expect(await caps.overCap(b)).toBe("hour"); // shared IP cap
       // An unbound device is capped per device only.
       const c = randomUUID();
       await caps.recordMatch(c);
-      expect(await caps.overCap(c)).toBe(false);
+      expect(await caps.overCap(c)).toBeNull();
       now += 60 * 60_000;
-      expect(await caps.overCap(a)).toBe(false);
+      expect(await caps.overCap(a)).toBeNull();
+    });
+
+    test("the per-minute cap counts the device's own skips in a fixed one-minute window, and is skipped for passive re-queues", async () => {
+      let now = NOW;
+      const kv = make(() => now)!;
+      const caps = new MatchCaps(kv, deriveSalt(randomUUID(), "x"), { perDevicePerHour: 100, perIpPerHour: 100, perDevicePerMinute: 2 }, () => now);
+      const a = randomUUID();
+      await caps.bindIp(a, "192.0.2.1");
+      // Matches alone never reach it.
+      for (let i = 0; i < 5; i++) await caps.recordMatch(a);
+      expect(await caps.overCap(a)).toBeNull();
+      await caps.recordSkip(a);
+      expect(await caps.overCap(a)).toBeNull();
+      await caps.recordSkip(a);
+      expect(await caps.overCap(a)).toBe("minute");
+      expect(await caps.overCap(a, false)).toBeNull();
+      now += 60_000;
+      expect(await caps.overCap(a)).toBeNull();
     });
   });
 }

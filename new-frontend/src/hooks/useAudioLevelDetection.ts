@@ -4,7 +4,7 @@ export const useAudioLevelDetection = (audioTrack: MediaStreamTrack | null) => {
   const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
-  const dataArrayRef = useRef<Uint8Array | null>(null);
+  const dataArrayRef = useRef<Uint8Array<ArrayBuffer> | null>(null);
   const animationFrameRef = useRef<number | null>(null);
 
   useEffect(() => {

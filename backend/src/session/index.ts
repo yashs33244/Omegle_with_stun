@@ -46,6 +46,7 @@ export function createSessionFeature(deps: SessionFeatureDeps) {
   const caps = new MatchCaps(kv, salt, {
     perDevicePerHour: config.matchCapPerDevicePerHour,
     perIpPerHour: config.matchCapPerIpPerHour,
+    perDevicePerMinute: config.matchCapPerDevicePerMin,
   });
 
   const sessionRequests = new Counter({
@@ -83,7 +84,7 @@ export function createSessionFeature(deps: SessionFeatureDeps) {
     tokens,
     caps,
     service,
-    router: createSessionRouter({ config, flags, service, logger }),
+    router: createSessionRouter({ config, flags, service, logger, onRateLimited: () => sessionRequests.inc({ result: "rate_limited" }) }),
     handshake: sessionHandshake({
       tokens,
       flags,

@@ -4,7 +4,7 @@
  * evidence and Turnstile settings. Env-driven values stay in config.ts
  * (reportAfterEndMs, evidenceDir, evidenceS3*, pseudonymSalt, turnstileSecret).
  */
-import type { TakedownRequest } from "../protocol";
+import { RESTRICTION_DURATIONS_MS, type TakedownRequest } from "../protocol";
 
 /* ------------------------------------------------------------------ */
 /* Time units (ms)                                                     */
@@ -27,11 +27,17 @@ export type LadderStep = number | null | typeof WARNING_STEP;
 /** The only automatic, report-driven action: a short pause (ms). */
 export const AUTO_PAUSE_MS = 10 * MINUTE;
 
-/** Human ladder: warning, 10 min, 24 h, 7 days, permanent (null). */
-export const LADDER: readonly LadderStep[] = [WARNING_STEP, 10 * MINUTE, DAY, 7 * DAY, null];
+/** Human ladder: warning, then the protocol's timed rungs (10 min, 24 h, 7 days), then permanent (null). */
+export const LADDER: readonly LadderStep[] = [WARNING_STEP, ...RESTRICTION_DURATIONS_MS, null];
 
 /** Reports per device per hour; the next one is refused. */
 export const REPORTS_PER_HOUR = 5;
+/**
+ * Reports per client IP per hour, across devices. Many Indian mobile users share
+ * one CGNAT address, so this is a wide net against one attacker spawning fresh
+ * devices on one connection, not a per-person cap (that is REPORTS_PER_HOUR).
+ */
+export const REPORTS_PER_IP_PER_HOUR = 30;
 /** Weighted reports against a device within this window (ms) count toward an auto pause. */
 export const AUTO_PAUSE_WINDOW_MS = DAY;
 /** Sum of reporter weights that triggers an auto pause. Fresh devices weigh about 0.23, so it takes 8 of them. */
@@ -155,13 +161,15 @@ export const KEY = {
   network: (deviceId: string) => `net:${deviceId}`,
   lastRoom: (roomId: string) => `lastroom:${roomId}`,
   fingerprint: (deviceId: string) => `fp:${deviceId}`,
+  /** `network` is the salted hash of the client's address bucket (EnforcementService.network), never the address. */
+  reportIpRate: (network: string) => `report-ip:${network}`,
   lastAutoPause: (deviceId: string) => `lastauto:${deviceId}`,
   reportRate: (deviceId: string) => `report-rate:${deviceId}`,
   roomReport: (roomId: string, reporterDevice: string) => `room-report:${roomId}:${reporterDevice}`,
-  appealIpRate: (ip: string) => `appeal-ip:${ip}`,
+  appealIpRate: (network: string) => `appeal-ip:${network}`,
   appealDeviceRate: (deviceId: string) => `appeal-dev:${deviceId}`,
   appealClaim: (restrictionId: string) => `appeal:${restrictionId}`,
-  takedownIpRate: (ip: string) => `takedown-ip:${ip}`,
+  takedownIpRate: (network: string) => `takedown-ip:${network}`,
   retentionClaim: (day: number) => `retention:${day}`,
   /** Reports against a device, scored by creation time. */
   reportsAgainst: (deviceId: string) => `against:${deviceId}`,

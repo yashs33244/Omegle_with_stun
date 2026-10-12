@@ -10,8 +10,9 @@
  *   - RedisWalletStore (prefix `chizzy:wallet:`):
  *       ledger:{deviceId}   list of JSON WalletLedgerEntry, newest first, capped
  *       unlock:{deviceId}   hash feature -> expiresAt (epoch ms)
- *       once:{key}          idempotency marker, kept for good (a payment id never un-happens)
- *       order:{orderId}     JSON BillingOrderRecord, kept for good (replays are decided from it)
+ *       once:{key}          idempotency marker, kept for good (a credited order never un-happens)
+ *       order:{orderId}     JSON BillingOrderRecord; unpaid ones expire after UNPAID_ORDER_TTL_MS,
+ *                           paid ones are kept for good (replays are decided from them)
  *       orders              zset orderId -> createdAt, capped
  *
  * Debits are "add a negative delta, undo if the result went below zero"; the
@@ -27,8 +28,14 @@ export type CoinBalance = Pick<MatchStore, "getCoins" | "addCoins">;
 
 /** Ledger entries kept per device. */
 export const LEDGER_MAX = 200;
-/** Orders kept for the admin list. */
+/** Orders kept for the admin list (the memory store also evicts unpaid orders past this). */
 export const ORDERS_MAX = 2_000;
+/**
+ * How long (ms) an order that was never paid is kept. Checkout runs minutes
+ * after the order is created, so a day is generous; without a bound, anyone
+ * with a session could grow the order table forever. Paid orders never expire.
+ */
+export const UNPAID_ORDER_TTL_MS = 24 * 60 * 60_000;
 
 export interface WalletStore {
   /** Stored balance, or null if the device never had coins. */
@@ -52,6 +59,7 @@ export interface WalletStore {
   /** Gives a claim back after the work it guarded failed, so a retry can credit. */
   releaseClaim(key: string): Promise<void>;
 
+  /** Stores the order; an unpaid one is kept UNPAID_ORDER_TTL_MS, a paid one for good. */
   putOrder(order: BillingOrderRecord): Promise<void>;
   getOrder(orderId: string): Promise<BillingOrderRecord | null>;
   /** Newest first. */
@@ -73,8 +81,13 @@ export class MemoryWalletStore implements WalletStore {
   private readonly unlocks = new Map<string, Record<string, number>>();
   private readonly claims = new Set<string>();
   private readonly orders = new Map<string, BillingOrderRecord>();
+  /** orderId -> expiry (epoch ms) of every unpaid order, oldest first. */
+  private readonly unpaid = new Map<string, number>();
 
-  constructor(private readonly coins: CoinBalance) {}
+  constructor(
+    private readonly coins: CoinBalance,
+    private readonly now: () => number = Date.now,
+  ) {}
 
   getBalance(deviceId: string): Promise<number | null> {
     return this.coins.getCoins(deviceId);
@@ -125,19 +138,40 @@ export class MemoryWalletStore implements WalletStore {
 
   async putOrder(order: BillingOrderRecord): Promise<void> {
     this.orders.set(order.orderId, { ...order });
-    if (this.orders.size > ORDERS_MAX) {
-      const oldest = this.orders.keys().next().value;
-      if (oldest !== undefined) this.orders.delete(oldest);
-    }
+    if (order.status === "paid") this.unpaid.delete(order.orderId);
+    else this.unpaid.set(order.orderId, this.now() + UNPAID_ORDER_TTL_MS);
+    if (this.orders.size > ORDERS_MAX) this.evict();
   }
 
   async getOrder(orderId: string): Promise<BillingOrderRecord | null> {
+    const expiresAt = this.unpaid.get(orderId);
+    if (expiresAt !== undefined && expiresAt <= this.now()) {
+      this.drop(orderId);
+      return null;
+    }
     const order = this.orders.get(orderId);
     return order ? { ...order } : null;
   }
 
+  /** Expired unpaid orders go first, then the oldest unpaid ones; a paid order is money and is never evicted. */
+  private evict(): void {
+    const now = this.now();
+    for (const [orderId, expiresAt] of this.unpaid) if (expiresAt <= now) this.drop(orderId);
+    for (const orderId of this.unpaid.keys()) {
+      if (this.orders.size <= ORDERS_MAX) break;
+      this.drop(orderId);
+    }
+  }
+
+  private drop(orderId: string): void {
+    this.orders.delete(orderId);
+    this.unpaid.delete(orderId);
+  }
+
   async listOrders(limit: number): Promise<BillingOrderRecord[]> {
+    const now = this.now();
     return [...this.orders.values()]
+      .filter((o) => (this.unpaid.get(o.orderId) ?? Infinity) > now)
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, limit)
       .map((o) => ({ ...o }));
@@ -207,13 +241,12 @@ export class RedisWalletStore implements WalletStore {
   }
 
   async putOrder(order: BillingOrderRecord): Promise<void> {
+    const key = `${this.prefix}order:${order.orderId}`;
     const index = `${this.prefix}orders`;
-    await this.redis
-      .multi()
-      .set(`${this.prefix}order:${order.orderId}`, JSON.stringify(order))
-      .zadd(index, order.createdAt, order.orderId)
-      .zremrangebyrank(index, 0, -ORDERS_MAX - 1)
-      .exec();
+    const json = JSON.stringify(order);
+    // A plain SET drops any TTL left from the unpaid record, so a paid order is kept for good.
+    const tx = order.status === "paid" ? this.redis.multi().set(key, json) : this.redis.multi().set(key, json, "PX", UNPAID_ORDER_TTL_MS);
+    await tx.zadd(index, order.createdAt, order.orderId).zremrangebyrank(index, 0, -ORDERS_MAX - 1).exec();
   }
 
   async getOrder(orderId: string): Promise<BillingOrderRecord | null> {

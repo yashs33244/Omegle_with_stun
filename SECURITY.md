@@ -55,15 +55,32 @@ in-app report button or the takedown form, not here.
   carry socket ids, room ids and event names, never names, photos or chat
   text. Sentry events are scrubbed of names, chat, photos and evidence;
   PostHog runs cookieless with IP capture off.
+- **Availability.** Every limit that keeps one client from degrading the
+  service for others is listed with its source in docs/LIMITS.md: per-IP
+  connection caps and connect rate enforced on the WebSocket upgrade before
+  any state exists, a hello deadline for idle sockets, per-connection packet
+  and byte budgets ahead of JSON parsing, per-event buckets, bounded Node
+  http timeouts (15 s headers, 30 s request, 65 s keep-alive), body caps
+  checked against `Content-Length` before a byte is read, a cap on Turnstile
+  verifications in flight, a renewed and fenced Redis match lock, and
+  gateway `limit_req`/`limit_conn` zones plus slow-client timeouts in the
+  compose stack. Memory-store collections are bounded or swept.
+- **Money.** A Razorpay order is credited exactly once per order id (not per
+  payment id), the credit claim survives partial write failures, unpaid
+  orders expire after a day, and a fresh device id starts with no coins so
+  the paid gender filter cannot be unlocked by churning identities.
 - **Web hardening.** The frontend's Content Security Policy allows scripts
   only from the site itself and Cloudflare Turnstile, `wasm-unsafe-eval` for
   the self-hosted moderation models, network calls only to the API origin,
   Turnstile, Sentry ingest and PostHog, and frames only from Turnstile.
   `Permissions-Policy` allows camera and microphone for the site itself
-  only; `X-Frame-Options: DENY`, `nosniff`, `Cross-Origin-Opener-Policy`.
-  Containers run as non-root users, Redis is reachable only on the internal
-  Docker network, `/metrics` is not exposed publicly, and CORS is restricted
-  to `CORS_ORIGINS` in production.
+  only; `X-Frame-Options: DENY`, `nosniff`, `Cross-Origin-Opener-Policy`,
+  HSTS. "Hide my IP" fails closed: when the relay is unavailable no
+  connection is created until the user explicitly continues or skips.
+  Containers run as non-root with all capabilities dropped, a read-only
+  root filesystem and memory/pid limits; Redis is reachable only from the
+  backend's Docker network, `/metrics` needs `METRICS_TOKEN`, and CORS is
+  restricted to `CORS_ORIGINS` in production.
 - **Secrets.** All secrets live in GitHub Actions secrets and are written to
   the host's `.env` (mode 600) without being printed. In production the
   backend refuses to start without `SESSION_SECRET`, `ADMIN_TOKEN` and the
@@ -71,9 +88,12 @@ in-app report button or the takedown form, not here.
   missing. `SESSION_SECRET` can be rotated with `SESSION_SECRET_PREVIOUS`.
 - **Supply chain.** Workflow actions are pinned to commit SHAs, base images to
   exact versions, dependencies to lockfiles that may only reference the public
-  npm registry, and Dependabot proposes updates. CI runs actionlint and
-  shellcheck. Only the deploy workflow uses the deploy secrets, and pull
-  requests from forks never receive them.
+  npm registry, and Dependabot proposes minor and patch updates (majors are
+  taken deliberately). CI runs actionlint, shellcheck and zizmor; checkouts do
+  not persist credentials, published builds never come from a shared cache,
+  and image pushes and releases run in protected environments. Pull requests
+  from forks never receive secrets. Secret scanning with push protection and
+  private vulnerability reporting are enabled on the repository.
 
 ## Known limitations
 

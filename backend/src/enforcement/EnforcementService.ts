@@ -13,6 +13,7 @@
  */
 import { createHmac, randomUUID } from "node:crypto";
 import type { Logger } from "../logger";
+import { ipBuckets } from "../session/geo";
 import type {
   AdminAppeal,
   AdminAuditEntry,
@@ -58,6 +59,7 @@ import {
   PERMANENT_SCORE,
   PSEUDONYM_HEX_CHARS,
   REPORTS_PER_HOUR,
+  REPORTS_PER_IP_PER_HOUR,
   RETENTION_CHECK_INTERVAL_MS,
   RETENTION_MS,
   SHORT_CALL_MS,
@@ -122,6 +124,8 @@ export interface EnforcementDeps {
 export interface ReportInput {
   roomId: string;
   reporterDevice: string;
+  /** The reporter's client IP, if known. Only a salted hash of its subscriber bucket is stored. */
+  reporterIp: string | null;
   reportedDevice: string;
   reason: ReportReason;
   details?: string;
@@ -173,6 +177,11 @@ function restrictionEnd(r: StoredRestriction): number {
   return r.liftedAt ?? r.until ?? PERMANENT_SCORE;
 }
 
+/** One reporter, for counting distinct reporters: the network hash when known, else the device. */
+function reporterKey(r: StoredReport): string {
+  return r.reporterNetwork ?? r.reporterDevice;
+}
+
 export class EnforcementService {
   private readonly store: EnforcementStore;
   private readonly evidence: EvidenceStore;
@@ -204,6 +213,14 @@ export class EnforcementService {
   /** Stable pseudonym for admin views and packets: never the raw device id. */
   pseudonym(deviceId: string): string {
     return createHmac("sha256", this.salt).update(deviceId).digest("hex").slice(0, PSEUDONYM_HEX_CHARS);
+  }
+
+  /**
+   * Salted hash of the address's bucket (the /64 for IPv6): the key for every
+   * per-IP counter and the stored reporterNetwork, so no raw address is kept.
+   */
+  network(ip: string): string {
+    return this.pseudonym(ipBuckets(ip).ip);
   }
 
   /* ---------------------------------------------------------------- */
@@ -244,23 +261,29 @@ export class EnforcementService {
     return this.store.getValue<LastRoom>(KEY.lastRoom(roomId));
   }
 
-  /** Rate limit (REPORTS_PER_HOUR per device) and one report per room per reporter. */
-  async admitReport(reporterDevice: string, roomId: string): Promise<AdmitResult> {
+  /**
+   * Rate limits (REPORTS_PER_HOUR per device, REPORTS_PER_IP_PER_HOUR per client
+   * network when known) and one report per room per reporter.
+   */
+  async admitReport(reporterDevice: string, roomId: string, ip: string | null): Promise<AdmitResult> {
     if ((await this.store.hit(KEY.reportRate(reporterDevice), HOUR)) > REPORTS_PER_HOUR) return "rate_limited";
+    if (ip && (await this.store.hit(KEY.reportIpRate(this.network(ip)), HOUR)) > REPORTS_PER_IP_PER_HOUR) return "rate_limited";
     if (!(await this.store.claim(KEY.roomReport(roomId, reporterDevice), DAY))) return "duplicate";
     return "ok";
   }
 
   /**
    * The restriction that blocks this device now, or null. With a fingerprint it
-   * also checks restrictions recorded against that fingerprint, and remembers
-   * the device-fingerprint link (180 days) so later restrictions cover both.
+   * remembers the device-fingerprint link (180 days); with or without one it
+   * also checks restrictions recorded against the linked fingerprint, so a
+   * restriction placed on another device of the same browser counts here too.
    */
   async activeForDevice(deviceId: string, fingerprintHash?: string | null): Promise<Restriction | null> {
     if (fingerprintHash) await this.store.setValue(KEY.fingerprint(deviceId), fingerprintHash, FINGERPRINT_TTL_MS);
+    const fingerprint = fingerprintHash ?? (await this.store.getValue<string>(KEY.fingerprint(deviceId)));
     const ids = new Set(await this.store.indexRange(KEY.restrictions(deviceId)));
-    if (fingerprintHash) {
-      for (const id of await this.store.indexRange(KEY.restrictionsByFingerprint(fingerprintHash))) ids.add(id);
+    if (fingerprint) {
+      for (const id of await this.store.indexRange(KEY.restrictionsByFingerprint(fingerprint))) ids.add(id);
     }
     const found = await this.activeOf([...ids]);
     return found ? toPublic(found) : null;
@@ -297,7 +320,9 @@ export class EnforcementService {
     ]);
     const weight = reporterWeight(reporterStats, now);
     const scores = input.frame ? await this.classify(input.frame) : null;
-    const otherUnderageReporters = await this.underageReporters(input.reportedDevice, input.reporterDevice, now);
+    // Reporters on one address count once toward automatic action; only a salted hash of the address is kept.
+    const reporterNetwork = input.reporterIp ? this.network(input.reporterIp) : null;
+    const otherUnderageReporters = await this.underageReporters(input.reportedDevice, reporterNetwork ?? input.reporterDevice, now);
     const minorSignal = reportedStats.minorFlag || otherUnderageReporters > 0;
     const restricted = routeRestricted({ reason: input.reason, scores, minorSignal });
 
@@ -319,6 +344,7 @@ export class EnforcementService {
       roomId: input.roomId,
       reason: input.reason,
       reporterDevice: input.reporterDevice,
+      reporterNetwork,
       reportedDevice: input.reportedDevice,
       reporterWeight: weight,
       details: input.details?.trim() || null,
@@ -357,25 +383,25 @@ export class EnforcementService {
     }
   }
 
-  /** Distinct OTHER devices that reported `deviceId` as underage recently. */
+  /** Distinct OTHER reporters (by network, else device) that reported `deviceId` as underage recently. */
   private async underageReporters(deviceId: string, exclude: string, now: number): Promise<number> {
     const ids = await this.store.indexRange(KEY.reportsAgainst(deviceId), { min: now - UNDERAGE_CORROBORATION_WINDOW_MS });
     const reports = await this.store.getMany<StoredReport>("report", ids);
-    const devices = new Set<string>();
+    const reporters = new Set<string>();
     for (const r of reports) {
-      if (r && r.reason === "underage" && r.status !== "dismissed" && r.reporterDevice !== exclude) {
-        devices.add(r.reporterDevice);
-      }
+      if (r && r.reason === "underage" && r.status !== "dismissed" && reporterKey(r) !== exclude) reporters.add(reporterKey(r));
     }
-    return devices.size;
+    return reporters.size;
   }
 
   /**
    * Report-driven automatic action, capped at a 10 min pause:
    * - underage: only when corroborated (a high-weight reporter, a second
-   *   independent device, or a prior minor flag);
-   * - otherwise: when the weighted reports from distinct devices since the last
-   *   automatic pause (within 24 h) reach the threshold.
+   *   independent reporter, or a prior minor flag);
+   * - otherwise: when the weighted reports from distinct reporters since the last
+   *   automatic pause (within 24 h) reach the threshold. Reports from one network
+   *   (reporterKey) count once, at their highest weight, so fresh device ids on
+   *   one connection cannot stack up.
    */
   private async autoAction(
     report: StoredReport,
@@ -400,7 +426,7 @@ export class EnforcementService {
     for (const r of reports) {
       if (!r || r.status === "dismissed") continue;
       const w = reportWeight(r.reporterWeight, r.shortCall);
-      byReporter.set(r.reporterDevice, Math.max(byReporter.get(r.reporterDevice) ?? 0, w));
+      byReporter.set(reporterKey(r), Math.max(byReporter.get(reporterKey(r)) ?? 0, w));
     }
     const total = [...byReporter.values()].reduce((a, b) => a + b, 0);
     if (total < AUTO_PAUSE_THRESHOLD) return null;
@@ -496,14 +522,15 @@ export class EnforcementService {
   }
 
   async submitAppeal(req: AppealRequest, ip: string | null): Promise<AppealResponse> {
-    if (ip && (await this.store.hit(KEY.appealIpRate(ip), HOUR)) > APPEALS_PER_IP_PER_HOUR) {
-      return { ok: false, error: "rate_limited" };
-    }
-    if ((await this.store.hit(KEY.appealDeviceRate(req.deviceId), DAY)) > APPEALS_PER_DEVICE_PER_DAY) {
+    if (ip && (await this.store.hit(KEY.appealIpRate(this.network(ip)), HOUR)) > APPEALS_PER_IP_PER_HOUR) {
       return { ok: false, error: "rate_limited" };
     }
     const r = await this.store.get<StoredRestriction>("restriction", req.restrictionId);
     if (!r || !(await this.owns(r, req.deviceId))) return { ok: false, error: "not_found" };
+    // Charged only for the device's own restriction: a guessed deviceId must not burn its quota.
+    if ((await this.store.hit(KEY.appealDeviceRate(req.deviceId), DAY)) > APPEALS_PER_DEVICE_PER_DAY) {
+      return { ok: false, error: "rate_limited" };
+    }
     if (!r.appealable) return { ok: false, error: "not_appealable" };
     if (r.appeal.status !== "none" || !(await this.store.claim(KEY.appealClaim(r.id), APPEAL_CLAIM_TTL_MS))) {
       return { ok: false, error: "already_appealed" };
@@ -528,7 +555,7 @@ export class EnforcementService {
   }
 
   async submitTakedown(req: TakedownRequest, ip: string | null): Promise<TakedownResponse> {
-    if (ip && (await this.store.hit(KEY.takedownIpRate(ip), HOUR)) > TAKEDOWNS_PER_IP_PER_HOUR) {
+    if (ip && (await this.store.hit(KEY.takedownIpRate(this.network(ip)), HOUR)) > TAKEDOWNS_PER_IP_PER_HOUR) {
       return { ok: false, error: "rate_limited" };
     }
     if (!(await this.turnstile(req.turnstileToken, ip))) return { ok: false, error: "turnstile_failed" };
@@ -604,7 +631,8 @@ export class EnforcementService {
       );
       return Promise.all(reports.map((r) => this.toAdmin(r)));
     }
-    const ids = await this.store.indexRange(INDEX.openReports);
+    // Oldest first, capped: the sort below still puts the most urgent of them on top.
+    const ids = await this.store.indexRange(INDEX.openReports, { limit: ADMIN_LIST_LIMIT });
     const reports = (await this.store.getMany<StoredReport>("report", ids)).filter(
       (r): r is StoredReport => r !== null,
     );

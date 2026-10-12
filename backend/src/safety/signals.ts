@@ -8,6 +8,8 @@
  *   risk:{deviceId}     risk points; the window restarts with each new point
  *   calls:{deviceId}    hash { calls, early } (7 day TTL, refreshed on write)
  *   lowpri              zset deviceId -> low priority until (epoch ms)
+ *   expiries:{deviceId} accept windows let expire; the window restarts with each one
+ *   cooldown:{deviceId} accept-timeout cooldown until (epoch ms), expires by itself
  */
 import type Redis from "ioredis";
 import type { Config } from "../config";
@@ -15,6 +17,9 @@ import type { Logger } from "../logger";
 import type { MatchMetrics } from "../match/matchMetrics";
 import type { ModerationSignalPayload } from "../protocol";
 import {
+  ACCEPT_TIMEOUT_COOLDOWN_MS,
+  ACCEPT_TIMEOUT_STRIKES,
+  ACCEPT_TIMEOUT_WINDOW_MS,
   CALLS_TTL_MS,
   DEDUPE_MAX,
   LOW_PRIORITY_CACHE_MS,
@@ -40,12 +45,19 @@ export interface SignalStore {
   setLowPriority(deviceId: string, until: number): Promise<void>;
   /** Devices whose low priority lasts past `now`. */
   lowPriority(now: number): Promise<string[]>;
+  /** Counts one expired accept window and returns the device's total in the current window. */
+  recordAcceptTimeout(deviceId: string, windowMs: number): Promise<number>;
+  setAcceptCooldown(deviceId: string, until: number): Promise<void>;
+  /** When the device's accept-timeout cooldown ends (epoch ms), or null when it has none. */
+  acceptCooldownUntil(deviceId: string): Promise<number | null>;
 }
 
 export class MemorySignalStore implements SignalStore {
   private readonly risk = new Map<string, { points: number; expiresAt: number }>();
   private readonly calls = new Map<string, CallStats>();
   private readonly low = new Map<string, number>();
+  private readonly expiries = new Map<string, { count: number; expiresAt: number }>();
+  private readonly cooldowns = new Map<string, number>();
 
   constructor(private readonly clock: () => number = Date.now) {}
 
@@ -82,6 +94,31 @@ export class MemorySignalStore implements SignalStore {
       else this.low.delete(id);
     }
     return out;
+  }
+
+  async recordAcceptTimeout(deviceId: string, windowMs: number): Promise<number> {
+    const now = this.clock();
+    const current = this.expiries.get(deviceId);
+    const count = (current && current.expiresAt > now ? current.count : 0) + 1;
+    this.expiries.set(deviceId, { count, expiresAt: now + windowMs });
+    if (this.expiries.size > DEDUPE_MAX) for (const [k, v] of this.expiries) if (v.expiresAt <= now) this.expiries.delete(k);
+    return count;
+  }
+
+  async setAcceptCooldown(deviceId: string, until: number): Promise<void> {
+    const now = this.clock();
+    this.cooldowns.set(deviceId, until);
+    if (this.cooldowns.size > DEDUPE_MAX) for (const [k, v] of this.cooldowns) if (v <= now) this.cooldowns.delete(k);
+  }
+
+  async acceptCooldownUntil(deviceId: string): Promise<number | null> {
+    const until = this.cooldowns.get(deviceId);
+    if (until === undefined) return null;
+    if (until <= this.clock()) {
+      this.cooldowns.delete(deviceId);
+      return null;
+    }
+    return until;
   }
 }
 
@@ -120,6 +157,23 @@ export class RedisSignalStore implements SignalStore {
   async lowPriority(now: number): Promise<string[]> {
     return this.redis.zrangebyscore(`${this.prefix}lowpri`, `(${now}`, "+inf");
   }
+
+  async recordAcceptTimeout(deviceId: string, windowMs: number): Promise<number> {
+    const key = `${this.prefix}expiries:${deviceId}`;
+    const res = await this.redis.multi().incr(key).pexpire(key, windowMs).exec();
+    const total = res?.[0]?.[1];
+    if (typeof total !== "number") throw new Error("accept timeout update failed");
+    return total;
+  }
+
+  async setAcceptCooldown(deviceId: string, until: number): Promise<void> {
+    await this.redis.set(`${this.prefix}cooldown:${deviceId}`, String(until), "PXAT", until);
+  }
+
+  async acceptCooldownUntil(deviceId: string): Promise<number | null> {
+    const raw = await this.redis.get(`${this.prefix}cooldown:${deviceId}`);
+    return raw === null ? null : Number(raw);
+  }
 }
 
 export const NUDGE_RISK = { solicitation: 2, "contact-sharing": 1 } as const;
@@ -128,7 +182,7 @@ export interface SafetySignalsDeps {
   store: SignalStore;
   config: Config;
   logger: Logger;
-  metrics: Pick<MatchMetrics, "earlySkipsTotal" | "lowPriorityTotal" | "moderationSignalsTotal">;
+  metrics: Pick<MatchMetrics, "earlySkipsTotal" | "lowPriorityTotal" | "moderationSignalsTotal" | "acceptCooldownsTotal">;
   now?: () => number;
 }
 
@@ -181,6 +235,34 @@ export class SafetySignals {
       }),
       "early skip",
     );
+  }
+
+  /**
+   * `deviceId` let a match's accept window expire. The ACCEPT_TIMEOUT_STRIKES-th
+   * time within ACCEPT_TIMEOUT_WINDOW_MS starts a cooldown that hello refuses
+   * (MatchService.hello). Nothing is awaited: the sweeper holds the match lock.
+   */
+  acceptTimedOut(deviceId: string): void {
+    this.background(
+      this.store.recordAcceptTimeout(deviceId, ACCEPT_TIMEOUT_WINDOW_MS).then(async (count) => {
+        if (count < ACCEPT_TIMEOUT_STRIKES) return;
+        await this.store.setAcceptCooldown(deviceId, this.now() + ACCEPT_TIMEOUT_COOLDOWN_MS);
+        this.metrics.acceptCooldownsTotal.inc();
+        this.log.info({ count }, "device put on an accept-timeout cooldown");
+      }),
+      "accept timeout",
+    );
+  }
+
+  /** Milliseconds left on the device's accept-timeout cooldown; 0 when none (or the store is down). */
+  async acceptCooldownMs(deviceId: string): Promise<number> {
+    try {
+      const until = await this.store.acceptCooldownUntil(deviceId);
+      return until === null ? 0 : Math.max(0, until - this.now());
+    } catch (err) {
+      this.log.warn({ err }, "accept cooldown lookup failed");
+      return 0;
+    }
   }
 
   /**

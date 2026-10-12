@@ -14,6 +14,14 @@ import { FlagsReader, MemoryFlagsStore, type FlagsStore } from "./flags/flags";
 import { adminApiRouter } from "./http/admin";
 import { billingApiRouter } from "./http/billing";
 import { createApp } from "./http/app";
+import {
+  HTTP_CONNECTIONS_CHECK_INTERVAL_MS,
+  HTTP_HEADERS_TIMEOUT_MS,
+  HTTP_KEEP_ALIVE_TIMEOUT_MS,
+  HTTP_MAX_HEADERS_COUNT,
+  HTTP_MAX_REQUESTS_PER_SOCKET,
+  HTTP_REQUEST_TIMEOUT_MS,
+} from "./http/constants";
 import { publicApiRouter } from "./http/public";
 import type { Logger } from "./logger";
 import { MatchService, type Emitter } from "./match/MatchService";
@@ -24,7 +32,7 @@ import { TurnSpendPoller, cloudflareEgressQuery } from "./turn/spendPoller";
 import { MemoryTurnStore, RedisTurnStore } from "./turn/store";
 import { TurnService } from "./turn/TurnService";
 import { SparkService } from "./spark/SparkService";
-import { attachHandlers, createEmitter, createSocketServer, type AppServer } from "./realtime/socket";
+import { ConnectionGate, attachHandlers, createEmitter, createSocketServer, type AppServer } from "./realtime/socket";
 import { createSessionFeature, sessionWarnings, type RestrictionChecker } from "./session";
 import type { MatchStore } from "./store/MatchStore";
 
@@ -46,7 +54,7 @@ export interface ServerDeps {
    * analytics). Tests inject a fake; defaults to global fetch.
    */
   fetch?: FetchFn;
-  /** Active restriction lookup for POST /api/session (enforcement lane). No-op when unset. */
+  /** Restriction lookup and network notes for POST /api/session; tests inject a fake, production uses `enforcement`. */
   restrictions?: RestrictionChecker;
   /** Enforcement overrides (stores, Turnstile verifier, classifier) for tests and wiring. */
   enforcement?: EnforcementOptions;
@@ -84,6 +92,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
   const { store, logger } = deps;
   const flags = new FlagsReader(deps.flags ?? new MemoryFlagsStore());
   const metrics = createMetrics(store);
+  const enforcement = createEnforcement(config, { logger, redis: deps.redis }, deps.enforcement);
   const session = createSessionFeature({
     config,
     flags,
@@ -92,10 +101,9 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     registry: metrics.registry,
     redis: deps.redis,
     fetch: deps.fetch,
-    restrictions: deps.restrictions,
+    restrictions: deps.restrictions ?? enforcement,
   });
   for (const warning of sessionWarnings(config)) logger.warn(`SESSION GATE WARNING: ${warning}`);
-  const enforcement = createEnforcement(config, { logger, redis: deps.redis }, deps.enforcement);
   // Socket.IO exists only after the HTTP app, which needs billing: late-bound.
   const live: { emitter?: Emitter } = {};
   const billing = createBilling({
@@ -118,6 +126,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     registry: metrics.registry,
     logger,
     metricsToken: config.metricsToken,
+    metricsRequireToken: config.nodeEnv === "production",
     session: session.router,
     routes: (a) => {
       a.use(publicApiRouter({ enforcement, proxyIpHeader: config.proxyIpHeader, logger }));
@@ -137,8 +146,16 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
       );
     },
   });
-  const httpServer = createHttpServer(app);
-  const io = createSocketServer(httpServer, config);
+  if (config.nodeEnv === "production" && !config.metricsToken) logger.warn("METRICS_TOKEN is unset: GET /metrics answers 404");
+  const httpServer = createHttpServer({ connectionsCheckingInterval: HTTP_CONNECTIONS_CHECK_INTERVAL_MS }, app);
+  // Node's defaults (requestTimeout 300 s, unlimited requests per socket) let
+  // one slow client hold a socket for minutes; see http/constants.ts.
+  httpServer.headersTimeout = HTTP_HEADERS_TIMEOUT_MS;
+  httpServer.requestTimeout = HTTP_REQUEST_TIMEOUT_MS;
+  httpServer.keepAliveTimeout = HTTP_KEEP_ALIVE_TIMEOUT_MS;
+  httpServer.maxHeadersCount = HTTP_MAX_HEADERS_COUNT;
+  httpServer.maxRequestsPerSocket = HTTP_MAX_REQUESTS_PER_SOCKET;
+  const io = createSocketServer(httpServer, config, new ConnectionGate(config, metrics));
   deps.configureIo?.(io);
   const emitter = createEmitter(io);
   live.emitter = emitter;
@@ -187,7 +204,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     gate: session.gate,
   });
   const spark = new SparkService({ store, emitter, registry: metrics.registry });
-  const captions = new CaptionRelay({ store, emitter, metrics });
+  const captions = new CaptionRelay({ store, emitter, metrics, chatGuardMs: config.chatGuardMs });
   const handlers = attachHandlers(io, {
     config,
     service,

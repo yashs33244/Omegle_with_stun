@@ -33,7 +33,14 @@
   },
   "privacy": {
     "ipHidden": "IP hidden from your partner",
-    "unavailable": "Hide my IP is not available right now, so this call can use a direct connection.",
+    "unavailable": "You chose to continue without Hide my IP, so this call uses a direct connection.",
+    "unavailableSheet": {
+      "title": "Hide my IP is not available for this call",
+      "body": "Our relay cannot be used right now. Nothing has been sent to your partner yet.",
+      "detail": "Skip to look for someone else, or continue with a direct connection: your partner's device could then see your IP address for this call.",
+      "skip": "Skip",
+      "continue": "Continue without it"
+    },
     "appliesNextCall": "Applies from your next call.",
     "lowBandwidth": "Weak connection: sending lower quality video."
   },

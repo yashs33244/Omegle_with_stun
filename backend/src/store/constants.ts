@@ -24,8 +24,20 @@ export const REDIS_COMMAND_TIMEOUT_MS = 5_000;
 /** Commands are retried this many times during an outage, then fail instead of queueing for minutes. */
 export const REDIS_MAX_RETRIES_PER_REQUEST = 2;
 
-/** Default lock lease (ms). A critical section running longer than this is logged as an error. */
+/**
+ * Default lock lease (ms). The holder extends it while its critical section
+ * runs (see LOCK_RENEW_SHARE); a section that still outlives the lease, or
+ * whose renewal finds the lease gone, is logged as an error.
+ */
 export const LOCK_TTL_MS = 3_000;
+/** The holder renews its lease every LOCK_TTL_MS x this (ms), so a slow section keeps the lock. */
+export const LOCK_RENEW_SHARE = 1 / 3;
+/**
+ * Renewal stops once a section has run this long (ms): a hung section must
+ * lapse like it did before renewal existed, not freeze every replica.
+ * Nothing legitimate runs this long (callers give up after LOCK_WAIT_MS).
+ */
+export const LOCK_HOLD_MAX_MS = 30_000;
 /** Default time (ms) a withLock() caller waits for the lock, including time queued locally. */
 export const LOCK_WAIT_MS = 10_000;
 /** First retry delay (ms) when the lock is taken; doubles up to the cap (equal jitter). */

@@ -51,6 +51,22 @@ cost, SLOs) is in [docs/OPERATIONS.md](docs/OPERATIONS.md); step-by-step
 pages are [docs/runbooks/rollback.md](docs/runbooks/rollback.md) and
 [docs/runbooks/release.md](docs/runbooks/release.md).
 
+### Repository settings the workflows rely on
+
+The jobs that publish something run in a GitHub deployment environment:
+`production` (deploy.yml: the Docker Hub push and the EC2 deploy) and
+`release` (release.yml: versioned images and the GitHub Release). Both are
+created automatically on first use with no rules; the point of them is that
+Settings -> Environments can add required reviewers or restrict them to the
+production branch and `v*` tags, which is the only thing standing between
+"has write access" and "can publish images and releases". Pushing a `v*`
+tag is otherwise enough to start release.yml, so also add a tag ruleset that
+limits `v*` creation to administrators (Settings -> Rules -> Rulesets, or
+`gh api repos/{owner}/{repo}/rulesets`). The production branch should be
+protected (pull request required, the `CI` checks required, force pushes
+off) and secret scanning with push protection, Dependabot alerts and code
+scanning should be on; `gh api repos/{owner}/{repo}` shows what is enabled.
+
 ## GitHub secrets
 
 Settings -> Secrets and variables -> Actions. Values are never printed by the
@@ -90,13 +106,14 @@ launch build"); the backend itself also refuses to start without them.
 | `TURNSTILE_DISABLED` | `false` | skips Turnstile (session gate and takedown form). Staging and load tests only, never production |
 | `SESSION_RATE_PER_IP_PER_MIN`, `SESSION_RATE_PER_NETWORK_PER_MIN` | `10`, `60` | `POST /api/session` requests per minute per client IP and per /24 (IPv6 /48) network |
 | `MATCH_CAP_PER_DEVICE_PER_HOUR`, `MATCH_CAP_PER_IP_PER_HOUR` | `200`, `200` | matches per hour per device and per client IP |
+| `MATCH_CAP_PER_DEVICE_PER_MIN` | `20` | rooms a device may end itself (skip, decline) per minute before its re-queue is refused; being skipped never counts |
 | `CF_ACCOUNT_ID`, `CF_ANALYTICS_TOKEN` | unset | TURN spend poller (read-only Analytics token) |
 | `TURN_SPEND_DAILY_GB` | `35,50,70` | daily TURN egress thresholds in GB: lower the relay bitrate, then turn off Hide my IP, then turn off TURN |
 | `TURN_CACHE_SECONDS` | `300` | how long a device reuses one set of TURN credentials |
 | `TURN_MAX_PER_DEVICE_HOUR`, `TURN_MAX_PER_IP_HOUR` | `20`, `100` | TURN credential sets per hour per device and per client IP |
 | `SENTRY_DSN`, `SENTRY_DSN_FRONTEND` | unset | Sentry projects for the backend and the SPA |
 | `POSTHOG_KEY`, `POSTHOG_HOST` | unset | PostHog Cloud project (cookieless) |
-| `ADMIN_ALLOWED_IPS` | unset | comma list of IPs or CIDRs allowed to call the admin API, on top of the token |
+| `ADMIN_ALLOWED_IPS` | unset | comma list of client IPs (exact match, no CIDRs) allowed to call the admin API, on top of the token |
 | `EVIDENCE_S3_BUCKET`, `EVIDENCE_S3_REGION` | unset | evidence in S3 instead of the `evidence-data` volume (credentials from the instance role). The region is required with a bucket; the deploy stops without it |
 | `EVIDENCE_S3_KMS_KEY_ID` | unset (SSE-S3) | KMS key for SSE-KMS encryption of evidence objects |
 | `CLOUDFLARE_ONLY` | `false` | `true`: the gateway refuses requests that did not come through Cloudflare |
@@ -108,10 +125,10 @@ launch build"); the backend itself also refuses to start without them.
 | `VITE_SITE_URL` | `https://chizzy.itsyash.space` | public URL of the site, baked into the frontend build: canonical and link preview URLs, `sitemap.xml` and `robots.txt` |
 | `CORS_ORIGINS` | `https://chizzy.itsyash.space` | comma list of allowed browser origins (the frontend URL). The backend refuses to start in production without it |
 | `BACKEND_REPLICAS` | `2` | number of backend containers |
-| `BIND_ADDRESS` | `0.0.0.0` | host address the gateway (3004) and frontend (5173) ports bind to. Set `127.0.0.1` when the host proxy runs on the same host and connects via localhost, so the ports are not reachable around it |
+| `BIND_ADDRESS` | `127.0.0.1` | host address the gateway (3004) and frontend (5173) ports bind to. The default keeps them reachable only from the host proxy on the same machine; the gateway believes `X-Forwarded-For` from private hops, so a port published on `0.0.0.0` lets a direct IPv6 or hairpin connection (which Docker relays from a private address) pick its own client IP. Set `0.0.0.0` only for a stack that is reached directly, without TLS |
 | `BACKEND_PORT`, `FRONTEND_PORT` | `3004`, `5173` | host ports of the gateway and the frontend (the host proxy must point at them) |
 | `REDIS_PASSWORD` | unset | optional Redis password, URL safe (`openssl rand -hex 32`) |
-| `METRICS_TOKEN` | unset | bearer token for `GET /metrics` on the replicas |
+| `METRICS_TOKEN` | unset | bearer token for `GET /metrics` on the replicas; unset in production, the route answers 404 (never open on a host without the gateway) |
 | `LOG_LEVEL` | `info` | pino log level |
 | `MAX_CONNECTIONS_PER_IP` | `10` | Socket.IO connections allowed per client IP on each backend replica. Raise it if many users share one address (office NAT, mobile carrier NAT). Needs the real client IP, see [Behind Cloudflare](#cloudflare-in-front) |
 | `CONNECT_BURST_PER_IP`, `CONNECT_RATE_PER_IP_PER_SEC` | `20`, `1` | new socket connections per client IP on each replica: a burst, then a steady rate per second. Raise both only for load tests |
@@ -157,8 +174,8 @@ reviewers to the `production` environment if deploys should need approval.
     uses that last hop to tell Cloudflare from everyone else.
 - Security group: 443 (and 80) open to Cloudflare's ranges only once
   Cloudflare is in front (to the world before that), 22 to where you deploy
-  from (or use SSM). Ports 3004 and 5173 do not need to be public (set
-  `BIND_ADDRESS=127.0.0.1`). No TURN ports: TURN is Cloudflare's.
+  from (or use SSM). Ports 3004 and 5173 are published on loopback only
+  (`BIND_ADDRESS`, default `127.0.0.1`). No TURN ports: TURN is Cloudflare's.
 - For backups: the AWS CLI on the host, and an instance role with
   `s3:PutObject` on the backup prefix (docs/redis-backup.md). For S3
   evidence: the role also needs access to `EVIDENCE_S3_BUCKET`, and the
@@ -487,7 +504,7 @@ every replica within about 2 s; no deploy or restart is needed:
 | `blocked_countries` | country blocklist (comma separated ISO codes) |
 | `online_count_threshold` | show the real online count only above this |
 | `premium_filters_enabled` | on (default): the gender filter needs an unlock bought with coins; off: free for everyone (no lock in the app) |
-| `gender_filter_coins_per_day` | 100 by default; an unlock costs this x 1, 7 or 30 days |
+| `gender_filter_coins_per_day` | 100 by default; an unlock costs this x 1, 7 or 30 days. New devices start with `initialCoins` 0 (`backend/src/config.ts`, not an env var): device ids are client-chosen, so a starting balance at or above this price would give every fresh device (incognito window) a free day of the filter. Raise `initialCoins` as a trial only together with a price above it; the backend logs `BILLING WARNING: initialCoins covers a day of gender_filter` at boot and on every flag change where the two cross |
 | `coin_packs` | JSON array of `{"id","coins","inr"}` sold through Razorpay; default `[{"id":"week","coins":700,"inr":99},{"id":"month","coins":3000,"inr":299}]` (99 INR ≈ a week, 299 INR ≈ a month). Prices are whole rupees; Razorpay is charged `inr x 100` paise |
 
 What to change when is in the runbooks: docs/runbooks/abuse-wave.md,

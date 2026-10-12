@@ -10,8 +10,8 @@ import {
   verifyWebhookSignature,
   webhookSignature,
 } from "../../src/billing/razorpay";
-import { MemoryWalletStore } from "../../src/billing/WalletStore";
-import { loadConfig } from "../../src/config";
+import { MemoryWalletStore, UNPAID_ORDER_TTL_MS } from "../../src/billing/WalletStore";
+import { loadConfig, type Config } from "../../src/config";
 import { FlagsReader, MemoryFlagsStore } from "../../src/flags/flags";
 import { createLogger } from "../../src/logger";
 import { MemoryStore } from "../../src/store/MemoryStore";
@@ -24,7 +24,7 @@ async function setup(opts: { gateway?: FakeRazorpay | null; webhookSecret?: stri
   const flags = new FlagsReader(new MemoryFlagsStore());
   await flags.refresh();
   const matchStore = new MemoryStore();
-  const store = new MemoryWalletStore(matchStore);
+  const store = new MemoryWalletStore(matchStore, opts.now);
   const pushed: WalletView[] = [];
   const billing = new BillingService({
     store,
@@ -234,7 +234,7 @@ describe("BillingService", () => {
     expect(await billing.balance(DEVICE)).toBe(800);
   });
 
-  test("a credit that fails after the claim gives the claim back, so the retry credits exactly once", async () => {
+  test("a credit that fails before any coins moved gives the claim back, so the retry credits exactly once", async () => {
     const { billing, store } = await setup();
     const order = await billing.createOrder(DEVICE, "week");
     if (!order.ok) throw new Error(order.error);
@@ -249,6 +249,59 @@ describe("BillingService", () => {
     expect(await billing.verifyCheckout(DEVICE, order.orderId, "pay_retry", "fake-signature")).toEqual({ ok: true, coins: 800 });
     expect(await billing.verifyCheckout(DEVICE, order.orderId, "pay_retry", "fake-signature")).toEqual({ ok: true, coins: 800 });
     expect(await billing.ledger(DEVICE)).toHaveLength(1);
+  });
+
+  test("a record write that fails after the coins moved keeps the claim: the retry never credits twice", async () => {
+    const { billing, store } = await setup();
+    const order = await billing.createOrder(DEVICE, "week");
+    if (!order.ok) throw new Error(order.error);
+    const appendLedger = store.appendLedger.bind(store);
+    let failures = 1;
+    store.appendLedger = async (entry) => {
+      if (failures-- > 0) throw new Error("redis gone after HINCRBY");
+      return appendLedger(entry);
+    };
+    expect(await billing.verifyCheckout(DEVICE, order.orderId, "pay_half", "fake-signature")).toEqual({ ok: true, coins: 800 });
+    expect(await billing.verifyCheckout(DEVICE, order.orderId, "pay_half", "fake-signature")).toEqual({ ok: true, coins: 800 });
+    const body = Buffer.from(
+      JSON.stringify({ event: "payment.captured", payload: { payment: { entity: { id: "pay_half", order_id: order.orderId, amount: 9900, currency: "INR" } } } }),
+    );
+    expect(await billing.handleWebhook(body, webhookSignature("whsec", body))).toBe("ignored");
+    expect(await billing.balance(DEVICE)).toBe(800);
+    expect(await billing.listOrders()).toMatchObject([{ orderId: order.orderId, status: "paid", paymentId: "pay_half" }]);
+  });
+
+  test("two captured payments racing for one order credit it once", async () => {
+    const { billing } = await setup();
+    const order = await billing.createOrder(DEVICE, "week");
+    if (!order.ok) throw new Error(order.error);
+    const body = Buffer.from(
+      JSON.stringify({ event: "payment.captured", payload: { payment: { entity: { id: "pay_dup2", order_id: order.orderId, amount: 9900, currency: "INR" } } } }),
+    );
+    const [verify, hook] = await Promise.all([
+      billing.verifyCheckout(DEVICE, order.orderId, "pay_dup1", "fake-signature"),
+      billing.handleWebhook(body, webhookSignature("whsec", body)),
+    ]);
+    expect(verify.ok).toBe(true);
+    expect(["credited", "ignored"]).toContain(hook);
+    expect(await billing.balance(DEVICE)).toBe(800);
+    expect(await billing.ledger(DEVICE)).toHaveLength(1);
+  });
+
+  test("an unpaid order expires after UNPAID_ORDER_TTL_MS; a paid one is kept", async () => {
+    let now = 1_700_000_000_000;
+    const { billing } = await setup({ now: () => now });
+    const stale = await billing.createOrder(DEVICE, "week");
+    const paid = await billing.createOrder(DEVICE, "month");
+    if (!stale.ok || !paid.ok) throw new Error("order");
+    expect(await billing.verifyCheckout(DEVICE, paid.orderId, `pay_${paid.orderId.slice(-8)}`, "fake-signature")).toEqual({ ok: true, coins: 3100 });
+    now += UNPAID_ORDER_TTL_MS - 1;
+    expect((await billing.listOrders()).map((o) => o.orderId).sort()).toEqual([paid.orderId, stale.orderId].sort());
+    now += 1;
+    expect(await billing.verifyCheckout(DEVICE, stale.orderId, "pay_late", "fake-signature")).toEqual({ ok: false, error: "order_unknown" });
+    expect((await billing.listOrders()).map((o) => o.orderId)).toEqual([paid.orderId]);
+    now += 365 * DAY;
+    expect(await billing.verifyCheckout(DEVICE, paid.orderId, `pay_${paid.orderId.slice(-8)}`, "fake-signature")).toEqual({ ok: true, coins: 3100 });
   });
 
   test("the gateway lookup failing answers upstream without crediting", async () => {
@@ -316,22 +369,24 @@ describe("createBilling", () => {
   const prod = {
     NODE_ENV: "production",
     CORS_ORIGINS: "https://a.com",
-    SESSION_SECRET: "s".repeat(32),
+    SESSION_SECRET: "0123456789abcdef0123456789abcdef",
     TURNSTILE_DISABLED: "true",
-    ADMIN_TOKEN: "a".repeat(24),
+    ADMIN_TOKEN: "admin-token-admin-token-admin",
     RAZORPAY_KEY_ID: "rzp_live_x",
     RAZORPAY_KEY_SECRET: "secret",
     RAZORPAY_WEBHOOK_SECRET: "whsec",
   };
 
-  async function build(env: Record<string, string>, extra: Partial<BillingFeatureDeps> = {}) {
+  async function build(env: Record<string, string>, extra: Partial<BillingFeatureDeps> = {}, config: Partial<Config> = {}) {
     const flags = new FlagsReader(new MemoryFlagsStore());
     await flags.refresh();
     const errors: string[] = [];
+    const warnings: string[] = [];
     const logger = createLogger("silent");
     logger.error = ((msg: unknown) => void errors.push(String(msg))) as typeof logger.error;
-    const billing = createBilling({ config: loadConfig(env), flags, store: new MemoryStore(), logger, ...extra });
-    return { billing, errors };
+    logger.warn = ((first: unknown, second?: unknown) => void warnings.push(String(second ?? first))) as typeof logger.warn;
+    const billing = createBilling({ config: { ...loadConfig(env), ...config }, flags, store: new MemoryStore(), logger, ...extra });
+    return { billing, flags, errors, warnings };
   }
 
   test("production with Razorpay keys but no durable store disables real payments", async () => {
@@ -349,5 +404,21 @@ describe("createBilling", () => {
     expect(durable.errors).toEqual([]);
     const dev = await build({ RAZORPAY_KEY_ID: "rzp_test_x", RAZORPAY_KEY_SECRET: "secret" });
     expect(dev.billing.enabled).toBe(true);
+  });
+
+  test("starting coins default to 0; covering a day of the filter is warned about at boot and on a flag change", async () => {
+    const silent = await build({});
+    expect(silent.billing.catalogue().costPerDay).toBe(100);
+    expect(await silent.billing.balance("11111111-1111-4111-8111-111111111111")).toBe(0);
+    expect(silent.warnings).toEqual([]);
+
+    const trial = await build({}, {}, { initialCoins: 100 });
+    expect(trial.warnings).toEqual(["BILLING WARNING: initialCoins covers a day of gender_filter; every fresh device id gets a free unlock"]);
+    await trial.flags.set({ gender_filter_coins_per_day: 101 });
+    expect(trial.warnings).toHaveLength(1);
+    await trial.flags.set({ gender_filter_coins_per_day: 50 });
+    expect(trial.warnings).toHaveLength(2);
+    await trial.flags.set({ premium_filters_enabled: false });
+    expect(trial.warnings).toHaveLength(2);
   });
 });

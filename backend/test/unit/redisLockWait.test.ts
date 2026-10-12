@@ -8,7 +8,7 @@ import { RedisStore, type RedisStoreOptions } from "../../src/store/RedisStore";
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Just enough of ioredis for the lock: SET NX, GET and the compare-and-delete script. */
+/** Just enough of ioredis for the lock: SET NX, GET and the two compare-and scripts. */
 class FakeRedis extends EventEmitter {
   holder: string | null = null;
   /** SET attempts made while someone held the lock. */
@@ -27,10 +27,14 @@ class FakeRedis extends EventEmitter {
     return this.holder;
   }
 
-  async eval(_script: string, _keys: number, _key: string, token: string): Promise<number> {
+  async delIfEqual(_key: string, token: string): Promise<number> {
     if (this.holder !== token) return 0;
     this.holder = null;
     return 1;
+  }
+
+  async pexpireIfEqual(_key: string, token: string): Promise<number> {
+    return this.holder === token ? 1 : 0;
   }
 }
 

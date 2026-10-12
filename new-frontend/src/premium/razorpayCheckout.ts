@@ -3,8 +3,11 @@
  * someone presses Buy), opens the hosted modal for an order and resolves
  * with the payment id and signature the server verifies at POST /verify.
  *
- * Test seam: when `window.__chizzyFakeCheckout` is set (e2e only), it is
- * called instead of Razorpay and must resolve with the same result shape.
+ * Test seam: in builds made with VITE_E2E=1 (Playwright's own frontend
+ * builds), `window.__chizzyFakeCheckout` is called instead of Razorpay and
+ * must resolve with the same result shape. Every other build drops the branch
+ * (import.meta.env.VITE_E2E is replaced at build time, like
+ * src/moderation/testHooks.ts), so nothing on the page can stand in for Checkout.
  */
 import type { BillingOrder } from "@/lib/protocol";
 
@@ -73,7 +76,7 @@ export function loadCheckout(): Promise<void> {
 }
 
 export async function openCheckout(order: BillingOrder, opts: { name: string; description: string }): Promise<CheckoutResult> {
-  if (window.__chizzyFakeCheckout) return window.__chizzyFakeCheckout(order);
+  if (import.meta.env.VITE_E2E === "1" && window.__chizzyFakeCheckout) return window.__chizzyFakeCheckout(order);
   await loadCheckout();
   const Razorpay = window.Razorpay;
   if (!Razorpay) throw new Error("Razorpay unavailable");

@@ -21,9 +21,11 @@
  *   instanceSessions:{id}      set of socketIds owned by the instance
  *   lock:match                 the matchmaking lock token
  *
- * The lock is a lease: SET NX PX with a random token, released by a Lua
- * compare-and-delete so an instance never deletes a lock it no longer holds.
- * Callers in one process queue locally first, so only one of them polls Redis.
+ * The lock is a lease: SET NX PX with a random token, renewed by a Lua
+ * compare-and-pexpire while the critical section runs and released by a Lua
+ * compare-and-delete, so an instance never extends or deletes a lock it no
+ * longer holds. Callers in one process queue locally first, so only one of
+ * them polls Redis.
  *
  * Instance liveness is "instance:{id} exists". A Redis outage longer than the
  * TTL expires every heartbeat, live or not. So once this client loses Redis
@@ -38,6 +40,8 @@ import type { Logger } from "../logger";
 import {
   LOCK_BACKOFF_MAX_MS,
   LOCK_BACKOFF_START_MS,
+  LOCK_HOLD_MAX_MS,
+  LOCK_RENEW_SHARE,
   LOCK_TTL_MS,
   LOCK_WAIT_MS,
   MATCH_KEY_PREFIX,
@@ -49,7 +53,6 @@ import {
   REPORT_LOG_MAX,
 } from "./constants";
 import {
-  pairKey,
   type MatchStore,
   type PairBlock,
   type ReportRecord,
@@ -62,7 +65,10 @@ export interface RedisStoreOptions {
   /** Key prefix. Default MATCH_KEY_PREFIX; tests use a unique prefix per store. */
   prefix?: string;
   logger?: Logger;
-  /** Lock lease. A critical section running longer than this is logged as an error. */
+  /**
+   * Lock lease. Renewed while the critical section runs; losing it anyway
+   * (a stall longer than the lease, Redis unreachable) is logged as an error.
+   */
   lockTtlMs?: number;
   /**
    * withLock() rejects if the lock cannot be acquired within this time,
@@ -72,18 +78,52 @@ export interface RedisStoreOptions {
   lockWaitMs?: number;
 }
 
-/** Client options shared by the store and the Socket.IO adapter clients. */
+/**
+ * Client options shared by the store, the Socket.IO adapter clients and the
+ * feature-store client: a command that gets no reply fails after
+ * REDIS_COMMAND_TIMEOUT_MS (also while queued during an outage) instead of
+ * waiting on a hung connection for minutes.
+ */
 export const REDIS_CLIENT_OPTIONS: RedisOptions = {
   lazyConnect: true,
   connectTimeout: REDIS_CONNECT_TIMEOUT_MS,
+  commandTimeout: REDIS_COMMAND_TIMEOUT_MS,
   maxRetriesPerRequest: REDIS_MAX_RETRIES_PER_REQUEST,
 };
 
-const COMPARE_AND_DELETE = `
+/** DEL KEYS[1] only while it still holds ARGV[1]: a holder never deletes a lease it lost. */
+const DEL_IF_EQUAL = `
 if redis.call("GET", KEYS[1]) == ARGV[1] then
   return redis.call("DEL", KEYS[1])
 end
 return 0`;
+
+/** PEXPIRE KEYS[1] to ARGV[2] ms only while it still holds ARGV[1]: renewal never revives a lost lease. */
+const PEXPIRE_IF_EQUAL = `
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+  return redis.call("PEXPIRE", KEYS[1], ARGV[2])
+end
+return 0`;
+
+/** The store's client with its Lua scripts loaded once in connect() (EVALSHA per call, not the script body). */
+interface StoreRedis extends Redis {
+  delIfEqual(key: string, token: string): Promise<number>;
+  pexpireIfEqual(key: string, token: string, ttlMs: number): Promise<number>;
+}
+
+/** Lease renewal handle for one critical section. */
+interface Lease {
+  /** True once a renewal found the lease expired or taken; the holder then owns nothing. */
+  lost: boolean;
+  stop(): void;
+}
+
+/**
+ * Every id that becomes part of a key: UUIDs, Socket.IO ids (base64url) and
+ * instance ids. Nothing that could glob (`*`, `?`, `[`), split (`:` is only
+ * added by key()) or be unbounded.
+ */
+const KEY_PART_RE = /^[A-Za-z0-9_.-]{1,128}$/;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -124,7 +164,7 @@ export class RedisStore implements MatchStore {
   private reapAllowedAt = 0;
 
   private constructor(
-    private readonly redis: Redis,
+    private readonly redis: StoreRedis,
     opts: RedisStoreOptions,
   ) {
     this.prefix = opts.prefix ?? MATCH_KEY_PREFIX;
@@ -143,11 +183,9 @@ export class RedisStore implements MatchStore {
 
   /** Connects and resolves once Redis answers; rejects (and gives up) if it cannot connect. */
   static async connect(url: string, opts: RedisStoreOptions = {}): Promise<RedisStore> {
-    const redis = new Redis(url, {
-      ...REDIS_CLIENT_OPTIONS,
-      enableAutoPipelining: true,
-      commandTimeout: REDIS_COMMAND_TIMEOUT_MS,
-    });
+    const redis = new Redis(url, { ...REDIS_CLIENT_OPTIONS, enableAutoPipelining: true }) as StoreRedis;
+    redis.defineCommand("delIfEqual", { numberOfKeys: 1, lua: DEL_IF_EQUAL });
+    redis.defineCommand("pexpireIfEqual", { numberOfKeys: 1, lua: PEXPIRE_IF_EQUAL });
     redis.on("error", (err) => opts.logger?.warn({ err }, "redis store connection error"));
     try {
       await redis.connect();
@@ -158,7 +196,16 @@ export class RedisStore implements MatchStore {
     return new RedisStore(redis, opts);
   }
 
+  /**
+   * Builds a key from the prefix and id parts. Ids are generated (UUIDs,
+   * Socket.IO ids, instance ids) and validated at the protocol boundary;
+   * this is the last line against a value that could join, glob or
+   * inflate a key.
+   */
   private key(...parts: string[]): string {
+    for (const part of parts) {
+      if (!KEY_PART_RE.test(part)) throw new Error(`invalid store key part: ${part.length} chars`);
+    }
     return this.prefix + parts.join(":");
   }
 
@@ -185,11 +232,13 @@ export class RedisStore implements MatchStore {
     try {
       const token = randomUUID();
       await this.acquire(token, deadline);
+      const lease = this.keepLease(token);
       const started = Date.now();
       try {
         return await fn();
       } finally {
-        await this.release(token, Date.now() - started);
+        lease.stop();
+        await this.release(token, Date.now() - started, lease.lost);
       }
     } finally {
       releaseLocal();
@@ -211,20 +260,77 @@ export class RedisStore implements MatchStore {
     }
   }
 
-  private async release(token: string, heldMs: number): Promise<void> {
+  /**
+   * Extends the lease every LOCK_TTL_MS x LOCK_RENEW_SHARE while the critical
+   * section runs, so a slow section (many round trips, a slow Redis) does not
+   * lose the lock and let another instance run the same match pass. The
+   * renewal is fenced by the token: once it finds the lease gone (expired
+   * during a stall, or taken by another holder) it stops and reports `lost`.
+   * It also gives up after LOCK_HOLD_MAX_MS so a hung section cannot hold
+   * the whole cluster.
+   */
+  private keepLease(token: string): Lease {
+    const lockKey = this.key("lock", "match");
+    const started = Date.now();
+    let stopped = false;
+    let inflight = false;
+    const lease: Lease = {
+      lost: false,
+      stop: () => {
+        stopped = true;
+        clearInterval(timer);
+      },
+    };
+    const timer = setInterval(() => {
+      if (inflight) return;
+      if (Date.now() - started >= LOCK_HOLD_MAX_MS) {
+        lease.stop();
+        this.log?.error({ holdMaxMs: LOCK_HOLD_MAX_MS }, "match lock renewal stopped: critical section is hung");
+        return;
+      }
+      inflight = true;
+      this.redis
+        .pexpireIfEqual(lockKey, token, this.lockTtlMs)
+        .then(
+          (extended) => {
+            if (stopped || extended === 1) return;
+            lease.lost = true;
+            lease.stop();
+            this.log?.error(
+              { lockTtlMs: this.lockTtlMs },
+              "match lock lease lost mid critical section; another instance may have entered it",
+            );
+          },
+          (err: unknown) => {
+            if (!stopped) this.log?.warn({ err }, "match lock renewal failed");
+          },
+        )
+        .finally(() => {
+          inflight = false;
+        });
+    }, Math.max(1, Math.round(this.lockTtlMs * LOCK_RENEW_SHARE)));
+    timer.unref?.();
+    return lease;
+  }
+
+  private async release(token: string, heldMs: number, lost: boolean): Promise<void> {
+    // The renewal already reported the loss, and the key is not ours to delete.
+    if (lost) return;
     let released = false;
     try {
-      released = (await this.redis.eval(COMPARE_AND_DELETE, 1, this.key("lock", "match"), token)) === 1;
+      released = (await this.redis.delIfEqual(this.key("lock", "match"), token)) === 1;
     } catch (err) {
       // The lease expires by itself; never mask the critical section's result.
       this.log?.error({ err }, "failed to release the match lock");
       return;
     }
-    if (!released || heldMs >= this.lockTtlMs) {
+    if (!released) {
       this.log?.error(
         { heldMs, lockTtlMs: this.lockTtlMs },
         "match lock lease expired before release; another instance may have entered the critical section",
       );
+    } else if (heldMs >= this.lockTtlMs) {
+      this.log?.warn({ heldMs, lockTtlMs: this.lockTtlMs }, "match lock held longer than its lease (kept by renewal)");
     }
   }
 
@@ -285,7 +391,7 @@ export class RedisStore implements MatchStore {
   }
 
   async clearDeviceSocket(deviceId: string, socketId: string): Promise<void> {
-    await this.redis.eval(COMPARE_AND_DELETE, 1, this.key("device", deviceId), socketId);
+    await this.redis.delIfEqual(this.key("device", deviceId), socketId);
   }
 
   /* ---------------------------------------------------------------- */
@@ -380,13 +486,18 @@ export class RedisStore implements MatchStore {
     );
   }
 
+  /** block:{devLow}:{devHigh}, the same pair order as pairKey(). */
+  private blockKey(deviceA: string, deviceB: string): string {
+    return deviceA < deviceB ? this.key("block", deviceA, deviceB) : this.key("block", deviceB, deviceA);
+  }
+
   async getBlock(deviceA: string, deviceB: string): Promise<PairBlock | null> {
-    return parse<PairBlock>(await this.redis.get(this.key("block", pairKey(deviceA, deviceB))));
+    return parse<PairBlock>(await this.redis.get(this.blockKey(deviceA, deviceB)));
   }
 
   async setBlock(deviceA: string, deviceB: string, block: PairBlock, retainMs: number): Promise<void> {
     const ttl = Math.max(1, Math.ceil(retainMs));
-    await this.redis.set(this.key("block", pairKey(deviceA, deviceB)), JSON.stringify(block), "PX", ttl);
+    await this.redis.set(this.blockKey(deviceA, deviceB), JSON.stringify(block), "PX", ttl);
   }
 
   /* ---------------------------------------------------------------- */

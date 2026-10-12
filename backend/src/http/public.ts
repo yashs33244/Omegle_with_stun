@@ -11,17 +11,13 @@ import type { EnforcementService } from "../enforcement/EnforcementService";
 import type { Logger } from "../logger";
 import { appealRequestSchema, takedownRequestSchema, type AppealResponse, type TakedownResponse } from "../protocol";
 import { TokenBucket, type BucketSpec } from "../rateLimit";
+import { knownIp } from "../session/geo";
+import { jsonBody } from "./body";
+import { ENFORCEMENT_BODY_LIMIT_BYTES } from "./constants";
 
-/** Client IP: the trusted proxy header when TRUST_PROXY is on, else the TCP peer. IPv4-mapped IPv6 is unwrapped. */
+/** Client IP of an Express request (see session/geo.ts knownIp), or null when unknown. */
 export function requestIp(req: Request, proxyIpHeader: string | null): string | null {
-  let ip: string | undefined;
-  if (proxyIpHeader) {
-    const header = req.get(proxyIpHeader)?.trim();
-    if (header) ip = header;
-  }
-  ip ??= req.socket.remoteAddress;
-  if (!ip) return null;
-  return ip.startsWith("::ffff:") && ip.includes(".") ? ip.slice(7) : ip;
+  return knownIp(req.headers, req.socket.remoteAddress, proxyIpHeader);
 }
 
 /** Per-IP token buckets for one instance. Cleared when it grows large, so it cannot leak memory. */
@@ -70,7 +66,7 @@ const TAKEDOWN_STATUS: Record<Exclude<TakedownResponse, { ok: true }>["error"], 
 
 export function publicApiRouter(deps: PublicApiDeps): Router {
   const router = express.Router();
-  const json = express.json({ limit: "16kb" });
+  const json = jsonBody(ENFORCEMENT_BODY_LIMIT_BYTES);
   // Per-instance burst cap in front of the store-backed limits in EnforcementService.
   const reads = new IpBuckets({ capacity: 30, refillPerSec: 0.5 });
   const writes = new IpBuckets({ capacity: 10, refillPerSec: 0.1 });

@@ -1,6 +1,9 @@
 /**
  * In-process EnforcementStore for a single instance (local dev and tests).
  * Values are JSON-copied in and out so behavior matches the Redis store.
+ * Expiring entries (claims, counters, values, field records) are dropped on
+ * read once expired and swept every SWEEP_EVERY_WRITES writes, so a long-lived
+ * memory store (one lastRoom value per ended room) stays bounded.
  */
 import type { Collection, EnforcementStore, RangeOptions } from "./EnforcementStore";
 
@@ -26,12 +29,22 @@ interface Expiring<T> {
   expiresAt: number;
 }
 
+/** Expired entries are swept after this many writes to the expiring maps. */
+export const SWEEP_EVERY_WRITES = 1_000;
+
 export class MemoryEnforcementStore implements EnforcementStore {
   private readonly docs = new Map<string, unknown>();
   private readonly cols = new Map<Collection, Map<string, number>>();
   private readonly indexes = new Map<string, Map<string, number>>();
   private readonly values = new Map<string, Expiring<unknown>>();
   private readonly fields = new Map<string, Expiring<Record<string, number>>>();
+
+  private writes = 0;
+
+  /** Expiring entries currently held, swept or not (tests check the sweep). */
+  get expiringEntries(): number {
+    return this.values.size + this.fields.size;
+  }
 
   private live<T>(map: Map<string, Expiring<T>>, key: string): Expiring<T> | undefined {
     const entry = map.get(key);
@@ -40,6 +53,15 @@ export class MemoryEnforcementStore implements EnforcementStore {
       return undefined;
     }
     return entry;
+  }
+
+  /** Counts one write to an expiring map and sweeps expired entries every SWEEP_EVERY_WRITES. */
+  private wrote(): void {
+    if (++this.writes % SWEEP_EVERY_WRITES !== 0) return;
+    const now = Date.now();
+    for (const map of [this.values, this.fields]) {
+      for (const [key, entry] of map) if (entry.expiresAt <= now) map.delete(key);
+    }
   }
 
   async put(col: Collection, id: string, doc: unknown, score: number): Promise<void> {
@@ -86,6 +108,7 @@ export class MemoryEnforcementStore implements EnforcementStore {
   async claim(key: string, ttlMs: number): Promise<boolean> {
     if (this.live(this.values, `claim:${key}`)) return false;
     this.values.set(`claim:${key}`, { value: 1, expiresAt: Date.now() + ttlMs });
+    this.wrote();
     return true;
   }
 
@@ -93,6 +116,7 @@ export class MemoryEnforcementStore implements EnforcementStore {
     const entry = this.live(this.values, `hit:${key}`);
     if (!entry) {
       this.values.set(`hit:${key}`, { value: 1, expiresAt: Date.now() + windowMs });
+      this.wrote();
       return 1;
     }
     entry.value = (entry.value as number) + 1;
@@ -101,6 +125,7 @@ export class MemoryEnforcementStore implements EnforcementStore {
 
   async setValue(key: string, value: unknown, ttlMs: number): Promise<void> {
     this.values.set(`val:${key}`, { value: copy(value), expiresAt: Date.now() + ttlMs });
+    this.wrote();
   }
 
   async getValue<T>(key: string): Promise<T | null> {
@@ -112,6 +137,7 @@ export class MemoryEnforcementStore implements EnforcementStore {
     const entry = this.live(this.fields, key) ?? { value: {}, expiresAt: 0 };
     entry.expiresAt = Date.now() + ttlMs;
     this.fields.set(key, entry);
+    this.wrote();
     return entry.value;
   }
 

@@ -14,22 +14,27 @@ Source of truth: `backend/src/protocol.ts` (`PROTOCOL_VERSION = 3`). The fronten
 |---|---|---|
 | Library | Socket.IO 4 server (`socket.io`), client `socket.io-client` | `backend/src/realtime/socket.ts`, `new-frontend/src/hooks/useSignaling.ts` |
 | Path | Socket.IO default `/socket.io/`; the gateway proxies that prefix with 1 h read/send timeouts and `proxy_connect_timeout 1s` | `deploy/nginx/gateway.conf` `location /socket.io/` |
-| Transports | client: `transports: ["websocket"]` (no long-polling, no upgrade) | `useSignaling.ts` `io(API_URL, …)` |
+| Transports | server: `transports: ["websocket"]` (long polling is never served; a polling handshake gets HTTP 400 "Transport unknown"); client: `transports: ["websocket"]` (no long-polling, no upgrade) | `socket.ts` `createSocketServer`, `useSignaling.ts` `io(API_URL, …)` |
 | Why websocket only | the gateway uses `least_conn` with no sticky sessions; long-polling would need every poll of one session to hit the same replica. `ip_hash` is not an option because behind the EC2 host proxy all traffic arrives from one address | header comment of `deploy/nginx/gateway.conf` |
-| CORS | `cors.origin` = `CORS_ORIGINS` (`*` only outside production); browsers do not apply CORS to WebSocket upgrades, so `allowRequest` re-checks the `Origin` header on every handshake. Requests without `Origin` are allowed | `socket.ts` `originAllowed`, `config.ts` (`CORS_ORIGINS` required and must not contain `*` in production) |
+| CORS | `cors.origin` = `CORS_ORIGINS` (`*` only outside production); browsers do not apply CORS to WebSocket upgrades, so `allowRequest` re-checks the `Origin` header on every upgrade and answers HTTP 400 `origin not allowed`. Requests without `Origin` are allowed | `socket.ts` `originAllowed`, `config.ts` (`CORS_ORIGINS` required and must not contain `*` in production) |
+| Per-IP cap and connect rate | also in `allowRequest`, before any Engine.IO connection exists (see 1.2) | `socket.ts` `ConnectionGate` |
 | Max packet | `MAX_HTTP_BUFFER_SIZE = 256 * 1024` bytes, applied as `maxHttpBufferSize` and inside `limitedParser` | `socket.ts` |
-| limitedParser | a `socket.io-parser` `Decoder` subclass: throws on any non-string chunk, on `BINARY_EVENT`/`BINARY_ACK` packets, and on packets over 256 KiB. A throw makes Socket.IO close that connection before any handler runs. It exists because under Bun the `ws` `maxPayload` limit is not enforced, and because binary attachment counts could be abused to buffer unbounded frames | `backend/src/realtime/limitedParser.ts` |
+| limitedParser | a `socket.io-parser` `Decoder` subclass: throws on any non-string chunk, on `BINARY_EVENT`/`BINARY_ACK` packets, on packets over 256 KiB, and when the connection's packet budget (`PACKET_RATE_PER_CONNECTION`: 400 burst, 100/s) or byte budget (`PACKET_BYTES_PER_CONNECTION`: 1 MiB burst, 128 KiB/s) runs out. A throw makes Socket.IO close that connection before any handler runs. It exists because under Bun the `ws` `maxPayload` limit is not enforced, because binary attachment counts could be abused to buffer unbounded frames, and because every packet is JSON-parsed before the per-event buckets see it (unknown events never reach a bucket) | `backend/src/realtime/limitedParser.ts`, `rateLimit.ts` |
 | Heartbeat | server `pingInterval: 20_000`, `pingTimeout: 20_000`, `connectTimeout: 10_000` (ms) | `socket.ts` `createSocketServer` |
+| Hello deadline | a connected socket that has not sent a well-formed `session:hello` within `helloTimeoutMs` (30 s, `config.ts`) is disconnected (`chizzy_rate_limited_total{event="hello_timeout"}`); a malformed hello does not stop the clock | `socket.ts` `attachHandlers` |
 | Multi-instance | `io.to(socketId).emit` through the Redis adapter, so an emit reaches a socket held by another replica | `socket.ts` `createEmitter`, `realtime/redisAdapter.ts` |
 
 ### 1.2 Handshake
 
-The connection goes through two `io.use` middlewares in this order (`socket.ts` `attachHandlers`):
+The upgrade is checked in `allowRequest` first, then the connection goes through two `io.use` middlewares (`socket.ts` `createSocketServer`, `attachHandlers`):
 
+0. Per-IP cap and connect rate (`socket.ts` `ConnectionGate.admit`, in `allowRequest`). Client IP = `PROXY_IP_HEADER` (default `x-real-ip`) when `TRUST_PROXY=true` and the header holds exactly one IP literal (`session/geo.ts` `requestIp`; IPv4-mapped prefix and IPv6 zone id dropped), else the TCP peer. A missing or malformed header (a list, a hostname, junk) never becomes an identity; `x-forwarded-for`/`forwarded`/`via` are refused at boot because clients can prepend to them. A refusal is an HTTP 400 on the upgrade whose body names the reason; no Engine.IO connection, Socket.IO client or session-gate work exists for it, and the Socket.IO client reports a generic `websocket error`.
+   - Open connections per IP >= `MAX_CONNECTIONS_PER_IP` (default `10`, `config.ts`) → 400 `too_many_connections`. Connections are counted from the engine's `connection` event and released on its `close`.
+   - Connect token bucket per IP: capacity `CONNECT_BURST_PER_IP` (default `20`), refill `CONNECT_RATE_PER_IP_PER_SEC` (default `1`) → 400 `rate_limited`. Full buckets are pruned every 60 s.
 1. Session gate (`backend/src/session/handshake.ts` `sessionHandshake`). Reads `socket.handshake.auth.sessionToken`, verifies it with `TokenSigner.verifySession` (signed token from `POST /api/session`, TTL `SESSION_TOKEN_TTL_MS = 1 day`, `session/constants.ts`). Missing or invalid: `connect_error` with `data.code = "session_required"`. Then the country from the token and the current `cf-ipcountry` header (only trusted with `TRUST_CLOUDFLARE=true`) are both checked against the `blocked_countries` flag: `data.code = "region_blocked"`. On success `socket.data.session = { deviceId, country }` and the device is bound to the IP for the hourly match caps (`caps.bindIp`; a store failure here is logged and ignored).
-2. Per-IP cap and connect rate (`socket.ts`). Client IP = `PROXY_IP_HEADER` (default `x-real-ip`) when `TRUST_PROXY=true`, else the TCP peer.
-   - Open connections per IP >= `MAX_CONNECTIONS_PER_IP` (default `10`, `config.ts`) → `connect_error` "too_many_connections". The count is released on the underlying connection's `close`.
-   - Connect token bucket per IP: capacity `CONNECT_BURST_PER_IP` (default `20`), refill `CONNECT_RATE_PER_IP_PER_SEC` (default `1`) → `connect_error` "rate_limited". Full buckets are pruned every 60 s.
+2. Per-session socket cap (`socket.ts` `attachHandlers`): more than `MAX_SOCKETS_PER_SESSION` (3, `rateLimit.ts`) open sockets for the token's `deviceId` on this instance → `connect_error` "too_many_connections". Skipped when the session gate is off, and for a client whose connection already closed while the session gate awaited `caps.bindIp` (its `close` has fired, so counting it would hold the slot forever; Socket.IO discards such a socket after `next()`).
+
+A middleware refusal (1 or 2) sends `CONNECT_ERROR` and then closes the connection on the next tick; Socket.IO would otherwise keep it open for `connectTimeout` in case the client joins another namespace, which this server does not have.
 
 The client (`useSignaling.ts`) supplies `auth` as a function so every (re)connect sends the current token. On `connect_error` with `session_required` or `region_blocked` it invalidates the stored session, waits for a new `POST /api/session` to succeed (`waitForSession()`), then calls `socket.connect()` again. Socket.IO does not retry handshake rejections by itself.
 
@@ -53,12 +58,12 @@ Server side, a disconnect ends any room with `partner-left` for the partner and 
 
 ### 1.5 Per-event rate classes (`backend/src/rateLimit.ts`)
 
-One token bucket per class per socket; each event takes one token; an empty bucket answers `rate_limited` (ack if the event has one, else `server:error`).
+One token bucket per class per socket; each event takes one token; an empty bucket answers `rate_limited` (ack if the event has one, else `server:error`). Events with no handler (unknown names, acks for nothing) are ignored by Socket.IO without reaching a bucket; only the per-connection packet budget (1.1) bounds them.
 
 | Class | Capacity | Refill per second | Events |
 |---|---|---|---|
 | `hello` | 5 | 0.5 | `session:hello` |
-| `preferences` | 5 | 1 | `session:preferences` |
+| `preferences` | 5 | 1 | `session:preferences` (an unchanged preference set is acknowledged without touching the queue) |
 | `control` | 10 | 2 | `match:accept`, `match:decline`, `call:connected`, `call:skip`, `spark:request` |
 | `signal` | 200 | 50 | `rtc:signal`, `caption:segment` (outer bucket; `CaptionRelay` adds its own `CAPTIONS.maxPerSec = 10` bucket) |
 | `chat` | 10 | 2 | `chat:send` |
@@ -87,12 +92,12 @@ Types below are the zod schemas / TypeScript interfaces in `backend/src/protocol
 | `rtc:signal` | `RtcSignal`: `{ roomId, description?: { type: "offer" \| "answer", sdp: string<=20_000 }, candidate?: { candidate<=2_000, sdpMid?<=64, sdpMLineIndex? 0..64, usernameFragment?<=256 } }`, exactly one of the two | none | signal | member of the **active** room; otherwise silently dropped | `MatchService.signal` (relayed unchanged to the partner) |
 | `chat:send` | `{ roomId, text: trimmed 1..500 }` | `ChatAck`: `{ ok: true, id: uuid, ts: epoch ms, redacted: boolean }`; `not_in_room` | chat | member of active room | `MatchService.chat` (+ `safety/chatGuard`) |
 | `chat:typing` | `{ roomId, typing: boolean }` | none | typing | member of active room | `MatchService.typing` |
-| `report:submit` | `ReportPayload`: `{ roomId, reason: ReportReason, details?<=500, evidence?: { frame?: JPEG data URL <=120_000 chars, chat?: Array<{ from: "me" \| "partner", text<=500, ts }> <=20 } }` | `ReportAck`: `{ ok: true, reportId }`; `not_in_room`, `rate_limited`, `bad_state` "already reported", `invalid_payload` "evidence frame must be a JPEG" | report | member of the room, or either device within `reportAfterEndMs = 60_000` after it ended; once per room per reporter | `MatchService.report` → `enforcement/EnforcementService.submitReport` |
+| `report:submit` | `ReportPayload`: `{ roomId, reason: ReportReason, details?<=500, evidence?: { frame?: JPEG data URL <=120_000 chars, chat?: Array<{ from: "me" \| "partner", text<=500, ts }> <=20 } }` | `ReportAck`: `{ ok: true, reportId }`; `not_in_room`, `rate_limited`, `bad_state` "already reported", `invalid_payload` "evidence frame must be a JPEG" | report | member of the room, or either device within `reportAfterEndMs = 60_000` after it ended; once per room per reporter; 5 per device and 30 per client IP per hour (the IP is `session/geo.ts` `socketIp`: null when unknown, so unknown-IP reporters share no bucket) | `MatchService.report` → `enforcement/EnforcementService.submitReport` |
 | `call:failed` | `{ roomId, reason: "ice-failed" \| "timeout" }` | none | telemetry | member of active room | `MatchService.callFailed` (ends with `connection-failed`, pair blocked 30 s, both re-queued) |
 | `call:telemetry` | `{ roomId, outcome: "connected" \| "ice-failed" \| "timeout" \| "ended-before-connect", timeToConnectMs?, durationMs?, localCandidateType?, remoteCandidateType?, privateMode: boolean, rttMs?, packetLossPct?, freezeCount? }` | none | telemetry | any socket that said hello; once per room per socket (last 20 remembered) | `MatchService.telemetry` (Prometheus only) |
 | `moderation:signal` | `{ roomId, kind: "nsfw-blur" \| "no-face" \| "virtual-camera" \| "model-unavailable" }` | none | telemetry | sender's current room | `MatchService.moderationSignal` → `safety/SafetyService` |
 | `spark:request` | `{ roomId }` | `SparkAck`: `{ ok: true, promptId }`; `not_in_room`; `rate_limited` during the room cooldown `SPARK.cooldownMs = 10_000` | control | member of active room | `spark/SparkService.request` |
-| `caption:segment` | `{ roomId, id: /^[A-Za-z0-9_-]{1,64}$/, text: 1..1024 UTF-8 bytes, final: boolean, lang: language code }` | none; over `CAPTIONS.maxPerSec = 10` the segment is dropped silently | signal | member of active room | `captions/CaptionRelay.segment` |
+| `caption:segment` | `{ roomId, id: /^[A-Za-z0-9_-]{1,64}$/, text: 1..1024 UTF-8 bytes, final: boolean, lang: language code }` | none; over `CAPTIONS.maxPerSec = 10` segments or `CAPTIONS.maxBytesPerSec = 2048` bytes per second the segment is dropped silently | signal | member of active room; links, handles and phone numbers hidden during the first `chatGuardMs` of the call as in chat | `captions/CaptionRelay.segment` |
 
 `Profile` = `{ name: 1..32, country: /^[A-Z]{2}$/, language: /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/, gender: "male" | "female" | "other" | "unspecified", topics: 1..10 of TOPICS, photo?: data:image/(jpeg|png|webp) data URL <= 150_000 chars }`. `Preferences` = `{ genderFilter: "all" | "male" | "female" | "other", languageFilter: "any" | language code }`.
 
@@ -128,7 +133,7 @@ Types below are the zod schemas / TypeScript interfaces in `backend/src/protocol
 | Code | Meaning | Where |
 |---|---|---|
 | `invalid_payload` | zod parse failed, or `deviceId` differs from the session token, or the evidence frame is not a JPEG | `socket.ts`, hello, report |
-| `rate_limited` | per-socket bucket empty; hourly match cap (`CAP_MESSAGE`); report quota; Spark cooldown | `socket.ts`, `queueGate.ts`, `SparkService` |
+| `rate_limited` | per-socket bucket empty; hourly match cap (`CAP_MESSAGE`); per-minute skip cap (`MINUTE_CAP_MESSAGE`, `MATCH_CAP_PER_DEVICE_PER_MIN` default 20 rooms ended by the device's own `call:skip`/`match:decline`; a re-queue after `partner-skipped`, `partner-left` or `partner-declined` is never refused by it); accept-timeout cooldown ("You let 3 matches expire…", `ACCEPT_TIMEOUT_*` in `safety/constants.ts`); report quota; Spark cooldown | `socket.ts`, `queueGate.ts`, `MatchService.hello`, `SparkService` |
 | `not_in_room` | the room is not the sender's, is not active, or the accept window has passed | chat, report, spark, accept |
 | `bad_state` | hello not sent yet, deviceId change on a live socket, duplicate report, socket gone during hello | `MatchService` |
 | `unsupported_version` | `protocolVersion !== 3` | `socket.ts` |
@@ -169,7 +174,7 @@ sequenceDiagram
     S-->>B: call:start {initiator: false, ...}
 ```
 
-If only one side accepts before `expiresAt + 750 ms`, the sweeper (`sweepIntervalMs = 500`) ends the room: the accepter gets `match:ended {reason: "timeout"}` and is re-queued; the other gets `accept-timeout` and stays idle (`MatchService.runSweep`).
+If only one side accepts before `expiresAt + 750 ms`, the sweeper (`sweepIntervalMs = 500`) ends the room: the accepter gets `match:ended {reason: "timeout"}` and is re-queued; the other gets `accept-timeout` and stays idle (`MatchService.runSweep`). Each side that never pressed Accept also gets a strike (`SafetySignals.acceptTimedOut`); the third strike within 10 minutes starts a 60 s cooldown during which `session:hello` answers `rate_limited` (`ACCEPT_TIMEOUT_STRIKES`, `ACCEPT_TIMEOUT_WINDOW_MS`, `ACCEPT_TIMEOUT_COOLDOWN_MS` in `safety/constants.ts`). Instant-mode sides are accepted by the server and never strike.
 
 Instant mode (`mode: "instant"`, or the `default_mode` flag forcing nothing; a `preview` flag overrides both sides to preview, `effectiveMode`):
 
@@ -270,7 +275,7 @@ sequenceDiagram
     Note over R: client captures a 256 px JPEG of the partner video<br/>and the last chat lines (lib/evidence.ts)
     R->>S: report:submit {roomId, reason, details?, evidence: {frame?, chat?}}
     Note over S: parseEvidenceFrame (must be JPEG)<br/>reportTarget: live room or lastRoom within 60 s of ending
-    S->>E: admitReport(deviceId, roomId)
+    S->>E: admitReport(deviceId, roomId, clientIp)
     E-->>S: ok | rate_limited | duplicate
     Note over S: under the match lock: blockPair 24 h, end room
     S-->>R: match:ended {reason: reported}
@@ -353,7 +358,7 @@ sequenceDiagram
         API->>BS: handleWebhook → credit()
         API-->>RZ: {ok, outcome: credited | ignored}
     end
-    Note over BS: credit(): claimOnce("payment:<id>") so the pack is credited exactly once,<br/>ledger entry reason "purchase", order marked paid
+    Note over BS: credit(): atomic claimOnce("order:<orderId>") so the pack is credited exactly once per order<br/>(the claim is released only if no coins moved), ledger entry reason "purchase", order marked paid
     BS-->>WS: notify(deviceId) → wallet:update {coins, unlocks}
     C->>API: POST /api/billing/unlock {feature: gender_filter, days: 1|7|30}
     Note over BS: cost = gender_filter_coins_per_day (flag, default 100) x days.<br/>insufficient_coins if balance < cost, then extendUnlock and ledger "unlock"
@@ -368,24 +373,24 @@ Sources: `backend/src/http/billing.ts`, `backend/src/billing/BillingService.ts`,
 
 ## 4. REST API
 
-All routes live on the backend origin (same as the socket). `backend/src/http/app.ts` mounts health/metrics first, then the session router (which adds CORS for `/api/*`: `Access-Control-Allow-Origin` for allowed origins, `Access-Control-Max-Age: 600`), then the public, billing and admin routers (`backend/src/server.ts`), then a JSON 404. Bodies are JSON unless stated. "Per-instance" buckets are `IpBuckets` in `backend/src/http/public.ts` (cleared when they exceed 50 000 keys). Client IP comes from `PROXY_IP_HEADER` when `TRUST_PROXY=true`.
+All routes live on the backend origin (same as the socket). `backend/src/http/app.ts` mounts health/metrics first, then the session router (which adds CORS for `/api/*`: `Access-Control-Allow-Origin` for allowed origins, `Access-Control-Max-Age: 600`), then the public, billing and admin routers (`backend/src/server.ts`), then a JSON 404. Bodies are JSON unless stated; every router (session, public, billing, admin) parses through `backend/src/http/body.ts` (`jsonBody`, and `rawBody` for the billing webhook), which refuses an over-cap `Content-Length` before reading the body (413 with `Connection: close`) and any `Content-Encoding` (415). "Per-instance" buckets are `IpBuckets` in `backend/src/http/public.ts` (cleared when they exceed 50 000 keys). Client IP comes from `PROXY_IP_HEADER` when `TRUST_PROXY=true` and it holds one IP literal, else the TCP peer (section 1, step 2; `X-Forwarded-For` is refused by `config.ts`). The http server runs with the deadlines in `backend/src/http/constants.ts` (headers 15 s, whole request 30 s, idle keep-alive 65 s, 100 headers, 1 000 requests per socket).
 
 ### 4.1 Health and metrics (`backend/src/http/app.ts`)
 
 | Route | Auth | Response | Notes |
 |---|---|---|---|
 | `GET /healthz`, `GET /health` | public | `{ status: "ok" }` | liveness; `Cache-Control: no-store` |
-| `GET /readyz` | public | `{ status: "ready" }` or 503 `{ status: "unavailable" }` | `store.ping()` with `readyTimeoutMs` (default 1000 ms) |
-| `GET /metrics` | `Authorization: Bearer METRICS_TOKEN` when `METRICS_TOKEN` is set, else open | Prometheus text | the gateway returns 404 for `/metrics` publicly (`gateway.conf`); scrape replicas directly |
+| `GET /readyz` | public | `{ status: "ready" }` or 503 `{ status: "unavailable" }` | `store.ping()` with `readyTimeoutMs` (default 1000 ms); concurrent requests share one ping |
+| `GET /metrics` | `Authorization: Bearer METRICS_TOKEN`; without `METRICS_TOKEN` the route is open outside production and 404 in production | Prometheus text; `Cache-Control: no-store` | the gateway returns 404 for `/metrics` publicly (`gateway.conf`); scrape replicas directly |
 
 ### 4.2 Session gate (`backend/src/http/session.ts`, `backend/src/session/SessionService.ts`)
 
 | Route | Auth | Body | Response | Limits |
 |---|---|---|---|---|
 | `GET /api/config` | public | — | `PublicConfig`: `{ tosVersion, turnstileSiteKey, sentryDsn, posthogKey, posthogHost, banner, matchingOpen, staffedHours, reopensAt, defaultMode, privateModeEnabled }` | `Cache-Control: public, max-age=30` |
-| `POST /api/session` | public (Turnstile token unless `TURNSTILE_SECRET` is unset) | `SessionRequest`: `{ deviceId: uuid, fingerprint: sha256 hex, turnstileToken?<=4096, age: { dob: YYYY-MM-DD, attest18: true, tosVersion } \| { ageToken, tosVersion } }` | 200 `{ ok: true, sessionToken, sessionExpiresAt, ageToken, ageExpiresAt, country }` or `{ ok: false, error: SessionError, restriction? }` | body `8kb` (413 → `invalid`); `SESSION_RATE_PER_IP_PER_MIN` default `10`, `SESSION_RATE_PER_NETWORK_PER_MIN` (IPv4 /24, IPv6 /48) default `60`, fixed 1-minute windows |
+| `POST /api/session` | public (Turnstile token unless `TURNSTILE_SECRET` is unset) | `SessionRequest`: `{ deviceId: uuid, fingerprint: sha256 hex, turnstileToken?<=4096, age: { dob: YYYY-MM-DD, attest18: true, tosVersion } \| { ageToken, tosVersion } }` | 200 `{ ok: true, sessionToken, sessionExpiresAt, ageToken, ageExpiresAt, country }` or `{ ok: false, error: SessionError, restriction? }` | body `SESSION_BODY_LIMIT_BYTES` 8 KiB (413 / 415 → `invalid`); `SESSION_RATE_PER_IP_PER_MIN` default `10`, `SESSION_RATE_PER_NETWORK_PER_MIN` (IPv4 /24, IPv6 /48) default `60`, fixed 1-minute windows; `TURNSTILE_MAX_INFLIGHT` 64 Siteverify calls in flight, beyond that 503 `closed` |
 
-Checks run in this order (`SessionService.create`): rate limit (`rate_limited` 429) → `new_sessions_enabled` flag (`closed` 503) → `blocked_countries` (`region_blocked` 403) → device/fingerprint lockout (`locked` 403; device lockout 365 days, fingerprint 30 days) → Turnstile (`turnstile_failed` 403, 5 s timeout fails closed) → age: DOB under 18 → `underage` 403 and lockout; `tosVersion !== TOS_VERSION ("2026-10-draft")` → `tos_outdated` 400; bad or foreign `ageToken` → `age_token_invalid` 401; active restriction → `banned` 403. Status map: `session/constants.ts` `SESSION_ERROR_STATUS`. The date of birth is never stored.
+Checks run in this order (`SessionService.create`): rate limit (`rate_limited` 429) → `new_sessions_enabled` flag (`closed` 503) → `blocked_countries` (`region_blocked` 403) → device/fingerprint lockout (`locked` 403; device lockout 365 days, fingerprint 30 days) → Turnstile (`turnstile_failed` 403, 5 s timeout fails closed) → age: DOB under 18 → `underage` 403 and lockout; `tosVersion !== TOS_VERSION ("2026-10-draft")` → `tos_outdated` 400; bad or foreign `ageToken` → `age_token_invalid` 401; active restriction (`EnforcementService.activeForDevice` by device id and by the fingerprint, which it links to the device for 180 days so a restriction follows the browser to a fresh device id) → `banned` 403. On success the device's IP and edge country are noted for 24 h (CSAM packets only). Status map: `session/constants.ts` `SESSION_ERROR_STATUS`. The date of birth is never stored.
 
 ### 4.3 Enforcement, public (`backend/src/http/public.ts`)
 
@@ -405,12 +410,12 @@ Store-backed per-device limits are applied again inside `EnforcementService`.
 |---|---|---|---|---|
 | `GET /api/billing/packs` | public | — | `BillingPacksResponse`: `{ enabled, premiumFiltersEnabled, keyId, costPerDay, packs: CoinPack[], unlockDays: [1,7,30] }`; `max-age=30` | reads 30 / 0.5 per s per IP |
 | `GET /api/billing/wallet` | session | — | `{ ok: true, coins, unlocks }` | reads |
-| `POST /api/billing/orders` | session | `{ packId }` | `BillingOrder`: `{ ok: true, orderId, amount (paise), currency: "INR", keyId, packId, coins }` | writes 10 / 0.1 per s per IP; body `8kb` |
+| `POST /api/billing/orders` | session | `{ packId }` | `BillingOrder`: `{ ok: true, orderId, amount (paise), currency: "INR", keyId, packId, coins }`; the record of an unpaid order is kept 24 h (`UNPAID_ORDER_TTL_MS`), a paid one for good | writes 10 / 0.1 per s per IP **and** 5 / 1 per 5 min per device; body `8kb` |
 | `POST /api/billing/verify` | session | `{ orderId<=64, paymentId<=64, signature<=256 }` | `{ ok: true, coins }` | 20 / 1 per s **per device** (carrier NAT) |
 | `POST /api/billing/unlock` | session | `{ feature: "gender_filter", days: 1 \| 7 \| 30 }` | `{ ok: true, coins, expiresAt }` | writes |
 | `POST /api/billing/webhook` | Razorpay HMAC over the raw body (`X-Razorpay-Signature`, `RAZORPAY_WEBHOOK_SECRET`) | raw, `64kb` | `{ ok: true, outcome: "credited" \| "ignored" }` or 403 `bad_signature`, 400 `invalid`, 404 `order_unknown`, 409 `payment_mismatch`, 503 `billing_disabled` | 60 / 1 per s per IP |
 
-Packs and the per-day price come from the flags `coin_packs` (default `[{"id":"week","coins":700,"inr":99},{"id":"month","coins":3000,"inr":299}]`) and `gender_filter_coins_per_day` (default `100`); `premium_filters_enabled: false` makes the filter free. New devices start with `initialCoins = 100` (`config.ts`).
+Packs and the per-day price come from the flags `coin_packs` (default `[{"id":"week","coins":700,"inr":99},{"id":"month","coins":3000,"inr":299}]`) and `gender_filter_coins_per_day` (default `100`); `premium_filters_enabled: false` makes the filter free. New devices start with `initialCoins = 0` (`config.ts`): device ids are client-chosen, so a starting balance that reaches the daily price would hand every fresh device a free unlock (the backend warns when the two values cross). A credit is decided once per order: a second captured payment for the same order (a Razorpay duplicate, refunded from the dashboard) is not credited again. An unlock is checked when preferences are set and again on every (re)queue; a filter that lapses while the device is already waiting or in a call keeps applying until that queue entry ends.
 
 ### 4.5 Admin (`backend/src/http/admin.ts`, mounted at `/admin/api`)
 
@@ -421,7 +426,7 @@ Guard, in order: 503 `admin_disabled` when `ADMIN_TOKEN` is unset (required in p
 | `GET /queue?status=open\|acknowledged\|actioned\|dismissed\|escalated\|all` | — | `AdminReport[]` |
 | `GET /reports/:id` | — | `AdminReport` |
 | `GET /reports/:id/evidence` | — | `image/jpeg` bytes; 403 `restricted` for CSAM-routed reports (never served) |
-| `POST /reports/:id/action` | `AdminReportAction`: `{ action: "acknowledge" \| "dismiss" \| "warn" \| "restrict" \| "escalate_csam", reason?: RestrictionReason, durationMs?: number \| null, note?<=2000 }` | result of the action |
+| `POST /reports/:id/action` | `AdminReportAction`: `{ action: "acknowledge" \| "dismiss" \| "warn" \| "restrict" \| "escalate_csam", reason?: RestrictionReason, durationMs?: 600000 \| 86400000 \| 604800000 \| null (`RESTRICTION_DURATIONS_MS`; null = permanent; omitted = next ladder rung), note?<=2000 }` | result of the action |
 | `POST /reports/:id/escalate` | `{ note?<=2000 }` | result |
 | `GET /appeals` | — | `AdminAppeal[]` |
 | `POST /appeals/:id/decision` | `{ decision: "uphold" \| "overturn", note? }` | result |
@@ -439,7 +444,7 @@ Guard, in order: 503 `admin_disabled` when `ADMIN_TOKEN` is unset (required in p
 ```mermaid
 flowchart LR
     subgraph gateway["deploy/nginx/gateway.conf (least_conn)"]
-        G1["/socket.io/ (ws, 1 h timeouts)"]
+        G1["/socket.io/ (ws, 5 m timeouts)"]
         G2["/api/ (30 s)"]
         G3["/admin/api/"]
         G4["/metrics → 404"]

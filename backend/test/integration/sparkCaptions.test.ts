@@ -111,4 +111,30 @@ describe("captions", () => {
     expect(received.length).toBe(CAPTIONS.maxPerSec);
     expect(received[0]?.id).toBe("s0");
   });
+
+  test("contact details are hidden during the guarded window, as in chat, and pass afterwards", async () => {
+    ts = await startServer({ chatGuardMs: 300 });
+    const { ca, cb, roomId } = await activePair(ts);
+    const text = "call me 9876543210 or insta @sneaky_handle https://evil.example";
+    const hidden = next(cb, "caption:segment");
+    ca.emit("caption:segment", segment(roomId, { final: true, text }));
+    expect((await hidden).text).toBe("call me [hidden for safety] or [hidden for safety] [hidden for safety]");
+    await delay(350);
+    const shown = next(cb, "caption:segment");
+    ca.emit("caption:segment", segment(roomId, { id: "s2", final: true, text }));
+    expect((await shown).text).toBe(text);
+  });
+
+  test("the per-socket byte budget drops segments before the segment count cap would", async () => {
+    ts = await startServer();
+    const { ca, cb, roomId } = await activePair(ts);
+    const received: CaptionSegmentPayload[] = [];
+    cb.on("caption:segment", (p) => received.push(p));
+    // Fewer segments than maxPerSec, but each is maxBytes: only the burst allowance (2 x maxBytesPerSec) gets through.
+    const count = CAPTIONS.maxPerSec - 1;
+    for (let i = 0; i < count; i += 1) ca.emit("caption:segment", segment(roomId, { id: `b${i}`, text: "x".repeat(CAPTIONS.maxBytes) }));
+    await delay(300);
+    expect(received.length).toBe(Math.floor((2 * CAPTIONS.maxBytesPerSec) / CAPTIONS.maxBytes));
+    expect(received.length).toBeLessThan(count);
+  });
 });

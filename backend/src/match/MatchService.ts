@@ -41,6 +41,7 @@ import type {
 import type { MatchStore, Room, Session, SessionProfile } from "../store/MatchStore";
 import { guardChat, guardName } from "../safety/guard";
 import { NUDGE_RISK, type SafetySignals } from "../safety/signals";
+import { ACCEPT_TIMEOUT_STRIKES } from "../safety/constants";
 import type { TurnService } from "../turn/TurnService";
 import { isCompatible } from "./compatibility";
 import { HELD, MAX_STEP, meetsPreferences, pairStep, relaxStep } from "./relax";
@@ -242,7 +243,7 @@ export class MatchService implements RestrictionSink {
    * session:hello. The ack is sent through `reply` inside the lock, before
    * queue:waiting or match:found, so clients always see the ack first.
    */
-  async hello(socketId: string, payload: HelloPayload, reply: Reply<HelloAck>, ip?: string): Promise<void> {
+  async hello(socketId: string, payload: HelloPayload, reply: Reply<HelloAck>, ip: string | null = null): Promise<void> {
     if (this.stopped) return reply({ ok: false, error: "internal", message: "server shutting down" });
     const { deviceId } = payload;
     if (this.enforcement) {
@@ -278,6 +279,14 @@ export class MatchService implements RestrictionSink {
       }
       // Gate only hellos that would join the queue; a re-hello mid-call just updates the profile.
       if (!session || session.state === "idle") {
+        const cooldownMs = await this.safety.acceptCooldownMs(deviceId);
+        if (cooldownMs > 0) {
+          return reply({
+            ok: false,
+            error: "rate_limited",
+            message: `You let ${ACCEPT_TIMEOUT_STRIKES} matches expire. You can search again in ${Math.ceil(cooldownMs / 1000)} s.`,
+          });
+        }
         const refused = await this.gate?.admit(deviceId);
         if (refused) return reply({ ok: false, ...refused });
       }
@@ -316,14 +325,24 @@ export class MatchService implements RestrictionSink {
     });
   }
 
+  /**
+   * session:preferences. An unchanged preference set is acknowledged without
+   * touching the queue: a match pass loads every waiting session, and the
+   * event may arrive once a second per socket.
+   */
   async updatePreferences(socketId: string, payload: UpdatePreferencesPayload, reply: Reply<SimpleAck>): Promise<void> {
     await this.store.withLock(async () => {
       const session = await this.store.getSession(socketId);
       if (!session) return reply({ ok: false, error: "bad_state", message: "send session:hello first" });
-      if (payload.preferences.genderFilter !== "all" && !(await this.billing.mayUseGenderFilter(session.deviceId))) {
+      const { preferences } = payload;
+      if (preferences.genderFilter !== "all" && !(await this.billing.mayUseGenderFilter(session.deviceId))) {
         return reply({ ok: false, error: "premium_required", message: "unlock the gender filter to use it" });
       }
-      session.preferences = payload.preferences;
+      const same =
+        session.preferences.genderFilter === preferences.genderFilter &&
+        session.preferences.languageFilter === preferences.languageFilter;
+      if (same) return reply({ ok: true });
+      session.preferences = preferences;
       await this.store.putSession(session);
       reply({ ok: true });
       if (session.state === "waiting") {
@@ -363,6 +382,8 @@ export class MatchService implements RestrictionSink {
       if (!found || found.room.state !== "pending") return;
       const { room, index } = found;
       await this.blockPairLocked(room, this.config.declineBlockMs, false);
+      // Before endRoomLocked, whose re-queue checks the per-minute cap.
+      await this.gate?.recordSkip(room.devices[index]!);
       await this.endRoomLocked(room, "declined", {
         [room.members[index]]: "declined",
         [room.members[1 - index]!]: "partner-declined",
@@ -403,6 +424,8 @@ export class MatchService implements RestrictionSink {
         this.safety.skipped(room.devices[1 - index]!, this.now() - room.activeSince);
       }
       await this.blockPairLocked(room, 0, true);
+      // Before endRoomLocked, whose re-queue checks the per-minute cap.
+      await this.gate?.recordSkip(session.deviceId);
       await this.endRoomLocked(room, "skipped", {
         [room.members[index]]: "skipped",
         [room.members[1 - index]!]: "partner-skipped",
@@ -413,11 +436,11 @@ export class MatchService implements RestrictionSink {
 
   /**
    * report:submit. Allowed while the room exists or within reportAfterEndMs after
-   * it ended, once per room per reporter, and rate limited per device (see
-   * EnforcementService.admitReport). A live call ends; the pair is blocked.
-   * The evidence and any automatic action are handled outside the match lock.
+   * it ended, once per room per reporter, and rate limited per device and per
+   * client IP (see EnforcementService.admitReport). A live call ends; the pair is
+   * blocked. The evidence and any automatic action are handled outside the match lock.
    */
-  async report(socketId: string, payload: ReportPayload, reply: Reply<ReportAck>): Promise<void> {
+  async report(socketId: string, payload: ReportPayload, reply: Reply<ReportAck>, ip: string | null = null): Promise<void> {
     const session = await this.store.getSession(socketId);
     if (!session) return reply({ ok: false, error: "bad_state", message: "send session:hello first" });
     let frame: EvidenceFrame | null = null;
@@ -428,7 +451,7 @@ export class MatchService implements RestrictionSink {
     const target = await this.reportTarget(session, payload.roomId);
     if (!target) return reply({ ok: false, error: "not_in_room" });
     if (this.enforcement) {
-      const admitted = await this.enforcement.admitReport(session.deviceId, payload.roomId);
+      const admitted = await this.enforcement.admitReport(session.deviceId, payload.roomId, ip);
       if (admitted === "rate_limited") return reply({ ok: false, error: "rate_limited" });
       if (admitted === "duplicate") return reply({ ok: false, error: "bad_state", message: "already reported" });
     }
@@ -453,6 +476,7 @@ export class MatchService implements RestrictionSink {
     const { reportId } = await this.enforcement.submitReport({
       roomId: payload.roomId,
       reporterDevice: session.deviceId,
+      reporterIp: ip,
       reportedDevice: target.reportedDevice,
       reason: payload.reason,
       details: payload.details,
@@ -675,7 +699,8 @@ export class MatchService implements RestrictionSink {
           if (!room || room.state !== "pending") continue;
           await this.blockPairLocked(room, this.config.declineBlockMs, false);
           // Whoever accepted waited on the other and searches again; whoever
-          // never pressed Accept goes idle and is told so.
+          // never pressed Accept goes idle, is told so, and gets a strike.
+          for (let i = 0; i < 2; i++) if (!room.accepted[i]) this.safety.acceptTimedOut(room.devices[i]!);
           await this.endRoomLocked(room, "timeout", {
             [room.members[0]]: room.accepted[0] ? "timeout" : "accept-timeout",
             [room.members[1]]: room.accepted[1] ? "timeout" : "accept-timeout",
@@ -973,7 +998,7 @@ export class MatchService implements RestrictionSink {
       const s = sessions[i];
       if (!s || s.roomId !== room.id) continue;
       const idle = reason === "accept-timeout";
-      const capped = idle ? undefined : await this.gate?.requeue(s.deviceId);
+      const capped = idle ? undefined : await this.gate?.requeue(s.deviceId, reason);
       if (idle || capped || (await this.store.getBan(s.deviceId))) {
         s.state = "idle";
         s.roomId = undefined;

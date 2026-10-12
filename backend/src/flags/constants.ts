@@ -14,6 +14,8 @@ export const MINUTES_PER_DAY = 24 * MINUTES_PER_HOUR;
 export const NOON_MINUTES = 12 * MINUTES_PER_HOUR;
 /** Locale used to read local hours and minutes in a time zone (h23 clock). */
 export const CLOCK_LOCALE = "en-GB";
+/** Cached Intl.DateTimeFormat instances (one per staffed-hours time zone); the cache is cleared past this. */
+export const FORMATTER_CACHE_MAX = 8;
 
 /** Shown when the kill switch is off and no banner message is set. */
 export const PAUSED_MESSAGE = "Matching is paused right now.";

@@ -21,6 +21,19 @@ const bool = z
 
 const int = (min: number) => z.coerce.number().int().min(min);
 
+/**
+ * Headers that carry a client-controlled list (every hop appends), so the
+ * first element is whatever the client sent. The proxy IP header must be one
+ * the last trusted hop overwrites with a single address.
+ */
+const LIST_IP_HEADERS: Record<string, true> = { "x-forwarded-for": true, forwarded: true, via: true };
+/**
+ * A secret made of a handful of repeated characters is a placeholder, not a
+ * secret. `openssl rand -hex 32` has 16 possible characters; 64 draws from
+ * them reach this floor with overwhelming probability.
+ */
+const MIN_DISTINCT_SECRET_CHARS = 8;
+
 const envSchema = z
   .object({
     NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
@@ -54,6 +67,7 @@ const envSchema = z
     SESSION_RATE_PER_NETWORK_PER_MIN: int(1).default(60),
     MATCH_CAP_PER_DEVICE_PER_HOUR: int(1).default(200),
     MATCH_CAP_PER_IP_PER_HOUR: int(1).default(200),
+    MATCH_CAP_PER_DEVICE_PER_MIN: int(1).default(20),
     SENTRY_DSN: z.string().url().optional(),
     SENTRY_DSN_FRONTEND: z.string().url().optional(),
     POSTHOG_KEY: z.string().min(1).optional(),
@@ -128,6 +142,31 @@ const envSchema = z
         path: ["TURN_URLS"],
         message: "is required when TURN_SECRET or TURN_USERNAME is set",
       });
+    }
+    // The header is used verbatim as the client IP; a list header keeps the
+    // client's own prefix, so TRUST_PROXY would let it pick its rate-limit key.
+    if (LIST_IP_HEADERS[env.PROXY_IP_HEADER.toLowerCase()]) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["PROXY_IP_HEADER"],
+        message: `${env.PROXY_IP_HEADER} is a list that clients can prepend to; use a header the proxy sets to one address (x-real-ip, true-client-ip, cf-connecting-ip)`,
+      });
+    }
+    if (env.NODE_ENV === "production") {
+      const secrets = [
+        ["SESSION_SECRET", env.SESSION_SECRET],
+        ["SESSION_SECRET_PREVIOUS", env.SESSION_SECRET_PREVIOUS],
+        ["ADMIN_TOKEN", env.ADMIN_TOKEN],
+      ] as const;
+      for (const [key, value] of secrets) {
+        if (value && new Set(value).size < MIN_DISTINCT_SECRET_CHARS) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [key],
+            message: `looks like a placeholder (fewer than ${MIN_DISTINCT_SECRET_CHARS} distinct characters); use openssl rand -hex 32`,
+          });
+        }
+      }
     }
     if (env.NODE_ENV === "production" && !env.SESSION_SECRET) {
       ctx.addIssue({
@@ -210,6 +249,12 @@ export interface Config extends MatchConfig {
    * virtual user comes from one address.
    */
   connectRatePerIp: { capacity: number; refillPerSec: number };
+  /**
+   * A socket that has not sent a well-formed session:hello this long after
+   * connecting is disconnected (realtime/socket.ts). Not an env var; the SPA
+   * sends hello on connect, tests shrink it.
+   */
+  helloTimeoutMs: number;
   stunUrls: string[];
   turnUrls: string[];
   turnSecret?: string;
@@ -234,6 +279,8 @@ export interface Config extends MatchConfig {
   sessionRatePerNetworkPerMin: number;
   matchCapPerDevicePerHour: number;
   matchCapPerIpPerHour: number;
+  /** Rooms a device may end itself (skip, decline) per minute before its re-queue is refused. */
+  matchCapPerDevicePerMin: number;
   sentryDsn?: string;
   sentryDsnFrontend?: string;
   posthogKey?: string;
@@ -278,6 +325,11 @@ export interface Config extends MatchConfig {
   /** Coins are awarded once per full interval of active call. */
   coinIntervalMs: number;
   coinsPerInterval: number;
+  /**
+   * Balance a brand-new device starts with. Device ids are client-chosen, so
+   * anything at or above `gender_filter_coins_per_day` hands every fresh
+   * device (incognito window) a free unlock; billing warns when that happens.
+   */
   initialCoins: number;
   /** Continuous call time after which the two devices become friends. */
   friendAfterMs: number;
@@ -337,6 +389,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     keepaliveUrl: e.KEEPALIVE_URL ?? (e.RENDER_EXTERNAL_URL ? `${e.RENDER_EXTERNAL_URL.replace(/\/$/, "")}/healthz` : undefined),
     maxConnectionsPerIp: e.MAX_CONNECTIONS_PER_IP,
     connectRatePerIp: { capacity: e.CONNECT_BURST_PER_IP, refillPerSec: e.CONNECT_RATE_PER_IP_PER_SEC },
+    helloTimeoutMs: 30_000,
     stunUrls: csv(e.STUN_URLS),
     turnUrls: csv(e.TURN_URLS),
     turnSecret: e.TURN_SECRET,
@@ -356,6 +409,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     sessionRatePerNetworkPerMin: e.SESSION_RATE_PER_NETWORK_PER_MIN,
     matchCapPerDevicePerHour: e.MATCH_CAP_PER_DEVICE_PER_HOUR,
     matchCapPerIpPerHour: e.MATCH_CAP_PER_IP_PER_HOUR,
+    matchCapPerDevicePerMin: e.MATCH_CAP_PER_DEVICE_PER_MIN,
     sentryDsn: e.SENTRY_DSN,
     sentryDsnFrontend: e.SENTRY_DSN_FRONTEND,
     posthogKey: e.POSTHOG_KEY,
@@ -372,7 +426,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     instanceTtlMs: 15_000,
     coinIntervalMs: 60_000,
     coinsPerInterval: 5,
-    initialCoins: 100,
+    initialCoins: 0,
     friendAfterMs: 5 * 60_000,
     declineBlockMs: 30_000,
     skipBlockMs: 5 * 60_000,
