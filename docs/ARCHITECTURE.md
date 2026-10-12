@@ -164,11 +164,12 @@ Startup order matters: `listen()` waits for flags to load, the spend poller to s
 | Guard | Value | Line |
 |---|---|---|
 | `maxHttpBufferSize` and parser cap | `MAX_HTTP_BUFFER_SIZE = 256 * 1024` | 43, 58-59 |
-| `pingInterval` / `pingTimeout` / `connectTimeout` | 20 000 / 20 000 / 10 000 ms | 60-62 |
+| `pingInterval` / `pingTimeout` / `connectTimeout` | 20 000 / 20 000 / 5 000 ms (`CONNECT_TIMEOUT_MS`) | 156, 185-187 |
 | Origin check on every handshake (browsers skip CORS for websockets) | `originAllowed` | 50-52, 57 |
 | Session token handshake middleware (`connect_error` `session_required` or `region_blocked`) | `sessionHandshake` | 118, `session/handshake.ts:44-70` |
-| Per-IP concurrent connections, per instance | `MAX_CONNECTIONS_PER_IP` default 10 | 119-125, `config.ts:34` |
-| New connections per IP, per instance | burst `CONNECT_BURST_PER_IP` 20, refill `CONNECT_RATE_PER_IP_PER_SEC` 1 | 134-142, `config.ts:35-36` |
+| Per-IP concurrent connections, per instance | `MAX_CONNECTIONS_PER_IP` default 10 | 100-105, 176, `config.ts:73` |
+| New connections per IP, per instance | burst `CONNECT_BURST_PER_IP` 20, refill `CONNECT_RATE_PER_IP_PER_SEC` 1 | 107-124, `config.ts:74-75` |
+| Connections and new connections per network (IPv4 /24, IPv6 /48), per instance | `MAX_CONNECTIONS_PER_NETWORK` 40; burst `CONNECT_BURST_PER_NETWORK` 60, refill `CONNECT_RATE_PER_NETWORK_PER_SEC` 4 | 94, 100-105, 121, `config.ts:76-78` |
 | Per-socket token buckets by event class | `rateLimit.ts:21-31` (hello 5/0.5 s, preferences 5/1, control 10/2, signal 200/50, chat 10/2, typing 10/4, report 3/0.05, telemetry 20/1) | 171-222 |
 
 Every handler goes through `on()` which validates with the zod schema, rejects `protocolVersion != 3` with `unsupported_version`, replies at most once, and converts a thrown error into `internal` plus a Sentry capture, so a handler can never crash the process (`socket.ts:171-222`).

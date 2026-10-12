@@ -63,6 +63,8 @@ export interface SessionServiceDeps {
 export interface SessionResult {
   status: number;
   body: SessionResponse;
+  /** Seconds the client should wait before asking again, for a Retry-After header. */
+  retryAfterSec?: number;
 }
 
 export class SessionService {
@@ -145,7 +147,9 @@ export class SessionService {
       if (networkBan) return fail("banned", networkBan);
       // Only a date of birth mints an age token for a fresh device id (an age
       // token is bound to its device), so only those count as new devices.
-      if ("dob" in req.age && !(await deps.newDevices.admit(req.deviceId, ip))) return fail("rate_limited");
+      if ("dob" in req.age && !(await deps.newDevices.admit(req.deviceId, ip))) {
+        return { ...fail("rate_limited"), retryAfterSec: deps.newDevices.retryAfterSec() };
+      }
     }
     await deps.restrictions?.noteDeviceNetwork(req.deviceId, ip, ctx.country);
 

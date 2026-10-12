@@ -56,6 +56,13 @@ services:
         generateValue: true
       - key: ADMIN_TOKEN
         generateValue: true
+      # Strongly recommended: your IPs or CIDR blocks for the admin API
+      # (comma-separated), or Cloudflare Access in front of /admin. Without
+      # either, ADMIN_TOKEN and the failure limits are the only guard, and the
+      # backend logs "ADMIN API WARNING" at startup. sync: false: set it in the
+      # dashboard (Environment tab); empty leaves the admin API open to every IP.
+      - key: ADMIN_ALLOWED_IPS
+        sync: false
       - key: PSEUDONYM_SALT
         generateValue: true
       # No Cloudflare account yet: the session gate runs without the bot check.

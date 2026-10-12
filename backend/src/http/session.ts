@@ -9,7 +9,7 @@ import type { Config } from "../config";
 import { describeStaffedHours, type FlagsReader } from "../flags/flags";
 import type { Logger } from "../logger";
 import { TOS_VERSION, type PublicConfig } from "../protocol";
-import { requestCountry, requestIp } from "../session/geo";
+import { ipBuckets, requestCountry, requestIp } from "../session/geo";
 import type { SessionService } from "../session/SessionService";
 import { SHED_RETRY_AFTER_SEC } from "../shed/constants";
 import type { Shedder } from "../shed/Shedder";
@@ -93,16 +93,32 @@ export function createSessionRouter(deps: SessionRouterDeps): Router {
     res.set("Cache-Control", "no-store").status(429).json({ ok: false, error: "rate_limited" });
   };
 
+  // The same per network (IPv4 /24, IPv6 /48), looser than the store-backed
+  // per-network limit: an IPv6 allocation holds thousands of /64s, each with
+  // its own burst, so without it one /48 could empty the instance-wide bucket.
+  const networkBurst = new IpBuckets({
+    capacity: SESSION_BURST_FACTOR * config.sessionRatePerNetworkPerMin,
+    refillPerSec: config.sessionRatePerNetworkPerMin / 60,
+  });
+  const networkCap: RequestHandler = (req, res, next) => {
+    const ip = bucketIp(req, config.proxyIpHeader);
+    // IpBuckets keys anything that is not an address as given: the network key.
+    if (networkBurst.allow(ip === null ? null : ipBuckets(ip).network)) return next();
+    deps.onRateLimited?.();
+    res.set("Cache-Control", "no-store").status(429).json({ ok: false, error: "rate_limited" });
+  };
+
   // Instance-wide shedding: overload is checked before the per-IP bucket is
-  // charged, the instance-wide bucket after it, so one address cannot empty
-  // the shared bucket faster than its own burst allows.
+  // charged, the instance-wide bucket after the per-IP and per-network ones,
+  // so one address or network cannot empty the shared bucket faster than its
+  // own burst allows.
   const { shed } = deps;
   const closed = (res: express.Response) =>
     void res.set({ "Cache-Control": "no-store", "Retry-After": String(SHED_RETRY_AFTER_SEC) }).status(503).json({ ok: false, error: "closed" });
   const shedLoad: RequestHandler = (_req, res, next) => (shed.admitSessionLoad() ? next() : closed(res));
   const shedRate: RequestHandler = (_req, res, next) => (shed.takeSession() ? next() : closed(res));
 
-  router.post("/api/session", shedLoad, burstCap, shedRate, jsonBody(SESSION_BODY_LIMIT_BYTES), async (req, res) => {
+  router.post("/api/session", shedLoad, burstCap, networkCap, shedRate, jsonBody(SESSION_BODY_LIMIT_BYTES), async (req, res) => {
     res.set("Cache-Control", "no-store");
     const result = await service.create(req.body, {
       ip: requestIp(req.headers, req.socket.remoteAddress, config.proxyIpHeader),
@@ -113,6 +129,7 @@ export function createSessionRouter(deps: SessionRouterDeps): Router {
     if (!result.body.ok && result.body.error === "closed" && flags.current().new_sessions_enabled) {
       res.set("Retry-After", String(SHED_RETRY_AFTER_SEC));
     }
+    if (result.retryAfterSec !== undefined) res.set("Retry-After", String(result.retryAfterSec));
     res.status(result.status).json(result.body);
   });
 

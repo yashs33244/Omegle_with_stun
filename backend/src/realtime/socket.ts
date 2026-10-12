@@ -35,6 +35,7 @@ import {
   type ServerToClientEvents,
 } from "../protocol";
 import { MAX_SOCKETS_PER_SESSION, SocketRateLimiter, TokenBucket, type EventClass } from "../rateLimit";
+import { IpBuckets } from "../http/public";
 import { ipBuckets, requestIp, socketIp } from "../session/geo";
 import { handshakeSession } from "../session/handshake";
 import { refuseUpgrade, type Shedder } from "../shed/Shedder";
@@ -59,12 +60,15 @@ export type ConnectionRefusal = "too_many_connections" | "rate_limited";
 
 /**
  * Per-IP connection cap and connect rate (keyed by subscriber: an IPv4
- * address or an IPv6 /64, session/geo.ts ipBuckets), checked in allowRequest, i.e. on
+ * address or an IPv6 /64, session/geo.ts ipBuckets), and the same per
+ * network (an IPv4 /24 or IPv6 /48), checked in allowRequest, i.e. on
  * the HTTP upgrade before any Engine.IO connection or Socket.IO client
  * exists. A refusal there is a plain HTTP 400 whose body names the reason
  * and costs nothing after it (the Socket.IO client only sees "websocket error"); a
  * namespace middleware refusal would leave the client's connection open for
- * connectTimeout and run the session gate (a store write) first.
+ * connectTimeout and run the session gate (a store write) first. The
+ * network limits stop one IPv6 allocation, thousands of /64s, from filling
+ * MAX_CONNECTIONS_TOTAL for everyone.
  *
  * Open connections are counted from the engine's "connection" event, which
  * ws fires in the same tick as allowRequest, so a burst from one address
@@ -72,21 +76,31 @@ export type ConnectionRefusal = "too_many_connections" | "rate_limited";
  */
 export class ConnectionGate {
   private readonly perIp = new Map<string, number>();
+  private readonly perNetwork = new Map<string, number>();
   private readonly connectRate = new Map<string, TokenBucket>();
+  /** Bounded like every per-key bucket map (http/public.ts IpBuckets). */
+  private readonly networkRate: IpBuckets;
   private lastPrune: number;
 
   constructor(
-    private readonly config: Pick<Config, "maxConnectionsPerIp" | "connectRatePerIp">,
+    private readonly config: Pick<
+      Config,
+      "maxConnectionsPerIp" | "connectRatePerIp" | "maxConnectionsPerNetwork" | "connectRatePerNetwork"
+    >,
     private readonly metrics: Pick<Metrics, "rateLimitedTotal">,
     private readonly now: () => number = Date.now,
   ) {
     this.lastPrune = now();
+    this.networkRate = new IpBuckets(config.connectRatePerNetwork, now);
   }
 
   /** Why a new connection from `ip` is refused, or null to let it through. */
   admit(rawIp: string): ConnectionRefusal | null {
-    const ip = ipBuckets(rawIp).ip;
-    if ((this.perIp.get(ip) ?? 0) >= this.config.maxConnectionsPerIp) {
+    const { ip, network } = ipBuckets(rawIp);
+    if (
+      (this.perIp.get(ip) ?? 0) >= this.config.maxConnectionsPerIp ||
+      (this.perNetwork.get(network) ?? 0) >= this.config.maxConnectionsPerNetwork
+    ) {
       this.metrics.rateLimitedTotal.inc({ event: "connection" });
       return "too_many_connections";
     }
@@ -103,7 +117,8 @@ export class ConnectionGate {
       bucket = new TokenBucket(this.config.connectRatePerIp, now);
       this.connectRate.set(ip, bucket);
     }
-    if (!bucket.take(now)) {
+    // IpBuckets keys anything that is not an address as given: the network key.
+    if (!bucket.take(now) || !this.networkRate.allow(network)) {
       this.metrics.rateLimitedTotal.inc({ event: "connection_rate" });
       return "rate_limited";
     }
@@ -111,17 +126,34 @@ export class ConnectionGate {
   }
 
   opened(rawIp: string): void {
-    const ip = ipBuckets(rawIp).ip;
-    this.perIp.set(ip, (this.perIp.get(ip) ?? 0) + 1);
+    const { ip, network } = ipBuckets(rawIp);
+    increment(this.perIp, ip);
+    increment(this.perNetwork, network);
   }
 
   closed(rawIp: string): void {
-    const ip = ipBuckets(rawIp).ip;
-    const left = (this.perIp.get(ip) ?? 1) - 1;
-    if (left <= 0) this.perIp.delete(ip);
-    else this.perIp.set(ip, left);
+    const { ip, network } = ipBuckets(rawIp);
+    decrement(this.perIp, ip);
+    decrement(this.perNetwork, network);
   }
 }
+
+function increment(counts: Map<string, number>, key: string): void {
+  counts.set(key, (counts.get(key) ?? 0) + 1);
+}
+
+function decrement(counts: Map<string, number>, key: string): void {
+  const left = (counts.get(key) ?? 1) - 1;
+  if (left <= 0) counts.delete(key);
+  else counts.set(key, left);
+}
+
+/**
+ * How long a connection that has not sent the Socket.IO CONNECT packet may
+ * stay open. Engine.IO counts it against MAX_CONNECTIONS_TOTAL without any
+ * session, so it is kept short; a real client sends CONNECT at once.
+ */
+export const CONNECT_TIMEOUT_MS = 5_000;
 
 /**
  * `shed` runs first: while the instance sheds (overload, MAX_CONNECTIONS_TOTAL)
@@ -152,7 +184,7 @@ export function createSocketServer(httpServer: HttpServer, config: Config, gate:
     parser: limitedParser(MAX_HTTP_BUFFER_SIZE),
     pingInterval: 20_000,
     pingTimeout: 20_000,
-    connectTimeout: 10_000,
+    connectTimeout: CONNECT_TIMEOUT_MS,
   });
   io.engine.on("connection", (conn: { request: IncomingMessage; on(event: "close", fn: () => void): void }) => {
     const ip = requestIp(conn.request.headers, conn.request.socket.remoteAddress, config.proxyIpHeader);

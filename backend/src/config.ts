@@ -73,6 +73,9 @@ const envSchema = z
     MAX_CONNECTIONS_PER_IP: int(1).default(10),
     CONNECT_BURST_PER_IP: int(1).default(20),
     CONNECT_RATE_PER_IP_PER_SEC: int(1).default(1),
+    MAX_CONNECTIONS_PER_NETWORK: int(1).default(40),
+    CONNECT_BURST_PER_NETWORK: int(1).default(60),
+    CONNECT_RATE_PER_NETWORK_PER_SEC: int(1).default(4),
     MAX_CONNECTIONS_TOTAL: int(1).default(2000),
     SESSION_RATE_TOTAL_PER_SEC: int(1).default(20),
     SHED_HEAP_LIMIT_MB: int(64).optional(),
@@ -295,6 +298,15 @@ export interface Config extends MatchConfig {
    */
   connectRatePerIp: { capacity: number; refillPerSec: number };
   /**
+   * Open connections and new connections per network (an IPv4 /24 or IPv6
+   * /48, session/geo.ts ipBuckets) on this instance, a few times the per-IP
+   * limits: one IPv6 allocation holds thousands of /64s, so without these it
+   * could fill MAX_CONNECTIONS_TOTAL. MAX_CONNECTIONS_PER_NETWORK,
+   * CONNECT_BURST_PER_NETWORK and CONNECT_RATE_PER_NETWORK_PER_SEC.
+   */
+  maxConnectionsPerNetwork: number;
+  connectRatePerNetwork: { capacity: number; refillPerSec: number };
+  /**
    * Open Engine.IO connections on this instance, all clients together
    * (shed/Shedder.ts). MAX_CONNECTIONS_TOTAL; the default leaves headroom on
    * a 512 MB instance (docs/LIMITS.md, "Instance-wide limits and shedding").
@@ -454,6 +466,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     keepaliveUrl: e.KEEPALIVE_URL ?? (e.RENDER_EXTERNAL_URL ? `${e.RENDER_EXTERNAL_URL.replace(/\/$/, "")}/healthz` : undefined),
     maxConnectionsPerIp: e.MAX_CONNECTIONS_PER_IP,
     connectRatePerIp: { capacity: e.CONNECT_BURST_PER_IP, refillPerSec: e.CONNECT_RATE_PER_IP_PER_SEC },
+    maxConnectionsPerNetwork: e.MAX_CONNECTIONS_PER_NETWORK,
+    connectRatePerNetwork: { capacity: e.CONNECT_BURST_PER_NETWORK, refillPerSec: e.CONNECT_RATE_PER_NETWORK_PER_SEC },
     maxConnectionsTotal: e.MAX_CONNECTIONS_TOTAL,
     sessionRateTotal: {
       capacity: e.SESSION_RATE_TOTAL_PER_SEC * SESSION_TOTAL_BURST_SECONDS,

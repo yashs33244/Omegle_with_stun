@@ -81,7 +81,11 @@ describe("ConnectionGate", () => {
   const metrics = { rateLimitedTotal: { inc: () => {} } } as unknown as ConstructorParameters<typeof ConnectionGate>[1];
 
   test("counts connections and connect rate per IPv6 /64", () => {
-    const gate = new ConnectionGate({ maxConnectionsPerIp: 1, connectRatePerIp: { capacity: 2, refillPerSec: 0 } }, metrics, () => 0);
+    const gate = new ConnectionGate(
+      { maxConnectionsPerIp: 1, connectRatePerIp: { capacity: 2, refillPerSec: 0 }, maxConnectionsPerNetwork: 100, connectRatePerNetwork: { capacity: 100, refillPerSec: 0 } },
+      metrics,
+      () => 0,
+    );
     expect(gate.admit("2001:db8:0:1::1")).toBeNull();
     gate.opened("2001:db8:0:1::1");
     expect(gate.admit("2001:db8:0:1::2")).toBe("too_many_connections");
@@ -89,5 +93,47 @@ describe("ConnectionGate", () => {
     gate.closed("2001:db8:0:1::1");
     expect(gate.admit("2001:db8:0:1::3")).toBeNull();
     expect(gate.admit("2001:db8:0:1::4")).toBe("rate_limited");
+  });
+
+  test("counts open connections and connect rate per network: 200 /64s of one /56 hold at most the network cap", () => {
+    const gate = new ConnectionGate(
+      {
+        maxConnectionsPerIp: 10,
+        connectRatePerIp: { capacity: 20, refillPerSec: 1 },
+        maxConnectionsPerNetwork: 40,
+        connectRatePerNetwork: { capacity: 60, refillPerSec: 4 },
+      },
+      metrics,
+      () => 0,
+    );
+    let open = 0;
+    for (let i = 0; i < 200; i++) {
+      const ip = `2001:db8:0:ab${i.toString(16).padStart(2, "0")}::1`;
+      if (gate.admit(ip) === null) {
+        gate.opened(ip);
+        open++;
+      }
+    }
+    expect(open).toBe(40);
+    expect(gate.admit("2001:db8:0:abff::1")).toBe("too_many_connections");
+    // Another /48 has its own budget; closing one frees a slot in the full one.
+    expect(gate.admit("2001:db8:1::1")).toBeNull();
+    gate.closed("2001:db8:0:ab00::1");
+    expect(gate.admit("2001:db8:0:abfe::1")).toBeNull();
+  });
+
+  test("the network connect bucket refuses a burst spread over many /64s", () => {
+    const gate = new ConnectionGate(
+      {
+        maxConnectionsPerIp: 10,
+        connectRatePerIp: { capacity: 20, refillPerSec: 1 },
+        maxConnectionsPerNetwork: 1000,
+        connectRatePerNetwork: { capacity: 3, refillPerSec: 0 },
+      },
+      metrics,
+      () => 0,
+    );
+    expect([1, 2, 3, 4].map((n) => gate.admit(`2001:db8:2:${n}::1`))).toEqual([null, null, null, "rate_limited"]);
+    expect(gate.admit("198.51.100.1")).toBeNull();
   });
 });
