@@ -462,19 +462,19 @@ flowchart LR
 
 ### 5.1 Captions
 
-Browser Web Speech `SpeechRecognition` (continuous, interim results, BCP-47 tag per language) transcribes the sender's own microphone; interim segments go out at most every 250 ms per segment id, finals at once, as `caption:segment` (`new-frontend/src/captions/useSpeechCaptions.ts:81-110`, `protocol.ts:78-85`). The server checks the sender is in the active room, enforces 10 segments per second per socket by dropping (no error), caps text at 1 024 UTF-8 bytes, and forwards unchanged; nothing is stored or logged (`captions/CaptionRelay.ts:1-9, 42-55`). The receiving browser translates final segments with Chrome's built-in `Translator` API when the languages differ; the server never sees a translation (`captions/translator.ts`, `useCaptions.ts:114-127`).
+Browser Web Speech `SpeechRecognition` (continuous, interim results, BCP-47 tag per language) transcribes the sender's own microphone; interim segments go out at most every 250 ms per segment id, finals at once, as `caption:segment` (`new-frontend/src/captions/useSpeechCaptions.ts:81-110`, `protocol.ts:CAPTIONS`). The server checks the sender is in the active room, enforces 10 segments and 2 048 relayed bytes per second per socket by dropping (no error), caps text at 1 024 UTF-8 bytes, runs the chat guard over the text (links, handles and phone numbers hidden for the first 2 minutes of the call, as for `chat:send`) and forwards it; nothing is stored or logged (`captions/CaptionRelay.ts`). The receiving browser translates final segments with Chrome's built-in `Translator` API when the languages differ; the server never sees a translation (`captions/translator.ts`, `useCaptions.ts:114-127`).
 
 ## 6. Safety and enforcement
 
 ```mermaid
 flowchart TB
-  R["report:submit<br/>reason, details, 256 px frame, 20 chat lines"] --> ADM["admitReport<br/>5 per device per hour, one per room per reporter"]
+  R["report:submit<br/>reason, details, 256 px frame, 20 chat lines"] --> ADM["admitReport<br/>5 per device per hour, 30 per IP per hour,<br/>one per room per reporter"]
   ADM --> LOCK["withLock: block pair 24 h, end room<br/>reporter: reported, reported side: partner-skipped"]
   LOCK --> SUB["EnforcementService.submitReport"]
   SUB --> EVS[("EvidenceStore<br/>FS volume or S3 with KMS;<br/>restricted path for suspected CSAM")]
   SUB --> DOC[("report document + indexes<br/>against:{device}, open-reports")]
   SUB --> W["reporterWeight<br/>0.05 base + 0.3 age (72 h) + 0.3 calls (10) + 0.35 upheld share;<br/>halved for calls under 2 s"]
-  W --> AUTO{"weighted distinct reporters<br/>in 24 h >= 1.6?<br/>or underage report corroborated"}
+  W --> AUTO{"weighted distinct reporters<br/>(one per address, salted hash) in 24 h >= 1.6?<br/>or underage report corroborated"}
   AUTO -- yes --> PAUSE["automatic 10 min pause<br/>(the only automatic action)"]
   AUTO -- no --> Q["admin queue<br/>ack SLA 24 h, resolve 72 h urgent / 15 d"]
   Q --> ADMIN["Admin console /admin<br/>Bearer ADMIN_TOKEN, optional IP allowlist,<br/>Cloudflare Access in front"]

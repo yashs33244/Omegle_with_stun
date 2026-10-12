@@ -87,12 +87,12 @@ Types below are the zod schemas / TypeScript interfaces in `backend/src/protocol
 | `rtc:signal` | `RtcSignal`: `{ roomId, description?: { type: "offer" \| "answer", sdp: string<=20_000 }, candidate?: { candidate<=2_000, sdpMid?<=64, sdpMLineIndex? 0..64, usernameFragment?<=256 } }`, exactly one of the two | none | signal | member of the **active** room; otherwise silently dropped | `MatchService.signal` (relayed unchanged to the partner) |
 | `chat:send` | `{ roomId, text: trimmed 1..500 }` | `ChatAck`: `{ ok: true, id: uuid, ts: epoch ms, redacted: boolean }`; `not_in_room` | chat | member of active room | `MatchService.chat` (+ `safety/chatGuard`) |
 | `chat:typing` | `{ roomId, typing: boolean }` | none | typing | member of active room | `MatchService.typing` |
-| `report:submit` | `ReportPayload`: `{ roomId, reason: ReportReason, details?<=500, evidence?: { frame?: JPEG data URL <=120_000 chars, chat?: Array<{ from: "me" \| "partner", text<=500, ts }> <=20 } }` | `ReportAck`: `{ ok: true, reportId }`; `not_in_room`, `rate_limited`, `bad_state` "already reported", `invalid_payload` "evidence frame must be a JPEG" | report | member of the room, or either device within `reportAfterEndMs = 60_000` after it ended; once per room per reporter | `MatchService.report` → `enforcement/EnforcementService.submitReport` |
+| `report:submit` | `ReportPayload`: `{ roomId, reason: ReportReason, details?<=500, evidence?: { frame?: JPEG data URL <=120_000 chars, chat?: Array<{ from: "me" \| "partner", text<=500, ts }> <=20 } }` | `ReportAck`: `{ ok: true, reportId }`; `not_in_room`, `rate_limited`, `bad_state` "already reported", `invalid_payload` "evidence frame must be a JPEG" | report | member of the room, or either device within `reportAfterEndMs = 60_000` after it ended; once per room per reporter; 5 per device and 30 per client IP per hour | `MatchService.report` → `enforcement/EnforcementService.submitReport` |
 | `call:failed` | `{ roomId, reason: "ice-failed" \| "timeout" }` | none | telemetry | member of active room | `MatchService.callFailed` (ends with `connection-failed`, pair blocked 30 s, both re-queued) |
 | `call:telemetry` | `{ roomId, outcome: "connected" \| "ice-failed" \| "timeout" \| "ended-before-connect", timeToConnectMs?, durationMs?, localCandidateType?, remoteCandidateType?, privateMode: boolean, rttMs?, packetLossPct?, freezeCount? }` | none | telemetry | any socket that said hello; once per room per socket (last 20 remembered) | `MatchService.telemetry` (Prometheus only) |
 | `moderation:signal` | `{ roomId, kind: "nsfw-blur" \| "no-face" \| "virtual-camera" \| "model-unavailable" }` | none | telemetry | sender's current room | `MatchService.moderationSignal` → `safety/SafetyService` |
 | `spark:request` | `{ roomId }` | `SparkAck`: `{ ok: true, promptId }`; `not_in_room`; `rate_limited` during the room cooldown `SPARK.cooldownMs = 10_000` | control | member of active room | `spark/SparkService.request` |
-| `caption:segment` | `{ roomId, id: /^[A-Za-z0-9_-]{1,64}$/, text: 1..1024 UTF-8 bytes, final: boolean, lang: language code }` | none; over `CAPTIONS.maxPerSec = 10` the segment is dropped silently | signal | member of active room | `captions/CaptionRelay.segment` |
+| `caption:segment` | `{ roomId, id: /^[A-Za-z0-9_-]{1,64}$/, text: 1..1024 UTF-8 bytes, final: boolean, lang: language code }` | none; over `CAPTIONS.maxPerSec = 10` segments or `CAPTIONS.maxBytesPerSec = 2048` bytes per second the segment is dropped silently | signal | member of active room; links, handles and phone numbers hidden during the first `chatGuardMs` of the call as in chat | `captions/CaptionRelay.segment` |
 
 `Profile` = `{ name: 1..32, country: /^[A-Z]{2}$/, language: /^[a-z]{2,3}(-[A-Za-z0-9]{2,8})?$/, gender: "male" | "female" | "other" | "unspecified", topics: 1..10 of TOPICS, photo?: data:image/(jpeg|png|webp) data URL <= 150_000 chars }`. `Preferences` = `{ genderFilter: "all" | "male" | "female" | "other", languageFilter: "any" | language code }`.
 
@@ -270,7 +270,7 @@ sequenceDiagram
     Note over R: client captures a 256 px JPEG of the partner video<br/>and the last chat lines (lib/evidence.ts)
     R->>S: report:submit {roomId, reason, details?, evidence: {frame?, chat?}}
     Note over S: parseEvidenceFrame (must be JPEG)<br/>reportTarget: live room or lastRoom within 60 s of ending
-    S->>E: admitReport(deviceId, roomId)
+    S->>E: admitReport(deviceId, roomId, clientIp)
     E-->>S: ok | rate_limited | duplicate
     Note over S: under the match lock: blockPair 24 h, end room
     S-->>R: match:ended {reason: reported}
@@ -421,7 +421,7 @@ Guard, in order: 503 `admin_disabled` when `ADMIN_TOKEN` is unset (required in p
 | `GET /queue?status=open\|acknowledged\|actioned\|dismissed\|escalated\|all` | — | `AdminReport[]` |
 | `GET /reports/:id` | — | `AdminReport` |
 | `GET /reports/:id/evidence` | — | `image/jpeg` bytes; 403 `restricted` for CSAM-routed reports (never served) |
-| `POST /reports/:id/action` | `AdminReportAction`: `{ action: "acknowledge" \| "dismiss" \| "warn" \| "restrict" \| "escalate_csam", reason?: RestrictionReason, durationMs?: number \| null, note?<=2000 }` | result of the action |
+| `POST /reports/:id/action` | `AdminReportAction`: `{ action: "acknowledge" \| "dismiss" \| "warn" \| "restrict" \| "escalate_csam", reason?: RestrictionReason, durationMs?: 600000 \| 86400000 \| 604800000 \| null (`RESTRICTION_DURATIONS_MS`; null = permanent; omitted = next ladder rung), note?<=2000 }` | result of the action |
 | `POST /reports/:id/escalate` | `{ note?<=2000 }` | result |
 | `GET /appeals` | — | `AdminAppeal[]` |
 | `POST /appeals/:id/decision` | `{ decision: "uphold" \| "overturn", note? }` | result |

@@ -238,7 +238,9 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
     on("rtc:signal", "signal", rtcSignalSchema, (p) => service.signal(socket.id, p));
     on("chat:send", "chat", chatSendSchema, (p, reply) => service.chat(socket.id, p, reply));
     on("chat:typing", "typing", chatTypingSchema, (p) => service.typing(socket.id, p));
-    on("report:submit", "report", reportSchema, (p, reply) => service.report(socket.id, p, reply));
+    on("report:submit", "report", reportSchema, (p, reply) =>
+      service.report(socket.id, p, reply, requestIp(socket.handshake.headers, socket.handshake.address, config.proxyIpHeader)),
+    );
     on("call:failed", "telemetry", callFailedSchema, (p) => service.callFailed(socket.id, p));
     on("call:telemetry", "telemetry", callTelemetrySchema, (p) => service.telemetry(socket.id, p));
     on("moderation:signal", "telemetry", moderationSignalSchema, (p) => service.moderationSignal(socket.id, p));

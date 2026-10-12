@@ -14,6 +14,7 @@ export interface Metrics extends MatchMetrics {
   rateLimitedTotal: Counter<"event">;
   invalidPayloadTotal: Counter<"event">;
   handlerErrorsTotal: Counter<"event">;
+  captionsRedactedTotal: Counter;
 }
 
 export function createMetrics(store: MatchStore): Metrics {
@@ -71,6 +72,11 @@ export function createMetrics(store: MatchStore): Metrics {
       name: "chizzy_handler_errors_total",
       help: "Unexpected errors inside event handlers",
       labelNames: ["event"],
+      registers: [registry],
+    }),
+    captionsRedactedTotal: new Counter({
+      name: "chizzy_captions_redacted_total",
+      help: "Caption segments with links, handles or phone numbers hidden by the guard",
       registers: [registry],
     }),
     ...createMatchMetrics(registry),
