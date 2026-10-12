@@ -332,6 +332,24 @@ describe("POST /api/session", () => {
     offset = 24 * 3600_000;
     expect((await postSession(ts, sessionBody(), host(7))).status).toBe(200);
   });
+
+  test("the new-device cap's 429 carries Retry-After until UTC midnight", async () => {
+    const elevenPm = Date.UTC(2026, 9, 12, 23, 0, 0);
+    ts = await gated(
+      { sessionRatePerIpPerMin: 100, sessionNewDevicesPerNetworkPerDay: 1, proxyIpHeader: "x-real-ip" },
+      { now: () => elevenPm },
+    );
+    const from = { "x-real-ip": "203.0.113.65" };
+    expect((await postSession(ts, sessionBody(), from)).status).toBe(200);
+    const refused = await fetch(`${ts.url}/api/session`, {
+      method: "POST",
+      headers: { "content-type": "application/json", ...from },
+      body: JSON.stringify(sessionBody()),
+    });
+    expect(refused.status).toBe(429);
+    expect(await refused.json()).toEqual({ ok: false, error: "rate_limited" });
+    expect(refused.headers.get("retry-after")).toBe("3600");
+  });
 });
 
 describe("GET /api/config", () => {

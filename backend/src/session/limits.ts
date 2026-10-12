@@ -118,6 +118,12 @@ export class NewDeviceCap {
     await this.kv.set(seenKey, "1", ttl);
     return true;
   }
+
+  /** Whole seconds until the window resets (UTC midnight): the Retry-After of a refusal. */
+  retryAfterSec(): number {
+    const now = this.clock();
+    return Math.ceil((NEW_DEVICE_WINDOW_MS - (now % NEW_DEVICE_WINDOW_MS)) / 1000);
+  }
 }
 
 export interface MatchCapLimits {

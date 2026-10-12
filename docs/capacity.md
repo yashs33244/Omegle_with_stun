@@ -42,11 +42,14 @@ node scripts/loadtest/loadtest.ts --url http://127.0.0.1:3004 --users 1000 --ram
 
 Requirements on the target (every virtual user comes from one IP):
 
-- `MAX_CONNECTIONS_PER_IP` far above the user count (for example 100000).
-- `CONNECT_BURST_PER_IP` and `CONNECT_RATE_PER_IP_PER_SEC` raised (for example
-  100000 and 1000): each replica also rate limits new connections per IP
-  (20, then 1 per second by default), which rejects most of a ramp from one
-  address with `connect:rate_limited`.
+- `MAX_CONNECTIONS_PER_IP` and `MAX_CONNECTIONS_PER_NETWORK` far above the
+  user count (for example 100000).
+- `CONNECT_BURST_PER_IP`, `CONNECT_RATE_PER_IP_PER_SEC`,
+  `CONNECT_BURST_PER_NETWORK` and `CONNECT_RATE_PER_NETWORK_PER_SEC` raised
+  (for example 100000 and 1000): each replica also rate limits new
+  connections per IP (20, then 1 per second by default) and per network (60,
+  then 4), which rejects most of a ramp from one address with
+  `connect:rate_limited`.
 - `TURNSTILE_DISABLED=true`, or the Turnstile test secret
   `1x0000000000000000000000000000000AA` (the script sends Cloudflare's dummy
   test token unless `--turnstile-token` is given).
@@ -153,8 +156,8 @@ socket count, as the ceiling; see docs/LIMITS.md.
    gateway), with the generator on a different machine, ideally in the same
    region as real users:
    ```sh
-   # target .env: TURNSTILE_DISABLED=true, MAX_CONNECTIONS_PER_IP=100000,
-   # CONNECT_BURST_PER_IP=100000, CONNECT_RATE_PER_IP_PER_SEC=1000, session buckets raised
+   # target .env: TURNSTILE_DISABLED=true, MAX_CONNECTIONS_PER_IP=100000, MAX_CONNECTIONS_PER_NETWORK=100000,
+   # CONNECT_BURST_PER_IP=100000, CONNECT_RATE_PER_IP_PER_SEC=1000, the same for *_PER_NETWORK, session buckets raised
    node scripts/loadtest/loadtest.ts --url https://staging-api.example.com --users 3000 --ramp 120 --duration 600 --hold 60000 --json lt-3000.json
    ```
    Split the generator across processes or machines when its loop lag p99
@@ -174,4 +177,6 @@ socket count, as the ceiling; see docs/LIMITS.md.
 | gateway | websocket `proxy_read_timeout` | 1 h (Socket.IO pings every 20 s) |
 | backend | `MAX_CONNECTIONS_PER_IP` | 10 per instance (raise only for tests) |
 | backend | `CONNECT_BURST_PER_IP` / `CONNECT_RATE_PER_IP_PER_SEC` | 20 / 1 per instance (raise only for tests) |
+| backend | `MAX_CONNECTIONS_PER_NETWORK` | 40 per instance per IPv4 /24 or IPv6 /48 (raise only for tests) |
+| backend | `CONNECT_BURST_PER_NETWORK` / `CONNECT_RATE_PER_NETWORK_PER_SEC` | 60 / 4 per instance (raise only for tests) |
 | backend | Socket.IO `maxHttpBufferSize` | 256 KB |

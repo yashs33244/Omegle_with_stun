@@ -188,9 +188,9 @@ When the console answers 429:
 3. Either wait for `Retry-After`, or lock the API to yourself: set
    `ADMIN_ALLOWED_IPS` in the Render env to your address or block (CIDR is
    accepted, e.g. `203.0.113.0/24` or `2001:db8:1::/48`); saving the env
-   restarts the service, which also clears the counters. Only failures from
-   50,000 addresses in one hour (`ADMIN_FAILURE_MAP_MAX`) make a clean
-   address wait too.
+   restarts the service, which also clears the counters. A clean address is
+   never made to wait: once the failure records are full
+   (`ADMIN_FAILURE_MAP_MAX`, 50,000 addresses) new failures are not recorded.
 4. If the token may have leaked (successful requests you did not make in the
    audit log), rotate `ADMIN_TOKEN` (Secrets inventory above).
 

@@ -188,6 +188,13 @@ setup at the time (one Render instance, `TURNSTILE_DISABLED=true`).
   operator can raise (docs/OPERATIONS.md); the address is stored only as a
   salted hash.
 - **Residual risk.** Someone on the same carrier NAT as a banned user cannot
-  start a first session for up to 6 h. A determined evader with many
-  addresses (mobile data toggling, VPNs) is slowed, not stopped; Turnstile and
-  an optional verified identity (D-5) remain the stronger controls.
+  start a first session for up to 6 h. One abuser sharing a carrier-NAT
+  address can also use up the daily cap on purpose (50 date-of-birth
+  sessions with random device ids, about 5 minutes at the per-IP rate):
+  every other first visit from that address (new phone, cleared storage,
+  private window) is then refused until UTC midnight. The refusal carries
+  `Retry-After` up to midnight, existing sessions and age-token renewals are
+  unaffected, and it lasts at most one day, so it is accepted. A determined
+  evader with many addresses (mobile data toggling, VPNs) is slowed, not
+  stopped; Turnstile and an optional verified identity (D-5) remain the
+  stronger controls.

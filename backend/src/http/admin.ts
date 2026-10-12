@@ -68,6 +68,8 @@ export interface AdminApiDeps {
   proxyIpHeader: string | null;
   corsOrigins: Config["corsOrigins"];
   clock?: () => number;
+  /** Failure records kept at most (ADMIN_FAILURE_MAP_MAX); a seam for tests. */
+  maxFailureRecords?: number;
 }
 
 /** ADMIN_ALLOWED_IPS as a BlockList of addresses and CIDR blocks, or null when unset (any IP). */
@@ -126,13 +128,14 @@ export function adminApiRouter(deps: AdminApiDeps): Router {
   /** Bad tokens from every address on this instance; the window starts at the first one. */
   const globalFailures = { count: 0, resetAt: 0 };
   let lastSweep = 0;
+  const maxRecords = deps.maxFailureRecords ?? ADMIN_FAILURE_MAP_MAX;
   const ipOf = (req: Request) => requestIp(req, deps.proxyIpHeader);
   const actor = (req: Request) => ({ ip: ipOf(req) });
   const allowed = adminAllowList(deps.adminAllowedIps);
 
   /** Drops records that no longer lock anything, at most once per ADMIN_FAILURE_SWEEP_MS (it walks the whole map). */
   const sweep = (now: number) => {
-    if (failures.size < ADMIN_FAILURE_MAP_MAX || now - lastSweep < ADMIN_FAILURE_SWEEP_MS) return;
+    if (failures.size < maxRecords || now - lastSweep < ADMIN_FAILURE_SWEEP_MS) return;
     lastSweep = now;
     for (const [k, v] of failures) if (v.resetAt <= now && v.window !== globalFailures.resetAt) failures.delete(k);
   };
@@ -151,11 +154,11 @@ export function adminApiRouter(deps: AdminApiDeps): Router {
     const ipLocked = f !== undefined && f.resetAt > now && f.count >= ADMIN_MAX_AUTH_FAILURES_PER_IP;
     // Once the instance-wide budget is spent, one failure in this window locks
     // an address out; addresses without one are still judged by their token,
-    // so guessers cannot lock the owner out. Only when the records are full
-    // (failures from ADMIN_FAILURE_MAP_MAX addresses) do unknown ones wait too.
+    // so guessers cannot lock the owner out. When the records are full
+    // (failures from maxRecords addresses) a new failure is not recorded, so
+    // an unrecorded address is judged by its token even then.
     const exhausted = globalFailures.count >= ADMIN_MAX_AUTH_FAILURES_GLOBAL;
-    if (exhausted && !f) sweep(now);
-    const globalLocked = exhausted && (f ? f.window === globalFailures.resetAt : failures.size >= ADMIN_FAILURE_MAP_MAX);
+    const globalLocked = exhausted && f !== undefined && f.window === globalFailures.resetAt;
     if (ipLocked || globalLocked) {
       const until = Math.max(ipLocked && f ? f.resetAt : 0, globalLocked ? globalFailures.resetAt : 0);
       res.set("Retry-After", String(Math.ceil((until - now) / 1000)));
@@ -168,7 +171,7 @@ export function adminApiRouter(deps: AdminApiDeps): Router {
       globalFailures.count++;
       entry.window = globalFailures.resetAt;
       sweep(now);
-      if (failures.has(key) || failures.size < ADMIN_FAILURE_MAP_MAX) failures.set(key, entry);
+      if (failures.has(key) || failures.size < maxRecords) failures.set(key, entry);
       deps.logger.warn({ event: "admin_auth_failed" }, "admin auth failed");
       if (globalFailures.count === ADMIN_MAX_AUTH_FAILURES_GLOBAL) {
         deps.logger.error(

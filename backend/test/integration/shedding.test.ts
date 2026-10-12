@@ -5,6 +5,8 @@
  * docs/LIMITS.md "Instance-wide limits and shedding" cites these tests.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import type { Socket } from "node:net";
+import { loadConfig } from "../../src/config";
 import { CLEAR_SAMPLES, OVER_SAMPLES, SHED_RETRY_AFTER_SEC } from "../../src/shed/constants";
 import type { LoadSample, LoadSampler } from "../../src/shed/LoadMonitor";
 import { activePair, next, rawUpgrade, sessionBody, startServer, type TestServer } from "../helpers";
@@ -68,6 +70,46 @@ describe("instance-wide limits", () => {
     // The SPA is on another origin: it can only read Retry-After when it is exposed.
     expect(refused.headers.get("access-control-expose-headers")).toBe("Retry-After");
     expect(await metricValue(ts, "chizzy_shed_total", { reason: "session_rate" })).toBe(1);
+  });
+
+  test("one IPv6 /56 cannot hold MAX_CONNECTIONS_TOTAL: idle upgrades from 200 /64s stop at the per-network cap", async () => {
+    const defaults = loadConfig({});
+    ts = await startServer({
+      proxyIpHeader: "x-real-ip",
+      maxConnectionsTotal: 200,
+      maxConnectionsPerNetwork: defaults.maxConnectionsPerNetwork,
+      connectRatePerNetwork: defaults.connectRatePerNetwork,
+    });
+    const held: Socket[] = [];
+    try {
+      // 200 distinct /64s of 2001:db8:0:ab00::/56, each well under its own per-IP limits,
+      // holding upgrades that never send the Socket.IO CONNECT packet.
+      for (let i = 0; i < 200; i++) {
+        const r = await rawUpgrade(ts, { "X-Real-IP": `2001:db8:0:ab${i.toString(16).padStart(2, "0")}::1` }, { keepOpen: true });
+        if (r.socket) held.push(r.socket);
+        else expect(["too_many_connections", "rate_limited"]).toContain(r.body);
+      }
+      expect(held).toHaveLength(defaults.maxConnectionsPerNetwork);
+      expect(ts.server.io.engine.clientsCount).toBe(defaults.maxConnectionsPerNetwork);
+      // Another /48 still connects.
+      expect((await rawUpgrade(ts, { "X-Real-IP": "2001:db8:1::1" })).status).toBe(101);
+      expect(await metricValue(ts, "chizzy_shed_total", { reason: "connection_cap" })).toBe(0);
+    } finally {
+      for (const s of held) s.destroy();
+    }
+  });
+
+  test("one IPv6 /48 cannot drain the instance-wide session bucket: the per-network burst bucket runs first", async () => {
+    ts = await startServer({
+      proxyIpHeader: "x-real-ip",
+      sessionRatePerNetworkPerMin: 10,
+      sessionRateTotal: { capacity: 30, refillPerSec: 0.001 },
+    });
+    // One request from each of 50 /64s of one /48: no per-IP bucket is anywhere near.
+    for (let i = 0; i < 50; i++) expect((await post(ts, `2001:db8:5:${i.toString(16)}::1`)).status).not.toBe(503);
+    // At most 2 x SESSION_RATE_PER_NETWORK_PER_MIN of them reached the shared bucket.
+    expect(await metricValue(ts, "chizzy_shed_total", { reason: "session_rate" })).toBe(0);
+    expect((await post(ts, "2001:db8:6::1")).status).toBe(200);
   });
 
   test("the kill switch's closed carries no Retry-After (only transient refusals do)", async () => {

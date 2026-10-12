@@ -4,6 +4,7 @@
  */
 import { afterEach, describe, expect, test } from "bun:test";
 import { connect } from "node:net";
+import pino from "pino";
 import { FAKE_SIGNATURE } from "../../src/billing";
 import { webhookSignature } from "../../src/billing/razorpay";
 import { MemoryWalletStore } from "../../src/billing/WalletStore";
@@ -330,5 +331,25 @@ describe("billing REST", () => {
     });
     expect(plain.status).toBe(404);
     expect(await plain.json()).toEqual({ ok: false, error: "order_unknown" });
+  });
+
+  test("a webhook with a bad signature is logged without the client address", async () => {
+    const lines: string[] = [];
+    const logger = pino({ level: "warn" }, { write: (line: string) => void lines.push(line) });
+    ts = await startServer(
+      { requireSession: true, razorpayFake: true, razorpayWebhookSecret: WEBHOOK_SECRET, proxyIpHeader: "x-real-ip" },
+      undefined,
+      { logger },
+    );
+    const forged = await fetch(`${ts.url}/api/billing/webhook`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-razorpay-signature": "00", "x-real-ip": "203.0.113.99" },
+      body: "{}",
+    });
+    expect(forged.status).toBe(403);
+    const logged = lines.filter((l) => l.includes("bad signature"));
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).not.toContain("203.0.113");
+    expect(JSON.parse(logged[0]!)).not.toHaveProperty("ip");
   });
 });

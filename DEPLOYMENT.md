@@ -65,6 +65,13 @@ limit is visible to the process, so new sockets and sessions are refused from
 about 246 MB of heap (docs/LIMITS.md "Instance-wide limits and shedding").
 Raise the flag in `render.yaml` only together with a bigger plan.
 
+Set `ADMIN_ALLOWED_IPS` (your IPs or CIDR blocks; the blueprint asks for it
+with `sync: false`) or put Cloudflare Access in front of `/admin`: strongly
+recommended. Without either, the admin API is reachable from every address and
+guarded only by `ADMIN_TOKEN` and the bad-token limits, which one IPv6 /48
+(65,536 subscriber addresses) can spend in an hour: the owner is still judged
+by the token alone, but every guess costs nothing more than a fresh address.
+
 ### Repository settings the workflows rely on
 
 The jobs that publish something run in a GitHub deployment environment:
@@ -147,6 +154,7 @@ launch build"); the backend itself also refuses to start without them.
 | `LOG_LEVEL` | `info` | pino log level |
 | `MAX_CONNECTIONS_PER_IP` | `10` | Socket.IO connections allowed per client IP on each backend replica. Raise it if many users share one address (office NAT, mobile carrier NAT). Needs the real client IP, see [Behind Cloudflare](#cloudflare-in-front) |
 | `CONNECT_BURST_PER_IP`, `CONNECT_RATE_PER_IP_PER_SEC` | `20`, `1` | new socket connections per client IP on each replica: a burst, then a steady rate per second. Raise both only for load tests |
+| `MAX_CONNECTIONS_PER_NETWORK`, `CONNECT_BURST_PER_NETWORK`, `CONNECT_RATE_PER_NETWORK_PER_SEC` | `40`, `60`, `4` | the same per network (an IPv4 /24 or IPv6 /48) on each replica: open sockets, then a burst and a steady rate per second of new ones, so one IPv6 allocation cannot fill `MAX_CONNECTIONS_TOTAL`. Raise them with the per-IP ones for load tests or a large shared network |
 | `MAX_CONNECTIONS_TOTAL` | `2000` | open Socket.IO connections on each replica, all clients together; the next upgrade is answered `503 server_full`. About 17 KiB of heap per waiting socket (measured, [docs/LIMITS.md](docs/LIMITS.md#instance-wide-limits-and-shedding)), sized for a 512 MB instance |
 | `SESSION_RATE_TOTAL_PER_SEC` | `20` | `POST /api/session` per second on each replica, all clients together (a bucket of 5 s worth); over it `503 closed` with `Retry-After` |
 | `SHED_HEAP_LIMIT_MB` | unset | heap budget for overload shedding: above 80% of it, or with event-loop delay p99 over 200 ms, a replica refuses new sockets and sessions and `/readyz` answers 503 while live calls continue. Unset: V8's heap limit, capped at 60% of the container's memory |
@@ -262,9 +270,10 @@ and once 100 bad tokens from all addresses together fall within an hour
 enough for the rest of that hour: every address with a failure in the window
 gets 429 with `Retry-After`, right token included, so each further guess
 costs the attacker a fresh address. An address without a failure (the owner)
-is still judged by its token alone, so guessers cannot lock the owner out;
-only failures from 50,000 addresses in one hour fill the records, after which
-unrecorded addresses wait for the window too. What to do when the console
+is still judged by its token alone, so guessers cannot lock the owner out,
+even once failures from 50,000 addresses fill the records (new failures are
+then not recorded; one IPv6 /48 has 65,536 addresses, so set
+`ADMIN_ALLOWED_IPS` or Access). What to do when the console
 answers 429 is in docs/OPERATIONS.md "Admin API".
 
 ## Cloudflare Pages (free, commercial use allowed)

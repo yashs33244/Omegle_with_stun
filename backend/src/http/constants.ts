@@ -55,17 +55,18 @@ export const ADMIN_GLOBAL_FAILURE_WINDOW_MS = HOUR_MS;
 /**
  * Failure records (one per address, about 100 bytes) kept at most. Records
  * that no longer lock anything are swept at most every ADMIN_FAILURE_SWEEP_MS
- * when full. With the budget spent and the records still full, addresses
- * without one are refused too: memory stays bounded and guessing stays capped,
- * at the price of locking the owner out only after failures from this many
- * addresses in one window.
+ * when full. While the records are full a new failure is not recorded:
+ * memory stays bounded and an address without a record (the owner) is still
+ * judged by its token alone. One IPv6 /48 holds 65,536 addresses, so a full
+ * map is cheap; ADMIN_ALLOWED_IPS is what keeps guessers out entirely.
  */
 export const ADMIN_FAILURE_MAP_MAX = 50_000;
 export const ADMIN_FAILURE_SWEEP_MS = MINUTE_MS;
 /**
- * The per-instance burst bucket in front of POST /api/session holds this many
- * minutes of SESSION_RATE_PER_IP_PER_MIN and refills at that rate, so the
- * store-backed limit is the one a client meets first.
+ * The per-instance burst buckets in front of POST /api/session hold this many
+ * minutes of SESSION_RATE_PER_IP_PER_MIN (per address) and
+ * SESSION_RATE_PER_NETWORK_PER_MIN (per network) and refill at those rates,
+ * so the store-backed limits are the ones a client meets first.
  */
 export const SESSION_BURST_FACTOR = 2;
 /**

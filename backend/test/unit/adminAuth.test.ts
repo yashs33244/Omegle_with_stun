@@ -196,6 +196,19 @@ describe("admin router auth", () => {
     expect((await get("198.51.100.9", TOKEN)).status).toBe(200);
   });
 
+  test("with the failure records full and the budget spent, a clean address with the right token still gets in", async () => {
+    const flags = { store: { get: async () => ({ banner_message: "" }) } } as unknown as FlagsReader;
+    const base = await listen(build({ proxyIpHeader: "x-real-ip", flags, maxFailureRecords: 5 }));
+    const get = (ip: string, token: string) => fetch(`${base}/flags`, { headers: { "x-real-ip": ip, authorization: `Bearer ${token}` } });
+    // Distinct /64s of one /48, one failure each: the records fill at 5, the budget is spent at 100.
+    for (let n = 0; n < ADMIN_MAX_AUTH_FAILURES_GLOBAL; n++) expect((await get(`2001:db8:9:${n.toString(16)}::1`, "nope")).status).toBe(401);
+    expect((await get("203.0.113.80", TOKEN)).status).toBe(200);
+    // A recorded address is still locked out; an unrecorded one is judged by its token, not recorded.
+    expect((await get("2001:db8:9:0::1", TOKEN)).status).toBe(429);
+    expect((await get("198.51.100.80", "nope")).status).toBe(401);
+    expect((await get("198.51.100.80", TOKEN)).status).toBe(200);
+  });
+
   test("ADMIN_ALLOWED_IPS takes addresses and CIDR blocks, IPv4 and IPv6", async () => {
     const base = await listen(
       build({ proxyIpHeader: "x-real-ip", adminAllowedIps: ["203.0.113.0/24", "2001:db8:1::/48", "198.51.100.7"] }),
