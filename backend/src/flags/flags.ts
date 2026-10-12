@@ -9,6 +9,7 @@ import {
   CLOCK_LOCALE,
   FLAGS_CACHE_TTL_MS,
   FLAGS_KEY,
+  FORMATTER_CACHE_MAX,
   MINUTES_PER_DAY,
   MINUTES_PER_HOUR,
   MINUTE_MS,
@@ -89,10 +90,27 @@ export interface MatchingStatus {
   message: string | null;
 }
 
+/**
+ * Formatters are reused per time zone: building an Intl.DateTimeFormat costs
+ * about 40 us, and matchingStatus() formats up to a day of minutes to find
+ * the next opening. Only the flag's time zone is ever used, so the map stays
+ * tiny; it is cleared if a run of flag edits ever grows it.
+ */
+const formatters = new Map<string, Intl.DateTimeFormat>();
+
+function clockFormatter(timeZone: string): Intl.DateTimeFormat {
+  let f = formatters.get(timeZone);
+  if (!f) {
+    if (formatters.size >= FORMATTER_CACHE_MAX) formatters.clear();
+    f = new Intl.DateTimeFormat(CLOCK_LOCALE, { timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" });
+    formatters.set(timeZone, f);
+  }
+  return f;
+}
+
 /** Minutes since local midnight in `timeZone` for the instant `ms`. */
 function localMinutes(ms: number, timeZone: string): number {
-  const parts = new Intl.DateTimeFormat(CLOCK_LOCALE, { timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" })
-    .formatToParts(new Date(ms));
+  const parts = clockFormatter(timeZone).formatToParts(new Date(ms));
   const h = Number(parts.find((p) => p.type === "hour")?.value ?? 0);
   const m = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
   return h * MINUTES_PER_HOUR + m;
@@ -167,6 +185,7 @@ export class FlagsReader {
   private value: Flags = { ...DEFAULTS };
   private timer: ReturnType<typeof setInterval> | undefined;
   private readonly listeners = new Set<(flags: Flags, previous: Flags) => void>();
+  private statusMemo?: { flags: Flags; minute: number; status: MatchingStatus };
 
   constructor(
     readonly store: FlagsStore,
@@ -177,8 +196,19 @@ export class FlagsReader {
     return this.value;
   }
 
+  /**
+   * Memoized per flag set and minute: the answer only changes when the flags
+   * change or the clock crosses a minute, and computing it outside staffed
+   * hours scans up to a day of minutes (tens of ms on a small CPU). This runs
+   * on every match pass, every hello and every GET /api/config.
+   */
   status(now = Date.now()): MatchingStatus {
-    return matchingStatus(this.value, now);
+    const minute = Math.floor(now / MINUTE_MS);
+    const memo = this.statusMemo;
+    if (memo && memo.flags === this.value && memo.minute === minute) return memo.status;
+    const status = matchingStatus(this.value, now);
+    this.statusMemo = { flags: this.value, minute, status };
+    return status;
   }
 
   /** Called after every refresh that changed something. */
@@ -190,10 +220,10 @@ export class FlagsReader {
   async refresh(): Promise<Flags> {
     const next = await this.store.get();
     const previous = this.value;
+    // Keep the same object while nothing changed, so status() stays memoized.
+    if (JSON.stringify(next) === JSON.stringify(previous)) return previous;
     this.value = next;
-    if (JSON.stringify(next) !== JSON.stringify(previous)) {
-      for (const l of this.listeners) l(next, previous);
-    }
+    for (const l of this.listeners) l(next, previous);
     return next;
   }
 
