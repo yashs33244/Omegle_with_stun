@@ -26,7 +26,7 @@ const FIXTURE = {
   errors: null,
 };
 
-function poller(gbSeq: number[], extra: { redis?: Redis; lockKey?: string } = {}) {
+function poller(gbSeq: number[], extra: { redis?: Redis; lockKey?: string; failuresKey?: string; query?: EgressQuery } = {}) {
   const flags = new FlagsReader(new MemoryFlagsStore());
   const metrics = createMatchMetrics(new Registry());
   const errors: unknown[] = [];
@@ -125,6 +125,56 @@ describe("TurnSpendPoller", () => {
     expect(flags.current().turn_enabled).toBe(true);
     expect((await metrics.turnSpendPollErrorsTotal.get()).values[0]!.value).toBe(1);
   });
+
+  test("an hour of failed polls applies the failsafe steps until a poll succeeds", async () => {
+    // The real Cloudflare query, against an analytics API that answers 500 until `up`.
+    let up = false;
+    const query = cloudflareEgressQuery({
+      accountId: "acc-1",
+      apiToken: "tok-1",
+      fetch: async () => (up ? new Response(JSON.stringify(FIXTURE)) : new Response("down", { status: 500 })),
+    });
+    const { p, flags, metrics, errors } = poller([], { query });
+    const failsafeCount = async () => (await metrics.turnSpendFailsafeTotal.get()).values[0]?.value ?? 0;
+    for (let i = 0; i < 3; i++) expect(await p.poll()).toEqual({ status: "error" });
+    expect(flags.current()).toMatchObject({ relay_video_max_kbps: 500, private_mode_enabled: true, turn_enabled: true });
+    expect(await failsafeCount()).toBe(0);
+
+    // Fourth failure in a row (1 h at 15 min): relay bitrate down and Hide my IP off; TURN stays on.
+    expect(await p.poll()).toEqual({ status: "error", applied: ["relay-bitrate", "private-mode-off"] });
+    expect(flags.current()).toMatchObject({ relay_video_max_kbps: 300, private_mode_enabled: false, turn_enabled: true });
+    expect(await failsafeCount()).toBe(1);
+    expect(errors).toContainEqual(expect.objectContaining({ failedPolls: 4 }));
+
+    // Still failing: nothing new, and an operator's restore is undone while the spend stays unknown.
+    expect(await p.poll()).toEqual({ status: "error", applied: [] });
+    await flags.set({ private_mode_enabled: true });
+    expect(await p.poll()).toEqual({ status: "error", applied: ["private-mode-off"] });
+    expect(await failsafeCount()).toBe(1);
+    expect(await stepCount(metrics, "relay-bitrate")).toBe(1);
+    expect(await stepCount(metrics, "private-mode-off")).toBe(2);
+
+    // A successful poll ends the streak (36.5 GB: step 1 already applied) and leaves the flags alone.
+    up = true;
+    expect(await p.poll()).toMatchObject({ status: "ok", applied: [] });
+    await flags.set({ relay_video_max_kbps: 500, private_mode_enabled: true });
+    up = false;
+    // A new outage needs a full hour again before anything changes.
+    for (let i = 0; i < 3; i++) expect(await p.poll()).toEqual({ status: "error" });
+    expect(flags.current().private_mode_enabled).toBe(true);
+    expect((await p.poll()).applied).toEqual(["relay-bitrate", "private-mode-off"]);
+    expect(await failsafeCount()).toBe(2);
+  });
+
+  test("a flags store failure during the failsafe is logged, never thrown", async () => {
+    const { p, flags, errors } = poller([NaN]);
+    flags.set = async () => {
+      throw new Error("flags store down");
+    };
+    for (let i = 0; i < 3; i++) await p.poll();
+    expect(await p.poll()).toEqual({ status: "error", applied: [] });
+    expect(errors.length).toBeGreaterThanOrEqual(5);
+  });
 });
 
 const url = process.env.REDIS_URL;
@@ -144,5 +194,26 @@ describe.skipIf(!url)("TurnSpendPoller with Redis", () => {
     expect([ra.status, rb.status].sort()).toEqual(["ok", "skipped"]);
     expect(await redis.pttl(lockKey)).toBeGreaterThan(50_000);
     await redis.del(lockKey);
+  });
+
+  test("the failure streak is shared, so polls that land on different instances still add up", async () => {
+    redis = new Redis(url!);
+    const prefix = `test:${randomUUID()}`;
+    const keys = { redis, lockKey: `${prefix}:lock`, failuresKey: `${prefix}:failures` };
+    const a = poller([NaN], keys);
+    const b = poller([NaN], keys);
+    for (const [i, inst] of [a, b, a].entries()) {
+      await redis.del(keys.lockKey);
+      expect(await inst.p.poll()).toEqual({ status: "error" });
+      expect(Number(await redis.get(keys.failuresKey))).toBe(i + 1);
+    }
+    await redis.del(keys.lockKey);
+    expect(await b.p.poll()).toEqual({ status: "error", applied: ["relay-bitrate", "private-mode-off"] });
+    // A success anywhere resets it.
+    const c = poller([1], keys);
+    await redis.del(keys.lockKey);
+    expect((await c.p.poll()).status).toBe("ok");
+    expect(await redis.exists(keys.failuresKey)).toBe(0);
+    await redis.del(keys.lockKey);
   });
 });

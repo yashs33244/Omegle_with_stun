@@ -71,6 +71,13 @@ export const SPEND_LOCK_KEY = "chizzy:lock:turn-spend";
 export const SPEND_LOCK_LEASE_SHARE = 0.9;
 /** Shortest lease (ms), for very short intervals in tests. */
 export const SPEND_LOCK_MIN_TTL_MS = SECOND_MS;
+/**
+ * Consecutive failed polls (4 x 15 min = 1 h) after which the poller stops
+ * trusting that spend is under the cap and applies the failsafe steps.
+ */
+export const SPEND_FAILSAFE_AFTER_FAILURES = 4;
+/** Redis key of the failure streak shared by the instances (expires after a few missed polls). */
+export const SPEND_FAILURES_KEY = "chizzy:turn-spend:failures";
 
 /** Step names, in order; the label of chizzy_turn_spend_steps_total. */
 export const SPEND_STEP = {
