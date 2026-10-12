@@ -5,7 +5,7 @@ import { describeStaffedHours } from "../../src/flags/flags";
 import { ageInYears } from "../../src/session/age";
 import { DEVICE_LOCKOUT_MS, FINGERPRINT_LOCKOUT_MS, SITEVERIFY_URL, TURNSTILE_MAX_INFLIGHT } from "../../src/session/constants";
 import { ipBuckets, isCountryBlocked, knownIp, requestCountry, requestIp, socketIp } from "../../src/session/geo";
-import { Lockout, MatchCaps, SessionRateLimiter, deriveSalt } from "../../src/session/limits";
+import { Lockout, MatchCaps, NewDeviceCap, SessionRateLimiter, deriveSalt } from "../../src/session/limits";
 import { MemoryKv } from "../../src/session/MemoryKv";
 import { RedisKv } from "../../src/session/RedisKv";
 import type { SessionKv } from "../../src/session/SessionKv";
@@ -26,6 +26,7 @@ describe("SessionService privacy", () => {
       flags: new FlagsReader(new MemoryFlagsStore()),
       lockout: new Lockout(kv, [deriveSalt(SECRET, "lockout")]),
       rateLimiter: new SessionRateLimiter(kv, deriveSalt(SECRET, "x"), { perIpPerMinute: 100, perNetworkPerMinute: 100 }),
+      newDevices: new NewDeviceCap(kv, deriveSalt(SECRET, "x"), 100),
       logger,
       turnstileSecret: "secret",
       fetch: async () => ({ ok: true, json: async () => ({ success: true }) }),
@@ -294,6 +295,40 @@ function kvSuite(name: string, make: (clock: () => number) => SessionKv | null, 
       expect(await limiter.allow("198.51.100.9")).toBe(true);
       now += 60_000;
       expect(await limiter.allow("192.0.2.1")).toBe(true);
+    });
+
+    test("new-device cap: distinct device ids per address (IPv6 /64) per UTC day, salted keys only", async () => {
+      let now = NOW;
+      const inner = make(() => now)!;
+      const keys: string[] = [];
+      const kv: SessionKv = {
+        incr(k, ttl) {
+          keys.push(k);
+          return inner.incr(k, ttl);
+        },
+        get: (k) => inner.get(k),
+        set(k, v, ttl) {
+          keys.push(k);
+          return inner.set(k, v, ttl);
+        },
+        mget: (ks) => inner.mget(ks),
+      };
+      const cap = new NewDeviceCap(kv, deriveSalt(randomUUID(), "x"), 2, () => now);
+      const [a, b, c] = [randomUUID(), randomUUID(), randomUUID()];
+      expect(await cap.admit(a, "2001:db8:9:1::1")).toBe(true);
+      expect(await cap.admit(a, "2001:db8:9:1::2")).toBe(true); // same device, same /64: counted once
+      expect(await cap.admit(b, "2001:db8:9:1::3")).toBe(true);
+      expect(await cap.admit(c, "2001:db8:9:1::4")).toBe(false);
+      expect(await cap.admit(c, "2001:db8:9:1::4")).toBe(false); // a refusal is not remembered as seen
+      expect(await cap.admit(a, "2001:db8:9:1::5")).toBe(true); // a counted device is never refused that day
+      expect(await cap.admit(c, "2001:db8:9:2::1")).toBe(true); // another /64
+      expect(await cap.admit(c, "192.0.2.10")).toBe(true);
+      for (const k of keys) {
+        expect(k).toMatch(/^nd:(n|d):[0-9a-f]{64}:\d+(:[0-9a-f]{64})?$/);
+        expect(k).not.toContain(a);
+      }
+      now += 24 * 60 * 60_000;
+      expect(await cap.admit(randomUUID(), "2001:db8:9:1::6")).toBe(true);
     });
 
     test("hourly match caps per device and per IP", async () => {

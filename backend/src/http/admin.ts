@@ -2,10 +2,13 @@
  * Admin API, mounted at /admin/api. Every request needs
  * `Authorization: Bearer <ADMIN_TOKEN>` (constant-time compare). Without a
  * configured token the API answers 503: it is never open. ADMIN_ALLOWED_IPS
- * limits the client IPs (the PROXY_IP_HEADER is trusted only with TRUST_PROXY). Put
- * Cloudflare Access in front in production (see DEPLOYMENT.md). CORS follows
- * CORS_ORIGINS: the console runs on the SPA host and sends the bearer token,
- * so its preflight is answered before the token check.
+ * limits the client IPs to listed addresses and CIDR blocks (the
+ * PROXY_IP_HEADER is trusted only with TRUST_PROXY). Bad tokens are limited
+ * per IP and, against distributed guessing, per instance across all IPs
+ * (http/constants.ts). Put Cloudflare Access in front in production (see
+ * DEPLOYMENT.md). CORS follows CORS_ORIGINS: the console runs on the SPA host
+ * and sends the bearer token, so its preflight is answered before the token
+ * check.
  *
  *   GET  /queue?status=            review queue (severity, then due clock)
  *   GET  /reports/:id              one report
@@ -21,10 +24,11 @@
  * Every state change writes an audit entry.
  */
 import { createHash, timingSafeEqual } from "node:crypto";
+import { BlockList, isIPv4 } from "node:net";
 import express, { type Request, type RequestHandler, type Response, type Router } from "express";
 import { z } from "zod";
 import type { BillingService } from "../billing/BillingService";
-import type { Config } from "../config";
+import { parseIpRange, type Config } from "../config";
 import type { AdminError, AdminResult, EnforcementService } from "../enforcement/EnforcementService";
 import type { FlagsReader } from "../flags/flags";
 import type { Logger } from "../logger";
@@ -37,7 +41,14 @@ import {
   type AdminWalletView,
 } from "../protocol";
 import { jsonBody } from "./body";
-import { ADMIN_BODY_LIMIT_BYTES } from "./constants";
+import {
+  ADMIN_AUTH_FAILURE_WINDOW_MS,
+  ADMIN_BODY_LIMIT_BYTES,
+  ADMIN_FAILURE_MAP_MAX,
+  ADMIN_GLOBAL_FAILURE_WINDOW_MS,
+  ADMIN_MAX_AUTH_FAILURES_GLOBAL,
+  ADMIN_MAX_AUTH_FAILURES_PER_IP,
+} from "./constants";
 import { IpBuckets, jsonErrors, requestIp } from "./public";
 import { apiCors } from "./session";
 
@@ -53,9 +64,28 @@ export interface AdminApiDeps {
   clock?: () => number;
 }
 
-/** Failed logins per IP before it is locked out for the rest of the window. */
-const MAX_AUTH_FAILURES = 10;
-const AUTH_FAILURE_WINDOW_MS = 15 * 60_000;
+/** ADMIN_ALLOWED_IPS as a BlockList of addresses and CIDR blocks, or null when unset (any IP). */
+export function adminAllowList(entries: string[]): BlockList | null {
+  if (entries.length === 0) return null;
+  const list = new BlockList();
+  for (const entry of entries) {
+    const range = parseIpRange(entry);
+    // loadConfig refuses these; fail closed for a hand-built config too.
+    if (!range) throw new Error(`invalid ADMIN_ALLOWED_IPS entry "${entry}"`);
+    if (range.prefix === null) list.addAddress(range.address, range.type);
+    else list.addSubnet(range.address, range.prefix, range.type);
+  }
+  return list;
+}
+
+/** Loud startup warnings for an admin API weaker than production needs. */
+export function adminWarnings(config: Pick<Config, "nodeEnv" | "adminAllowedIps">): string[] {
+  if (config.nodeEnv !== "production" || config.adminAllowedIps.length > 0) return [];
+  return [
+    "ADMIN_ALLOWED_IPS is empty: the admin API is open to every IP and guarded only by ADMIN_TOKEN and the failure limits " +
+      "(set it to your IPs or CIDR blocks, or put Cloudflare Access in front)",
+  ];
+}
 
 function tokenMatches(header: string | undefined, token: string): boolean {
   const digest = (s: string) => new Uint8Array(createHash("sha256").update(s).digest());
@@ -81,28 +111,47 @@ export function adminApiRouter(deps: AdminApiDeps): Router {
   const clock = deps.clock ?? Date.now;
   const requests = new IpBuckets({ capacity: 120, refillPerSec: 2 }, clock);
   const failures = new Map<string, { count: number; resetAt: number }>();
+  /** Bad tokens from every IP on this instance; the window starts at the first one. */
+  const globalFailures = { count: 0, resetAt: 0 };
   const ipOf = (req: Request) => requestIp(req, deps.proxyIpHeader);
   const actor = (req: Request) => ({ ip: ipOf(req) });
-  const allowed = new Set(deps.adminAllowedIps);
+  const allowed = adminAllowList(deps.adminAllowedIps);
 
   const guard: RequestHandler = (req, res, next) => {
     res.set("Cache-Control", "no-store");
     if (!deps.adminToken) return void res.status(503).json({ error: "admin_disabled" });
     const ip = ipOf(req);
     const key = ip ?? "unknown";
-    if (allowed.size > 0 && (!ip || !allowed.has(ip))) return void res.status(403).json({ error: "forbidden" });
+    if (allowed && (!ip || !allowed.check(ip, isIPv4(ip) ? "ipv4" : "ipv6"))) {
+      return void res.status(403).json({ error: "forbidden" });
+    }
     const now = clock();
+    if (globalFailures.resetAt <= now) globalFailures.count = 0;
+    if (globalFailures.count >= ADMIN_MAX_AUTH_FAILURES_GLOBAL) {
+      res.set("Retry-After", String(Math.ceil((globalFailures.resetAt - now) / 1000)));
+      return void res.status(429).json({ error: "rate_limited" });
+    }
     const f = failures.get(key);
     if (f && f.resetAt <= now) failures.delete(key);
-    if ((failures.get(key)?.count ?? 0) >= MAX_AUTH_FAILURES) {
+    if ((failures.get(key)?.count ?? 0) >= ADMIN_MAX_AUTH_FAILURES_PER_IP) {
       return void res.status(429).json({ error: "rate_limited" });
     }
     if (!tokenMatches(req.get("authorization"), deps.adminToken)) {
-      const entry = failures.get(key) ?? { count: 0, resetAt: now + AUTH_FAILURE_WINDOW_MS };
+      const entry = failures.get(key) ?? { count: 0, resetAt: now + ADMIN_AUTH_FAILURE_WINDOW_MS };
       entry.count++;
-      if (failures.size >= 10_000) failures.clear();
+      if (failures.size >= ADMIN_FAILURE_MAP_MAX) {
+        for (const [k, v] of failures) if (v.resetAt <= now) failures.delete(k);
+      }
       failures.set(key, entry);
+      if (globalFailures.count === 0) globalFailures.resetAt = now + ADMIN_GLOBAL_FAILURE_WINDOW_MS;
+      globalFailures.count++;
       deps.logger.warn({ event: "admin_auth_failed" }, "admin auth failed");
+      if (globalFailures.count === ADMIN_MAX_AUTH_FAILURES_GLOBAL) {
+        deps.logger.error(
+          { event: "admin_auth_budget_exhausted", failures: globalFailures.count, until: new Date(globalFailures.resetAt).toISOString() },
+          "admin auth failure budget exhausted: every admin request answers 429 until the window ends",
+        );
+      }
       return void res.status(401).set("WWW-Authenticate", "Bearer").json({ error: "unauthorized" });
     }
     if (!requests.allow(ip)) return void res.status(429).json({ error: "rate_limited" });

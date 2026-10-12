@@ -104,6 +104,15 @@ export const DEVICE_TTL_MS = YEAR;
 export const FINGERPRINT_TTL_MS = 180 * DAY;
 /** Network facts (IP, country) for CSAM packets are kept this long (ms). */
 export const NETWORK_TTL_MS = DAY;
+/**
+ * A `ban` (24 h or longer, always a human decision) also refuses new sessions
+ * from the address the banned device last minted a session on (IPv4 address
+ * or IPv6 /64, as a salted hash) for this long (ms), so the banned person
+ * cannot come straight back under a fresh device id. Kept short because one
+ * carrier-NAT address is shared by many strangers; their session tokens
+ * already issued keep working.
+ */
+export const NETWORK_BAN_TTL_MS = 6 * HOUR;
 /** A finished room stays reportable for reportAfterEndMs plus this grace (ms) for clock skew. */
 export const LAST_ROOM_GRACE_MS = 5_000;
 /** Default for EnforcementDeps.reportAfterEndMs (ms) when the caller passes none. */
@@ -170,6 +179,8 @@ export const KEY = {
   appealDeviceRate: (deviceId: string) => `appeal-dev:${deviceId}`,
   appealClaim: (restrictionId: string) => `appeal:${restrictionId}`,
   takedownIpRate: (network: string) => `takedown-ip:${network}`,
+  /** `network` is the salted address hash (EnforcementService.network) of a banned device; holds a NetworkBan. */
+  networkBan: (network: string) => `ban-net:${network}`,
   retentionClaim: (day: number) => `retention:${day}`,
   /** Reports against a device, scored by creation time. */
   reportsAgainst: (deviceId: string) => `against:${deviceId}`,

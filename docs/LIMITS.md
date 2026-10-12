@@ -35,7 +35,7 @@ or Cloudflare Pages and talks to `https://chizzy-api.onrender.com`.
 | Free instance hours | 750 h/month; one always-on service uses about 744 | `render.yaml` header |
 | Self keep-alive | GET own `/healthz` every 10 min (`KEEPALIVE_INTERVAL_MS = 10 * 60 * 1000`) plus the `*/10 * * * *` GitHub cron | `backend/src/keepalive.ts:14`, `.github/workflows/keepalive.yml` |
 | Connections per IP | `MAX_CONNECTIONS_PER_IP` default 10 | `backend/src/config.ts:34` |
-| Session creation | `SESSION_RATE_PER_IP_PER_MIN` 10, `SESSION_RATE_PER_NETWORK_PER_MIN` 60 (per /24, or /48 for IPv6) | `backend/src/config.ts:54-55`, `docker-compose.yml` comment |
+| Session creation | `SESSION_RATE_PER_IP_PER_MIN` 10, `SESSION_RATE_PER_NETWORK_PER_MIN` 60 (per /24, or /48 for IPv6); `SESSION_NEW_DEVICES_PER_NETWORK_PER_DAY` 50 new device ids per IPv4 address or IPv6 /64 per UTC day | `backend/src/config.ts:85-87`, `docker-compose.yml` comment |
 | Matches per hour | `MATCH_CAP_PER_DEVICE_PER_HOUR` 200, `MATCH_CAP_PER_IP_PER_HOUR` 200 | `backend/src/config.ts:56-57` |
 | Queue size | flag `max_waiting` default 5,000; over it hello is refused with `matching_closed` | `backend/src/protocol.ts:666`, `backend/src/session/queueGate.ts:44-45` |
 | Measured single process | 1,000 sockets, 68 new calls/s, about 15% of one Apple M3 Pro core, 151 MB peak RSS, 0 errors (run C); with 30 s calls, about 7% of a core, 100 MB RSS, every median under 20 ms (run D) | [capacity.md](capacity.md) "Results: 2026-10-04" |
@@ -247,7 +247,8 @@ per-connection packet budget above bounds them.
 |---|---|---|---|---|
 | Sessions per IP per minute | 10 | `config.ts:54` | HTTP 429 `rate_limited` | env `SESSION_RATE_PER_IP_PER_MIN` |
 | Sessions per /24 (IPv6 /48) per minute | 60 | `config.ts:55` | 429 | env `SESSION_RATE_PER_NETWORK_PER_MIN` |
-| Session token TTL | 24 h (`SESSION_TOKEN_TTL_MS = DAY_MS`) | `session/constants.ts:38` | handshake refused, SPA fetches a new session | code |
+| New device ids per address per UTC day | `SESSION_NEW_DEVICES_PER_NETWORK_PER_DAY` 50 distinct device ids that get a session by date of birth (the only way a fresh id gets an age token) per IPv4 address or IPv6 /64, keyed on a salted hash; the same id again that day counts once; age-token renewals never count. Without Turnstile (production today) a script could otherwise mint up to 14,400 fresh ids a day per IP at the per-minute rate and reset every per-device limit. Carrier NAT: one address can front thousands of phones, so 50 is sized for a small app's daily new users on one address, not for people per address; existing users are never refused by it | `config.ts:87`, `session/constants.ts:73,93-94`, `session/limits.ts:90-120`, `SessionService.ts:142-149` | 429 `rate_limited` | env `SESSION_NEW_DEVICES_PER_NETWORK_PER_DAY` |
+| Session token TTL | 24 h (`SESSION_TOKEN_TTL_MS = DAY_MS`); a connected socket is disconnected at the token's expiry (`server:error` `session_expired` first; timer per socket, cleared on disconnect) | `session/constants.ts:38`, `session/handshake.ts:60`, `realtime/socket.ts:263-276,369` | handshake refused or socket dropped, SPA fetches a new session | code |
 | Age token TTL | 180 days, never slides | `session/constants.ts:40`, `SessionService.ts:121` | re-enter date of birth | code |
 | Under-18 lockout | device 365 days, fingerprint 30 days | `session/constants.ts:47,53` | 403 `locked` / `underage` | code |
 | Turnstile token | max 4,096 chars; required in production unless `TURNSTILE_DISABLED=true` | `protocol.ts:486`, `config.ts` superRefine | 403 `turnstile_failed` | env |
@@ -259,6 +260,7 @@ per-connection packet budget above bounds them.
 | Kill switch, staffed hours | flags `matching_enabled`, `staffed_hours`, `new_sessions_enabled` | `protocol.ts:665-685`, `flags/flags.ts:141` | `matching_closed` with the banner, or 503 `closed` | flag |
 | Client identity for every per-IP limit | `PROXY_IP_HEADER` only when `TRUST_PROXY=true` and the header is one IP literal (IPv4-mapped prefix and zone id dropped), else the TCP peer; list headers (`x-forwarded-for`, `forwarded`, `via`) refused at boot | `session/geo.ts` `requestIp`, `config.ts` superRefine | a junk header counts against the proxy's own address, never as a fresh identity | env |
 | Active restriction | by device id and by fingerprint (device-fingerprint link 180 days); device IP and edge country noted 24 h for CSAM packets | `SessionService.ts`, `EnforcementService.activeForDevice`, `enforcement/constants.ts:98,100` | 403 `banned` with the restriction | code |
+| Ban on the banned device's address | a `ban` (24 h or longer, always an admin decision; never a pause or a warning) also refuses new sessions from the IPv4 address or IPv6 /64 the device last minted a session on (noted 24 h), for `NETWORK_BAN_TTL_MS` 6 h or until the ban ends or is lifted; stored as a salted hash. Carrier NAT trade-off: strangers on that address who need a new session in those 6 h are refused too (their issued 24 h tokens keep working), so the window is short and only human bans carry | `enforcement/constants.ts:107-115,183`, `EnforcementService.ts:303-310,494,512-519`, `SessionService.ts:142-145` | 403 `banned` with the restriction, `appealable: false`, `evidenceAvailable: false`, `until` = end of the 6 h | code |
 | Production secrets | `SESSION_SECRET` >= 32 chars, `ADMIN_TOKEN` >= 24 chars, each with >= 8 distinct characters | `config.ts` superRefine | the process refuses to start | env |
 
 ### REST (`backend/src/http`)
@@ -282,8 +284,10 @@ prepend to them.
 | Requests per socket | `HTTP_MAX_REQUESTS_PER_SOCKET` 1,000 | same | `Connection: close` on the last one | code |
 | Enforcement bodies | `ENFORCEMENT_BODY_LIMIT_BYTES` 16 KiB (`/api/appeals`, `/api/takedowns`) | `http/constants.ts` | 413 `too_large` | code |
 | Enforcement reads / writes per IP | 30 burst, 0.5/s; 10 burst, 0.1/s (per instance) | `http/public.ts:77-78` | 429 `rate_limited` | code |
-| Admin bodies, requests | `ADMIN_BODY_LIMIT_BYTES` 16 KiB; 120 burst, 2/s per IP after auth; 10 bad tokens per 15 min | `http/constants.ts`, `http/admin.ts:55-56,82` | 413, 429 | code |
-| Per-IP bucket maps | cleared at 50,000 keys (`IpBuckets`), admin failures at 10,000 | `http/public.ts:43`, `http/admin.ts:103` | limits reset for everyone on that instance | code |
+| Admin bodies, requests | `ADMIN_BODY_LIMIT_BYTES` 16 KiB; 120 burst, 2/s per IP after auth; `ADMIN_MAX_AUTH_FAILURES_PER_IP` 10 bad tokens per 15 min per IP | `http/constants.ts:35,41-42`, `http/admin.ts:112,134-138` | 413, 429 | code |
+| Admin bad tokens across all IPs | `ADMIN_MAX_AUTH_FAILURES_GLOBAL` 100 per `ADMIN_GLOBAL_FAILURE_WINDOW_MS` 1 h (window from the first failure, per instance, in memory): bounds distributed guessing to 2,400 guesses a day; the owner is locked out for at most the rest of that hour | `http/constants.ts:43-50`, `http/admin.ts:115,128-133,146-154` | 429 `rate_limited` with `Retry-After` for every admin request, right token included; logged once at error (`admin_auth_budget_exhausted`) | code (or `ADMIN_ALLOWED_IPS` / a restart, docs/OPERATIONS.md "Admin API") |
+| Admin allowlist | `ADMIN_ALLOWED_IPS` IPs and CIDR blocks (`net.BlockList`); invalid entries refuse startup; unset in production logs `ADMIN API WARNING` | `config.ts:25-41,142-150`, `http/admin.ts:67-88,125`, `server.ts:153` | 403 `forbidden` | env `ADMIN_ALLOWED_IPS` |
+| Per-IP bucket maps | cleared at 50,000 keys (`IpBuckets`); admin failure records: expired ones swept at `ADMIN_FAILURE_MAP_MAX` 10,000 (never a reset of live lockouts) | `http/public.ts:43`, `http/admin.ts:142-144` | limits reset for everyone on that instance (`IpBuckets` only) | code |
 | `/readyz` | one `store.ping()` in flight at a time (concurrent hits share it); 1 s timeout | `http/app.ts` | 503 `unavailable` | code |
 | `/metrics` | `METRICS_TOKEN` bearer; in production an unset token answers 404 (the route is closed, not open); `/healthz` does no I/O | `http/app.ts`, `server.ts` | 401 / 404 | env `METRICS_TOKEN` |
 
@@ -406,6 +410,11 @@ What is lost when something restarts. "Memory" is the free tier (no
 | Redis data loss (volume gone) | as above until a fresh Redis starts | lost | lost | reset to defaults | lost | lost | kept on the evidence volume or S3, but orphaned from their reports | lost | n/a | lost |
 | Render spin-down (free tier) | lost; first visitor waits about 1 min | lost | lost | reset | lost | lost | lost | n/a | lost | lost |
 | Frontend host restart (nginx, Vercel, Pages) | nothing: the SPA is static and the socket goes to the API host | nothing | nothing | nothing | nothing | nothing | nothing | nothing | nothing | nothing |
+
+The network ban (6 h) and the new-device counters follow the "Restrictions
+and bans" and "Session rate" columns above. The admin failure counters (per
+IP and instance-wide, `http/admin.ts`) are always instance memory: a restart
+or deploy clears them, and with several replicas each has its own budget.
 
 Session tokens and age tokens are signed with `SESSION_SECRET`; they survive
 any restart as long as the secret is the same (`render.yaml` generates one

@@ -168,6 +168,7 @@ describe("cheap and closed endpoints", () => {
         turnstileSiteKey: "1x00000000000000000000AA",
         sessionRatePerIpPerMin: 10_000,
         sessionRatePerNetworkPerMin: 10_000,
+        sessionNewDevicesPerNetworkPerDay: 10_000,
       },
       undefined,
       { fetch: fetchFn },

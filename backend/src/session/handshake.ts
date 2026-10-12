@@ -16,6 +16,8 @@ import type { TokenSigner } from "./tokens";
 export interface HandshakeSession {
   deviceId: string;
   country: string | null;
+  /** Epoch ms when the session token expires; the socket is disconnected then (realtime/socket.ts). */
+  expiresAt: number;
 }
 
 /** The verified session of a socket, or undefined when the gate is off. */
@@ -55,7 +57,7 @@ export function sessionHandshake(deps: HandshakeDeps) {
     const edgeCountry = requestCountry(socket.handshake.headers, deps.trustCloudflare);
     if (isCountryBlocked(token.country, flags) || isCountryBlocked(edgeCountry, flags)) return fail("region_blocked");
 
-    const session: HandshakeSession = { deviceId: token.deviceId, country: edgeCountry ?? token.country };
+    const session: HandshakeSession = { deviceId: token.deviceId, country: edgeCountry ?? token.country, expiresAt: token.exp };
     (socket.data as { session?: HandshakeSession }).session = session;
     const ip = requestIp(socket.handshake.headers, socket.handshake.address, deps.proxyIpHeader);
     deps.caps.bindIp(token.deviceId, ip).then(

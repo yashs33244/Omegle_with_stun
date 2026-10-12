@@ -162,6 +162,46 @@ Names only. Values live where the table says and nowhere in the repository.
 Render's API key and the Vercel token live in each founder's own CLI login
 (`render login`, `vercel login`), not in CI.
 
+## Admin API
+
+On Render there is no Cloudflare Access in front of `/admin/api` and
+`ADMIN_ALLOWED_IPS` is unset, so the backend logs `ADMIN API WARNING:
+ADMIN_ALLOWED_IPS is empty` at every start. The API is then guarded by
+`ADMIN_TOKEN` and two in-memory failure limits (`backend/src/http/constants.ts`,
+reset by a restart or deploy):
+
+| limit | value | answer |
+|---|---|---|
+| bad tokens per IP | 10 per 15 min from that IP's first failure | 429 for that IP, right token included |
+| bad tokens across all IPs | 100 per hour from the first failure | 429 with `Retry-After` for every admin request, right token included; logged once at error, `event: "admin_auth_budget_exhausted"` |
+
+When the console answers 429 and you did not mistype the token yourself:
+
+1. `render logs -r srv-db5nnass728c738ek0o0 --tail` and look for
+   `admin_auth_budget_exhausted` (someone is guessing from many IPs) or
+   repeated `admin_auth_failed`.
+2. Either wait for `Retry-After`, or lock the API to yourself: set
+   `ADMIN_ALLOWED_IPS` in the Render env to your address or block (CIDR is
+   accepted, e.g. `203.0.113.0/24` or `2001:db8:1::/48`); saving the env
+   restarts the service, which also clears the counters.
+3. If the token may have leaked (successful requests you did not make in the
+   audit log), rotate `ADMIN_TOKEN` (Secrets inventory above).
+
+## Session gate limits worth knowing on a bad day
+
+- A socket is disconnected when its 24 h session token expires: the client
+  gets `server:error` `session_expired` and mints a new session. A wave of
+  reconnects exactly 24 h after a busy hour is this, not an outage.
+- A ban (24 h or longer, set in `/admin`) also refuses new sessions from the
+  address the banned device last used (IPv4 address or IPv6 /64) for 6 h.
+  Users behind the same carrier NAT who already hold a session are not
+  affected; new ones on that address see the restriction page without an
+  appeal button for those hours. Lifting the ban lifts this at once.
+- At most `SESSION_NEW_DEVICES_PER_NETWORK_PER_DAY` (50) new device ids per
+  address per UTC day get a session (429 `rate_limited` beyond). If
+  `chizzy_session_requests_total{result="rate_limited"}` climbs without an
+  attack (a campus or carrier NAT), raise it in the Render env.
+
 ## Backups
 
 There is nothing to back up on the current production: the Render service

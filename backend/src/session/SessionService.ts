@@ -2,8 +2,10 @@
  * POST /api/session: the gate in front of matching (LB-2, LB-3, LB-10).
  *
  * Order: rate limit, kill switch, region, lockout, Turnstile, age and Terms,
- * restriction, then tokens. The date of birth is used to compute the age and
- * then dropped: it is never stored, logged or put in a token.
+ * restriction (device, then a recent ban on the client's address), the
+ * daily new-device cap per address, then tokens. The date of birth is used
+ * to compute the age and then dropped: it is never stored, logged or put in
+ * a token.
  */
 import type { FlagsReader } from "../flags/flags";
 import type { Logger } from "../logger";
@@ -17,7 +19,7 @@ import {
 import { ageInYears } from "./age";
 import { ADULT_AGE, AGE_TOKEN_TTL_MS, SESSION_ERROR_STATUS, SESSION_TOKEN_TTL_MS, TURNSTILE_LOCAL_ERROR, UNKNOWN_IP } from "./constants";
 import { isCountryBlocked } from "./geo";
-import type { Lockout, SessionRateLimiter } from "./limits";
+import type { Lockout, NewDeviceCap, SessionRateLimiter } from "./limits";
 import type { TokenSigner } from "./tokens";
 import { verifyTurnstile, type FetchLike } from "./turnstile";
 
@@ -28,6 +30,11 @@ import { verifyTurnstile, type FetchLike } from "./turnstile";
  */
 export interface RestrictionChecker {
   activeForDevice(deviceId: string, fingerprint: string): Promise<Restriction | null>;
+  /**
+   * A `ban` placed in the last few hours on a device seen at this address
+   * (IPv4 address or IPv6 /64), or null. Pauses and warnings never count.
+   */
+  activeForNetwork(ip: string): Promise<Restriction | null>;
   /** Network facts of a device that just passed the gate (kept briefly for CSAM packets). */
   noteDeviceNetwork(deviceId: string, ip: string | null, country: string | null): Promise<void>;
 }
@@ -43,6 +50,7 @@ export interface SessionServiceDeps {
   flags: FlagsReader;
   lockout: Lockout;
   rateLimiter: SessionRateLimiter;
+  newDevices: NewDeviceCap;
   logger: Logger;
   /** Undefined turns Turnstile verification off (dev, tests, TURNSTILE_DISABLED). */
   turnstileSecret?: string;
@@ -131,7 +139,15 @@ export class SessionService {
 
     const restriction = await deps.restrictions?.activeForDevice(req.deviceId, req.fingerprint);
     if (restriction) return fail("banned", restriction);
-    await deps.restrictions?.noteDeviceNetwork(req.deviceId, ctx.ip === UNKNOWN_IP ? null : ctx.ip, ctx.country);
+    const ip = ctx.ip === UNKNOWN_IP ? null : ctx.ip;
+    if (ip) {
+      const networkBan = await deps.restrictions?.activeForNetwork(ip);
+      if (networkBan) return fail("banned", networkBan);
+      // Only a date of birth mints an age token for a fresh device id (an age
+      // token is bound to its device), so only those count as new devices.
+      if ("dob" in req.age && !(await deps.newDevices.admit(req.deviceId, ip))) return fail("rate_limited");
+    }
+    await deps.restrictions?.noteDeviceNetwork(req.deviceId, ip, ctx.country);
 
     const sessionExpiresAt = now + SESSION_TOKEN_TTL_MS;
     const sessionToken = deps.tokens.sign({

@@ -11,7 +11,8 @@ import pino from "pino";
 import type { BillingService } from "../../src/billing/BillingService";
 import type { EnforcementService } from "../../src/enforcement/EnforcementService";
 import type { FlagsReader } from "../../src/flags/flags";
-import { adminApiRouter, type AdminApiDeps } from "../../src/http/admin";
+import { adminAllowList, adminApiRouter, adminWarnings, type AdminApiDeps } from "../../src/http/admin";
+import { ADMIN_GLOBAL_FAILURE_WINDOW_MS, ADMIN_MAX_AUTH_FAILURES_GLOBAL } from "../../src/http/constants";
 
 const TOKEN = "admin-token-0123456789-abcdefghij";
 
@@ -145,5 +146,54 @@ describe("admin router auth", () => {
     now += 15 * 60_000;
     // After the window the right token reaches the route body (the tripwire deps turn that into a 500).
     expect((await fetch(`${base}/queue`, { headers: { authorization: `Bearer ${TOKEN}` } })).status).toBe(500);
+  });
+
+  test("bad tokens from many IPs share one instance-wide budget; once spent, every admin request is 429 until the window ends", async () => {
+    let now = 1_000_000;
+    const lines: { level: number; event?: string }[] = [];
+    const logger = pino({ level: "info" }, { write: (l: string) => lines.push(JSON.parse(l) as { level: number; event?: string }) });
+    const base = await listen(build({ clock: () => now, proxyIpHeader: "x-real-ip", logger }));
+    const from = (n: number) => ({ "x-real-ip": `10.${Math.floor(n / 250)}.${n % 250}.1` });
+    // One failure per address: no per-IP lockout is ever reached.
+    for (let n = 0; n < ADMIN_MAX_AUTH_FAILURES_GLOBAL; n++) {
+      expect((await fetch(`${base}/queue`, { headers: { ...from(n), authorization: "Bearer nope" } })).status).toBe(401);
+    }
+    now += 60_000;
+    const locked = await fetch(`${base}/queue`, { headers: { ...from(9_999), authorization: `Bearer ${TOKEN}` } });
+    expect(locked.status).toBe(429);
+    expect(Number(locked.headers.get("retry-after"))).toBe((ADMIN_GLOBAL_FAILURE_WINDOW_MS - 60_000) / 1000);
+    // Further guesses are not even compared, and are not logged one by one.
+    expect((await fetch(`${base}/queue`, { headers: { ...from(9_998), authorization: "Bearer nope" } })).status).toBe(429);
+    const exhausted = lines.filter((l) => l.event === "admin_auth_budget_exhausted");
+    expect(exhausted).toHaveLength(1);
+    expect(exhausted[0]!.level).toBe(50); // pino error
+    expect(lines.filter((l) => l.event === "admin_auth_failed")).toHaveLength(ADMIN_MAX_AUTH_FAILURES_GLOBAL);
+    now += ADMIN_GLOBAL_FAILURE_WINDOW_MS;
+    // The window started at the first failure; after it the right token reaches the route body (tripwire: 500).
+    expect((await fetch(`${base}/queue`, { headers: { ...from(9_999), authorization: `Bearer ${TOKEN}` } })).status).toBe(500);
+    expect((await fetch(`${base}/queue`, { headers: { ...from(9_997), authorization: "Bearer nope" } })).status).toBe(401);
+  });
+
+  test("ADMIN_ALLOWED_IPS takes addresses and CIDR blocks, IPv4 and IPv6", async () => {
+    const base = await listen(
+      build({ proxyIpHeader: "x-real-ip", adminAllowedIps: ["203.0.113.0/24", "2001:db8:1::/48", "198.51.100.7"] }),
+    );
+    const status = async (ip: string) =>
+      (await fetch(`${base}/queue`, { headers: { "x-real-ip": ip, authorization: `Bearer ${TOKEN}` } })).status;
+    // 500: the right token from a listed address reaches the tripwire route body.
+    expect(await status("203.0.113.99")).toBe(500);
+    expect(await status("203.0.114.1")).toBe(403);
+    expect(await status("2001:db8:1:ffff::1")).toBe(500);
+    expect(await status("2001:db8:2::1")).toBe(403);
+    expect(await status("198.51.100.7")).toBe(500);
+    expect(await status("198.51.100.8")).toBe(403);
+    expect(() => adminAllowList(["203.0.113.0/33"])).toThrow("ADMIN_ALLOWED_IPS");
+    expect(adminAllowList([])).toBeNull();
+  });
+
+  test("production without ADMIN_ALLOWED_IPS warns at startup", () => {
+    expect(adminWarnings({ nodeEnv: "production", adminAllowedIps: [] })).toEqual([expect.stringContaining("ADMIN_ALLOWED_IPS is empty")]);
+    expect(adminWarnings({ nodeEnv: "production", adminAllowedIps: ["203.0.113.0/24"] })).toEqual([]);
+    expect(adminWarnings({ nodeEnv: "development", adminAllowedIps: [] })).toEqual([]);
   });
 });

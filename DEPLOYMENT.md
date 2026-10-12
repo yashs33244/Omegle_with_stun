@@ -105,6 +105,7 @@ launch build"); the backend itself also refuses to start without them.
 | `SESSION_SECRET_PREVIOUS` | unset | previous `SESSION_SECRET`, still accepted during a rotation; clear it after 180 days |
 | `TURNSTILE_DISABLED` | `false` | skips Turnstile (session gate and takedown form). Staging and load tests only, never production |
 | `SESSION_RATE_PER_IP_PER_MIN`, `SESSION_RATE_PER_NETWORK_PER_MIN` | `10`, `60` | `POST /api/session` requests per minute per client IP and per /24 (IPv6 /48) network |
+| `SESSION_NEW_DEVICES_PER_NETWORK_PER_DAY` | `50` | distinct new device ids (date-of-birth sessions) per client IPv4 address or IPv6 /64 per UTC day; beyond it `POST /api/session` answers 429 `rate_limited`. Returning devices (age token) never count. Raise it if one carrier-NAT address legitimately brings more new users a day |
 | `MATCH_CAP_PER_DEVICE_PER_HOUR`, `MATCH_CAP_PER_IP_PER_HOUR` | `200`, `200` | matches per hour per device and per client IP |
 | `MATCH_CAP_PER_DEVICE_PER_MIN` | `20` | rooms a device may end itself (skip, decline) per minute before its re-queue is refused; being skipped never counts |
 | `CF_ACCOUNT_ID`, `CF_ANALYTICS_TOKEN` | unset | TURN spend poller (read-only Analytics token) |
@@ -113,7 +114,7 @@ launch build"); the backend itself also refuses to start without them.
 | `TURN_MAX_PER_DEVICE_HOUR`, `TURN_MAX_PER_IP_HOUR` | `20`, `100` | TURN credential sets per hour per device and per client IP |
 | `SENTRY_DSN`, `SENTRY_DSN_FRONTEND` | unset | Sentry projects for the backend and the SPA |
 | `POSTHOG_KEY`, `POSTHOG_HOST` | unset | PostHog Cloud project (cookieless) |
-| `ADMIN_ALLOWED_IPS` | unset | comma list of client IPs (exact match, no CIDRs) allowed to call the admin API, on top of the token |
+| `ADMIN_ALLOWED_IPS` | unset | comma list of client IPs and CIDR blocks (`203.0.113.7,198.51.100.0/24,2001:db8::/48`) allowed to call the admin API, on top of the token; an invalid entry stops the backend at startup. Unset in production logs `ADMIN API WARNING` at startup |
 | `EVIDENCE_S3_BUCKET`, `EVIDENCE_S3_REGION` | unset | evidence in S3 instead of the `evidence-data` volume (credentials from the instance role). The region is required with a bucket; the deploy stops without it |
 | `EVIDENCE_S3_KMS_KEY_ID` | unset (SSE-S3) | KMS key for SSE-KMS encryption of evidence objects |
 | `CLOUDFLARE_ONLY` | `false` | `true`: the gateway refuses requests that did not come through Cloudflare |
@@ -233,6 +234,16 @@ Also on Cloudflare: Turnstile (the site key and secret above), Realtime TURN
 front of `chizzyapi.itsyash.space/admin/api/*` and `chizzy.itsyash.space/admin`
 (free for small teams), so the admin console is not on the open internet even
 though it also needs `ADMIN_TOKEN`.
+
+Without Access or `ADMIN_ALLOWED_IPS` (the Render service today), the admin
+API is guarded by `ADMIN_TOKEN` and two failure limits per instance
+(`backend/src/http/constants.ts`): 10 bad tokens per IP lock that IP out for
+15 minutes, and 100 bad tokens across all IPs lock every admin request out
+(the right token too, 429 with `Retry-After`) for the rest of that hour,
+logged once at error as `admin_auth_budget_exhausted`. That bounds a
+distributed guesser to 2,400 guesses a day against a 64-character token; the
+price is that the owner can be locked out for up to an hour during an
+attack. What to do then is in docs/OPERATIONS.md "Admin API".
 
 ## Cloudflare Pages (free, commercial use allowed)
 
