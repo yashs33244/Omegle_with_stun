@@ -29,7 +29,7 @@ describe("hello and matching", () => {
     c.on("queue:waiting", () => order.push("queue:waiting"));
     const ack = await sendHello(c, hello());
     order.push("ack");
-    expect(ack).toEqual({ ok: true, coins: 100, iceServers: [{ urls: ts.config.stunUrls }], mode: "preview", genderFilter: "all" });
+    expect(ack).toEqual({ ok: true, coins: 0, iceServers: [{ urls: ts.config.stunUrls }], mode: "preview", genderFilter: "all" });
     await next(c, "queue:waiting").catch(() => undefined);
     expect(order[0]).toBe("ack");
   });

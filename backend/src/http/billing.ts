@@ -3,7 +3,7 @@
  * router, which handles everything under /api):
  *   GET  /packs    public catalogue: packs, cost per day, Razorpay key id, enabled flags
  *   GET  /wallet   coins and active unlocks           (session)
- *   POST /orders   {packId} -> Razorpay order          (session)
+ *   POST /orders   {packId} -> Razorpay order          (session) limited per IP and per device
  *   POST /verify   {orderId, paymentId, signature}     (session) credits the pack once; limited per device
  *   POST /unlock   {feature, days}                     (session) spends coins
  *   POST /webhook  Razorpay payment.captured, raw body + X-Razorpay-Signature
@@ -46,6 +46,9 @@ export function billingApiRouter(deps: BillingApiDeps): Router {
   const clock = deps.clock ?? Date.now;
   const reads = new IpBuckets({ capacity: 30, refillPerSec: 0.5 }, clock);
   const writes = new IpBuckets({ capacity: 10, refillPerSec: 0.1 }, clock);
+  // Every order is a Razorpay API call and a stored record kept up to a day
+  // unpaid, so one device gets a handful, then one every five minutes.
+  const orders = new IpBuckets({ capacity: 5, refillPerSec: 1 / 300 }, clock);
   const verifies = new IpBuckets({ capacity: 20, refillPerSec: 1 }, clock);
   const webhooks = new IpBuckets({ capacity: 60, refillPerSec: 1 }, clock);
   const ipOf = (req: Request) => requestIp(req, deps.proxyIpHeader);
@@ -68,6 +71,7 @@ export function billingApiRouter(deps: BillingApiDeps): Router {
     next();
   };
   const deviceOf = (res: Response) => res.locals.deviceId as string;
+  const byDevice = (_req: Request, res: Response) => deviceOf(res);
 
   const limited =
     (buckets: IpBuckets, keyOf: (req: Request, res: Response) => string | null = ipOf): RequestHandler =>
@@ -84,7 +88,7 @@ export function billingApiRouter(deps: BillingApiDeps): Router {
     res.json({ ok: true, ...(await deps.billing.walletView(deviceOf(res))) });
   });
 
-  router.post("/orders", noStore, limited(writes), session, json, async (req, res) => {
+  router.post("/orders", noStore, limited(writes), session, limited(orders, byDevice), json, async (req, res) => {
     if (!deps.billing.enabled) return sendError(res, "billing_disabled");
     const body = billingOrderRequestSchema.safeParse(req.body);
     if (!body.success) return sendError(res, "invalid");
@@ -93,7 +97,7 @@ export function billingApiRouter(deps: BillingApiDeps): Router {
 
   // Keyed by device, not IP: a payer behind a carrier NAT must be able to retry
   // /verify until it answers, whatever the neighbours are doing.
-  router.post("/verify", noStore, session, limited(verifies, (_req, res) => deviceOf(res)), json, async (req, res) => {
+  router.post("/verify", noStore, session, limited(verifies, byDevice), json, async (req, res) => {
     if (!deps.billing.enabled) return sendError(res, "billing_disabled");
     const body = billingVerifyRequestSchema.safeParse(req.body);
     if (!body.success) return sendError(res, "invalid");

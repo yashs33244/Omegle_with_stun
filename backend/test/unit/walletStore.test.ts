@@ -5,7 +5,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, test } from "bun:test";
 import Redis from "ioredis";
-import { LEDGER_MAX, MemoryWalletStore, RedisWalletStore, type WalletStore } from "../../src/billing/WalletStore";
+import { LEDGER_MAX, MemoryWalletStore, ORDERS_MAX, RedisWalletStore, UNPAID_ORDER_TTL_MS, type WalletStore } from "../../src/billing/WalletStore";
 import type { BillingOrderRecord, WalletLedgerEntry } from "../../src/protocol";
 import { MemoryStore } from "../../src/store/MemoryStore";
 
@@ -96,16 +96,57 @@ function runContract(name: string, make: () => Promise<WalletStore>, opts: { ski
 
 runContract("MemoryWalletStore", async () => new MemoryWalletStore(new MemoryStore()));
 
+describe("MemoryWalletStore orders", () => {
+  test("an unpaid order is gone after UNPAID_ORDER_TTL_MS; a paid one stays", async () => {
+    let now = 1_000_000;
+    const store = new MemoryWalletStore(new MemoryStore(), () => now);
+    const unpaid = order(`order_${randomUUID()}`, now);
+    const paid = { ...order(`order_${randomUUID()}`, now), status: "paid" as const, paymentId: "pay_1", paidAt: now };
+    await store.putOrder(unpaid);
+    await store.putOrder(paid);
+    now += UNPAID_ORDER_TTL_MS - 1;
+    expect(await store.getOrder(unpaid.orderId)).toEqual(unpaid);
+    now += 1;
+    expect(await store.getOrder(unpaid.orderId)).toBeNull();
+    expect((await store.listOrders(10)).map((o) => o.orderId)).toEqual([paid.orderId]);
+    now += 400 * 24 * 60 * 60_000;
+    expect(await store.getOrder(paid.orderId)).toEqual(paid);
+  });
+
+  test("past ORDERS_MAX the oldest unpaid orders are evicted first; paid ones never are", async () => {
+    const store = new MemoryWalletStore(new MemoryStore(), () => 5_000);
+    const paid = { ...order(`order_${randomUUID()}`, 1), status: "paid" as const, paymentId: "pay_1", paidAt: 2 };
+    await store.putOrder(paid);
+    const first = order(`order_${randomUUID()}`, 2);
+    await store.putOrder(first);
+    for (let i = 0; i < ORDERS_MAX; i++) await store.putOrder(order(`order_${randomUUID()}`, 10 + i));
+    expect(await store.getOrder(first.orderId)).toBeNull();
+    expect(await store.getOrder(paid.orderId)).toEqual(paid);
+    expect(await store.listOrders(ORDERS_MAX + 10)).toHaveLength(ORDERS_MAX);
+  });
+});
+
 const clients: Redis[] = [];
 afterAll(async () => {
   for (const c of clients) await c.quit();
 });
-runContract(
-  "RedisWalletStore",
-  async () => {
-    const redis = new Redis(url!, { maxRetriesPerRequest: 2 });
-    clients.push(redis);
-    return new RedisWalletStore(new MemoryStore(), redis, `test:${randomUUID()}:wallet:`);
-  },
-  { skip: !url },
-);
+function redisStore() {
+  const redis = new Redis(url!, { maxRetriesPerRequest: 2 });
+  clients.push(redis);
+  const prefix = `test:${randomUUID()}:wallet:`;
+  return { redis, prefix, store: new RedisWalletStore(new MemoryStore(), redis, prefix) };
+}
+runContract("RedisWalletStore", async () => redisStore().store, { skip: !url });
+
+describe.skipIf(!url)("RedisWalletStore orders", () => {
+  test("an unpaid order carries the TTL; marking it paid removes it", async () => {
+    const { redis, prefix, store } = redisStore();
+    const o = order(`order_${randomUUID()}`, 1000);
+    await store.putOrder(o);
+    const ttl = await redis.pttl(`${prefix}order:${o.orderId}`);
+    expect(ttl).toBeGreaterThan(UNPAID_ORDER_TTL_MS - 5_000);
+    expect(ttl).toBeLessThanOrEqual(UNPAID_ORDER_TTL_MS);
+    await store.putOrder({ ...o, status: "paid", paymentId: "pay_1", paidAt: 2000 });
+    expect(await redis.pttl(`${prefix}order:${o.orderId}`)).toBe(-1);
+  });
+});

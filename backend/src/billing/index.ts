@@ -7,7 +7,7 @@ import type Redis from "ioredis";
 import type { Config } from "../config";
 import type { FlagsReader } from "../flags/flags";
 import type { Logger } from "../logger";
-import type { WalletView } from "../protocol";
+import type { Flags, WalletView } from "../protocol";
 import type { MatchStore } from "../store/MatchStore";
 import { BillingService } from "./BillingService";
 import { FakeRazorpay, RazorpayClient, type FetchFn, type RazorpayGateway } from "./razorpay";
@@ -36,7 +36,7 @@ export interface BillingFeatureDeps {
 export function createBilling(deps: BillingFeatureDeps): BillingService {
   const { config, logger } = deps;
   const durable = deps.walletStore !== undefined || deps.redis !== undefined;
-  const store = deps.walletStore ?? (deps.redis ? new RedisWalletStore(deps.store, deps.redis) : new MemoryWalletStore(deps.store));
+  const store = deps.walletStore ?? (deps.redis ? new RedisWalletStore(deps.store, deps.redis) : new MemoryWalletStore(deps.store, deps.now));
   let gateway: RazorpayGateway | null;
   if (deps.gateway !== undefined) gateway = deps.gateway;
   else if (config.razorpayFake) {
@@ -59,6 +59,19 @@ export function createBilling(deps: BillingFeatureDeps): BillingService {
   if (gateway && !config.razorpayWebhookSecret && !config.razorpayFake) {
     logger.warn("BILLING WARNING: RAZORPAY_WEBHOOK_SECRET is not set; only the Checkout success path credits coins");
   }
+  // Device ids are client-chosen, so starting coins that cover a day of the
+  // filter are a free unlock per incognito window. Checked now (defaults) and
+  // whenever the flags change, which includes the first load from the store.
+  const freeUnlockCheck = (flags: Flags) => {
+    if (flags.premium_filters_enabled && config.initialCoins >= flags.gender_filter_coins_per_day) {
+      logger.warn(
+        { initialCoins: config.initialCoins, costPerDay: flags.gender_filter_coins_per_day },
+        "BILLING WARNING: initialCoins covers a day of gender_filter; every fresh device id gets a free unlock",
+      );
+    }
+  };
+  freeUnlockCheck(deps.flags.current());
+  deps.flags.onChange(freeUnlockCheck);
   return new BillingService({
     store,
     flags: deps.flags,

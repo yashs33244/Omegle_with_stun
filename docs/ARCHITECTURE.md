@@ -66,7 +66,7 @@ What each outside party does:
 | Cloudflare proxy | TLS at the edge, real client IP and country headers; the gateway trusts `CF-Connecting-IP` and `CF-IPCountry` only from Cloudflare IP ranges | `deploy/nginx/gateway.conf:64-89`, `TRUST_CLOUDFLARE` in `backend/src/config.ts:52` |
 | Cloudflare Turnstile | Bot check on `POST /api/session` (and the takedown form); verified server side with a 5 s timeout, fail closed | `backend/src/session/SessionService.ts:82-93`, `backend/src/session/constants.ts:84-86` |
 | Cloudflare Realtime TURN | Relay for calls that cannot connect directly and for "Hide my IP"; per-call short-lived credentials from the TURN API; egress read from GraphQL analytics for the spend cap | `backend/src/turn/cloudflare.ts`, `backend/src/turn/spendPoller.ts` |
-| Razorpay | Coin packs (INR). Orders created server side, credited once per payment id from either the Checkout verify call or the `payment.captured` webhook | `backend/src/billing/BillingService.ts:1-15` |
+| Razorpay | Coin packs (INR). Orders created server side, credited once per order (atomic claim) from either the Checkout verify call or the `payment.captured` webhook | `backend/src/billing/BillingService.ts:1-15` |
 | Sentry | Error reporting only, backend and frontend; no tracing, all data collection flags off, events scrubbed | `backend/src/observability/sentry.ts`, `new-frontend/src/lib/observability.ts` |
 | PostHog | Seven funnel events from the frontend, memory persistence, no autocapture or session recording | `new-frontend/src/lib/observability.ts` |
 | GitHub Actions | CI on every PR; build and deploy on push to `main`; keep-alive and canary crons; optional Cloudflare Pages deploy | `.github/workflows/*.yml` |
@@ -241,7 +241,7 @@ Notes on the sequence, with sources:
 - `call:start` is emitted only after the TURN credential fetch, which runs outside the lock; it is then re-checked under the lock so `call:start` can never follow `match:ended` (`MatchService.ts:864-882`). The Cloudflare TURN API call has a 3 s timeout (`turn/constants.ts:51`); on any failure the call proceeds STUN only (`turn/TurnService.ts:139-143`).
 - `rtc:signal` is relayed unchanged, only to the other member of the sender's active room; no lock, a read-only membership check (`MatchService.ts:537-541`). SDP is capped at 20 000 chars and a candidate at 2 000 (`protocol.ts:58-59`).
 - Chat is capped at 500 chars (`protocol.ts:56`). The guard hides contact details for `chatGuardMs = 2 min` after call start and sends `safety:nudge` to both sides at most once per kind per room per minute (`match/matchConfig.ts:112`, `safety/constants.ts:45`).
-- Coins: `coinsPerInterval = 5` every `coinIntervalMs = 60 000` of connected call, starting balance `initialCoins = 100`; friends after `friendAfterMs = 5 min` (`config.ts:373-376`). Rewards are driven by the sweeper from stored room state, so they continue whichever replica activated the room (`MatchService.ts:751-756`).
+- Coins: `coinsPerInterval = 5` every `coinIntervalMs = 60 000` of connected call, starting balance `initialCoins = 0` (device ids are client-chosen, so a starting balance that covers a day of the gender filter would be a free unlock per fresh device); friends after `friendAfterMs = 5 min` (`config.ts:378-381`). Rewards are driven by the sweeper from stored room state, so they continue whichever replica activated the room (`MatchService.ts:751-756`).
 - Pair blocks: decline or accept timeout 30 s, skip 5 min multiplied by the pair's skip count, report 24 h; the record is kept 24 h so repeated skips escalate (`config.ts:377-379`, `MatchService.ts:48-49`).
 
 ### 2.4 Session and room state machines
@@ -404,7 +404,7 @@ erDiagram
 | TURN | `chizzy:turn:cache:{deviceId}` / `hit:{key}:{window}` / `ip:{deviceId}` | ICE servers / counters / IP hash | `TURN_CACHE_SECONDS` 300 s / 1 h window / 24 h | `turn/store.ts:7-11`, `turn/constants.ts:21-24` |
 | TURN | `chizzy:lock:turn-spend` | poller lease | 0.9 x 15 min, never released | `turn/constants.ts:69-71` |
 | Safety | `chizzy:signals:risk:{deviceId}` / `calls:{deviceId}` / `lowpri` | counter / hash / zset | 24 h sliding / 7 d / per entry | `safety/signals.ts:7-10`, `safety/constants.ts:39-41` |
-| Wallet | `chizzy:wallet:ledger:{deviceId}` / `unlock:{deviceId}` / `once:{key}` | list / hash feature -> expiresAt / idempotency marker | none / none / kept for good | `billing/WalletStore.ts:10-13` |
+| Wallet | `chizzy:wallet:ledger:{deviceId}` / `unlock:{deviceId}` / `once:order:{orderId}` / `order:{orderId}` | list / hash feature -> expiresAt / idempotency marker / JSON order | none / none / kept for good / 24 h while unpaid (`UNPAID_ORDER_TTL_MS`), kept for good once paid | `billing/WalletStore.ts:10-16` |
 
 Raw IPs and fingerprints are never stored by the session gate; it stores salted hashes derived from `SESSION_SECRET` (`session/constants.ts:60-69`). Admins see a 16-hex-char HMAC pseudonym of a device id, never the id (`enforcement/EnforcementService.ts:204-207`).
 

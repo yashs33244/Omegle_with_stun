@@ -323,6 +323,11 @@ export interface Config extends MatchConfig {
   /** Coins are awarded once per full interval of active call. */
   coinIntervalMs: number;
   coinsPerInterval: number;
+  /**
+   * Balance a brand-new device starts with. Device ids are client-chosen, so
+   * anything at or above `gender_filter_coins_per_day` hands every fresh
+   * device (incognito window) a free unlock; billing warns when that happens.
+   */
   initialCoins: number;
   /** Continuous call time after which the two devices become friends. */
   friendAfterMs: number;
@@ -417,7 +422,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     instanceTtlMs: 15_000,
     coinIntervalMs: 60_000,
     coinsPerInterval: 5,
-    initialCoins: 100,
+    initialCoins: 0,
     friendAfterMs: 5 * 60_000,
     declineBlockMs: 30_000,
     skipBlockMs: 5 * 60_000,
