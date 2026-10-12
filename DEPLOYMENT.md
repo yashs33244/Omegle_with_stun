@@ -132,6 +132,9 @@ launch build"); the backend itself also refuses to start without them.
 | `LOG_LEVEL` | `info` | pino log level |
 | `MAX_CONNECTIONS_PER_IP` | `10` | Socket.IO connections allowed per client IP on each backend replica. Raise it if many users share one address (office NAT, mobile carrier NAT). Needs the real client IP, see [Behind Cloudflare](#cloudflare-in-front) |
 | `CONNECT_BURST_PER_IP`, `CONNECT_RATE_PER_IP_PER_SEC` | `20`, `1` | new socket connections per client IP on each replica: a burst, then a steady rate per second. Raise both only for load tests |
+| `MAX_CONNECTIONS_TOTAL` | `2000` | open Socket.IO connections on each replica, all clients together; the next upgrade is answered `503 server_full`. About 17 KiB of heap per waiting socket (measured, [docs/LIMITS.md](docs/LIMITS.md#instance-wide-limits-and-shedding)), sized for a 512 MB instance |
+| `SESSION_RATE_TOTAL_PER_SEC` | `20` | `POST /api/session` per second on each replica, all clients together (a bucket of 5 s worth); over it `503 closed` with `Retry-After` |
+| `SHED_HEAP_LIMIT_MB` | unset | heap budget for overload shedding: above 80% of it, or with event-loop delay p99 over 200 ms, a replica refuses new sockets and sessions and `/readyz` answers 503 while live calls continue. Unset: V8's heap limit, capped at 60% of the container's memory |
 | `MATCH_ACCEPT_TIMEOUT_MS` | `30000` | how long both users have to accept a match |
 | `SHUTDOWN_GRACE_MS` | `10000` | how long a replica drains on stop; keep it under the 15 s `stop_grace_period` in `docker-compose.yml` |
 | `STUN_URLS` | Google public STUN | comma list |

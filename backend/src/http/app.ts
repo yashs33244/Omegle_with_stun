@@ -22,6 +22,12 @@ export interface AppDeps {
   metricsRequireToken: boolean;
   /** How long /readyz waits for the store before answering 503. */
   readyTimeoutMs?: number;
+  /**
+   * True while the instance sheds new work (shed/Shedder.ts): /readyz answers
+   * 503 so a balancer stops sending new clients, /healthz stays 200 so a busy
+   * instance is not restarted under its live calls.
+   */
+  overloaded: () => boolean;
   /** /api/session, /api/config and CORS for /api (session gate). */
   session?: Router;
   /** Mounts feature routes (public API, admin API) before the 404 handler. */
@@ -66,6 +72,7 @@ export function createApp(deps: AppDeps): Express {
   let ready: Promise<void> | undefined;
   app.get("/readyz", async (_req, res) => {
     res.set("Cache-Control", "no-store");
+    if (deps.overloaded()) return void res.status(503).json({ status: "overloaded" });
     ready ??= withTimeout(deps.store.ping(), deps.readyTimeoutMs ?? 1000).finally(() => {
       ready = undefined;
     });
