@@ -43,9 +43,12 @@ in-app report button or the takedown form, not here.
   drops them. With `CLOUDFLARE_ONLY=true` it refuses public traffic that did
   not come through Cloudflare (DEPLOYMENT.md, "Cloudflare in front").
 - **Admin console.** `/admin/api/*` requires `Authorization: Bearer
-  ADMIN_TOKEN` (required in production; off when unset elsewhere),
-  optionally an IP allowlist
-  (`ADMIN_ALLOWED_IPS`), and should sit behind Cloudflare Access. Every admin
+  ADMIN_TOKEN` (32+ characters, required in production; off when unset
+  elsewhere), optionally an IP/CIDR allowlist (`ADMIN_ALLOWED_IPS`), and
+  should sit behind Cloudflare Access. Bad tokens are limited per address
+  (IPv4 address, IPv6 /64) and instance-wide: once 100 fail in an hour,
+  every address that failed is locked out for the rest of the hour while
+  clean addresses are still judged by the token. Every admin
   action and every evidence access is written to an audit log. Responses are
   `Cache-Control: no-store`. Evidence is shown blurred and greyscale by
   default. Admins see device pseudonyms keyed by `PSEUDONYM_SALT`, not raw

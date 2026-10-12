@@ -87,3 +87,10 @@ export interface DeviceNetwork {
   ip: string | null;
   country: string | null;
 }
+
+/** A ban carried to the banned device's address for NETWORK_BAN_TTL_MS (see EnforcementService.activeForNetwork). */
+export interface NetworkBan {
+  restrictionId: string;
+  /** Epoch ms when the address is free again: the earlier of the ban's end and NETWORK_BAN_TTL_MS. */
+  until: number;
+}

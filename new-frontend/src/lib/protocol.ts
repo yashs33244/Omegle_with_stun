@@ -296,6 +296,7 @@ export type ErrorCode =
   | "banned" // an active restriction blocks matching; the ack carries `restriction`
   | "matching_closed" // kill switch or outside staffed hours
   | "session_required" // missing, invalid or expired session token (handshake)
+  | "session_expired" // the session token expired on a connected socket; mint a new one and reconnect
   | "region_blocked"
   | "premium_required" // genderFilter other than "all" needs an active gender_filter unlock (see /api/billing)
   | "internal";

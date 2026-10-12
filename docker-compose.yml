@@ -109,9 +109,11 @@ services:
       TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
       TURNSTILE_DISABLED: ${TURNSTILE_DISABLED:-false}
       # Per client IP and per /24 (or /48) network limits on POST /api/session,
-      # hourly match caps per IP and per device, and skips per minute per device.
+      # new device ids per address per day, hourly match caps per IP and per
+      # device, and skips per minute per device.
       SESSION_RATE_PER_IP_PER_MIN: ${SESSION_RATE_PER_IP_PER_MIN:-}
       SESSION_RATE_PER_NETWORK_PER_MIN: ${SESSION_RATE_PER_NETWORK_PER_MIN:-}
+      SESSION_NEW_DEVICES_PER_NETWORK_PER_DAY: ${SESSION_NEW_DEVICES_PER_NETWORK_PER_DAY:-}
       MATCH_CAP_PER_DEVICE_PER_HOUR: ${MATCH_CAP_PER_DEVICE_PER_HOUR:-}
       MATCH_CAP_PER_IP_PER_HOUR: ${MATCH_CAP_PER_IP_PER_HOUR:-}
       MATCH_CAP_PER_DEVICE_PER_MIN: ${MATCH_CAP_PER_DEVICE_PER_MIN:-}

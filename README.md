@@ -267,8 +267,8 @@ Empty values mean "use the default". Compose passes every variable below.
 | TURN_URLS, TURN_SECRET, TURN_USERNAME, TURN_CREDENTIAL, TURN_TTL_SECONDS | unset | self-hosted TURN only (not part of this stack) |
 | SENTRY_DSN / SENTRY_DSN_FRONTEND | unset | backend DSN / DSN handed to the SPA |
 | POSTHOG_KEY / POSTHOG_HOST | unset | handed to the SPA (cookieless, IP capture off) |
-| ADMIN_TOKEN | unset | bearer token for `/admin/api/*` (24+ characters); required in production, unset elsewhere keeps the admin API off |
-| ADMIN_ALLOWED_IPS | unset | optional comma list of IPs or CIDRs for the admin API |
+| ADMIN_TOKEN | unset | bearer token for `/admin/api/*` (32+ characters in production, 24+ elsewhere); required in production, unset elsewhere keeps the admin API off |
+| ADMIN_ALLOWED_IPS | unset | optional comma list of IPs and CIDR blocks for the admin API; production logs a warning when it is empty |
 | PSEUDONYM_SALT | derived from ADMIN_TOKEN | salt for the device pseudonyms admins see (16+ characters); set it once in production |
 | EVIDENCE_DIR | compose: `/data/evidence` | the `evidence-data` volume, shared by the replicas |
 | EVIDENCE_S3_BUCKET / EVIDENCE_S3_REGION | unset | store evidence in S3 instead (instance role credentials); the region is required with a bucket |

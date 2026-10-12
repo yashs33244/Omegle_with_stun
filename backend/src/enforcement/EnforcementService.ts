@@ -56,6 +56,7 @@ import {
   INDEX,
   KEY,
   LAST_ROOM_GRACE_MS,
+  NETWORK_BAN_TTL_MS,
   NETWORK_TTL_MS,
   PERMANENT_SCORE,
   PSEUDONYM_HEX_CHARS,
@@ -90,6 +91,7 @@ import type {
   DeviceNetwork,
   DeviceStats,
   LastRoom,
+  NetworkBan,
   StoredAppeal,
   StoredReport,
   StoredRestriction,
@@ -234,7 +236,8 @@ export class EnforcementService {
   }
 
   /**
-   * Network facts for CSAM packets, kept 24 h. The session lane calls this when it
+   * Network facts for CSAM packets, kept 24 h; a ban placed meanwhile is also
+   * carried to the address (banNetwork). The session lane calls this when it
    * creates a session (it sees the client IP and the Cloudflare country).
    */
   async noteDeviceNetwork(deviceId: string, ip: string | null, country: string | null): Promise<void> {
@@ -288,6 +291,23 @@ export class EnforcementService {
     }
     const found = await this.activeOf([...ids]);
     return found ? toPublic(found) : null;
+  }
+
+  /**
+   * A ban recorded against this address (IPv4 address or IPv6 /64, by salted
+   * hash) within NETWORK_BAN_TTL_MS, or null. Checked by POST /api/session so
+   * a banned person cannot mint a fresh device id from the same connection.
+   * Only `ban` restrictions are carried (restrict); a lifted ban stops
+   * counting at once. The view is not the stranger's to appeal or to see
+   * evidence of, and ends when the address is free again.
+   */
+  async activeForNetwork(ip: string): Promise<Restriction | null> {
+    const mark = await this.store.getValue<NetworkBan>(KEY.networkBan(this.network(ip)));
+    const now = this.now();
+    if (!mark || mark.until <= now) return null;
+    const r = await this.store.get<StoredRestriction>("restriction", mark.restrictionId);
+    if (!r || r.kind !== "ban" || !isActive(r, now)) return null;
+    return { ...toPublic(r), until: mark.until, evidenceAvailable: false, appealable: false };
   }
 
   private async activeOf(ids: string[]): Promise<StoredRestriction | null> {
@@ -484,6 +504,7 @@ export class EnforcementService {
     if (r.fingerprintHash && !warning) {
       await this.store.addToIndex(KEY.restrictionsByFingerprint(r.fingerprintHash), r.id, now);
     }
+    if (r.kind === "ban") await this.banNetwork(p.deviceId, r, now);
     if (p.report) {
       p.report.restrictionId = r.id;
       await this.store.put("report", p.report.id, p.report, p.report.createdAt);
@@ -498,6 +519,15 @@ export class EnforcementService {
     const view = toPublic(r);
     await this.sink?.restrictionApplied(p.deviceId, view);
     return view;
+  }
+
+  /** Carries a ban to the address the device last minted a session on (noted 24 h by noteDeviceNetwork). */
+  private async banNetwork(deviceId: string, r: StoredRestriction, now: number): Promise<void> {
+    const ip = (await this.store.getValue<DeviceNetwork>(KEY.network(deviceId)))?.ip;
+    if (!ip) return;
+    const until = Math.min(r.until ?? Number.MAX_SAFE_INTEGER, now + NETWORK_BAN_TTL_MS);
+    const mark: NetworkBan = { restrictionId: r.id, until };
+    await this.store.setValue(KEY.networkBan(this.network(ip)), mark, until - now);
   }
 
   private async lift(r: StoredRestriction): Promise<void> {

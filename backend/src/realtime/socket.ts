@@ -193,6 +193,8 @@ interface AttachDeps {
    * ConnectionGate applies in allowRequest on the HTTP upgrade.
    */
   handshake?: Parameters<AppServer["use"]>[0];
+  /** Clock for the session-expiry timer; injectable for tests. */
+  now?: () => number;
 }
 
 export interface Handlers {
@@ -207,6 +209,7 @@ export interface Handlers {
 export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
   const { config, service, logger, metrics, spark, captions } = deps;
   const newRateLimiter = deps.newRateLimiter ?? (() => new SocketRateLimiter());
+  const now = deps.now ?? Date.now;
   /** Open sockets per session (device id from the handshake token); unused when the gate is off. */
   const perSession = new Map<string, number>();
   const running = new Set<Promise<void>>();
@@ -277,6 +280,19 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
       clearTimeout(helloDeadline);
       helloDeadline = undefined;
     };
+    // The handshake checked the session token once; the socket must not
+    // outlive it. At its expiry the client is told to mint a new session
+    // (the packet is flushed before the close), then dropped.
+    const expiresAt = handshakeSession(socket)?.expiresAt;
+    let sessionExpiry: NodeJS.Timeout | undefined;
+    if (expiresAt !== undefined) {
+      sessionExpiry = setTimeout(() => {
+        sessionExpiry = undefined;
+        log.debug("session token expired");
+        socket.emit("server:error", { code: "session_expired", message: "session token expired" });
+        socket.disconnect(true);
+      }, Math.max(0, expiresAt - now()));
+    }
 
     const fail = (event: string, code: ErrorCode, ack?: (res: unknown) => void, message?: string) => {
       if (ack) ack({ ok: false, error: code, ...(message ? { message } : {}) });
@@ -369,6 +385,7 @@ export function attachHandlers(io: AppServer, deps: AttachDeps): Handlers {
     on("caption:segment", "signal", captionSegmentSchema, (p) => captions.segment(socket.id, p));
 
     socket.on("disconnect", (reason) => {
+      clearTimeout(sessionExpiry);
       helloSeen();
       metrics.connectedSockets.dec();
       captions.forget(socket.id);

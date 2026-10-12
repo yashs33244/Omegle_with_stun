@@ -11,7 +11,7 @@ import type { WalletStore } from "./billing/WalletStore";
 import { CaptionRelay } from "./captions/CaptionRelay";
 import { createEnforcement, type EnforcementOptions, type EnforcementService } from "./enforcement";
 import { FlagsReader, MemoryFlagsStore, type FlagsStore } from "./flags/flags";
-import { adminApiRouter } from "./http/admin";
+import { adminApiRouter, adminWarnings } from "./http/admin";
 import { billingApiRouter } from "./http/billing";
 import { createApp } from "./http/app";
 import {
@@ -66,6 +66,8 @@ export interface ServerDeps {
   photoBudgetBytes?: number;
   /** Overload signal source; tests inject one and step `ChizzyServer.load` with tick(). Defaults to the process sampler. */
   loadSampler?: LoadSampler;
+  /** Clock for session tokens, the handshake and the socket session-expiry timer; tests inject one. */
+  now?: () => number;
 }
 
 export interface ChizzyServer {
@@ -125,6 +127,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     redis: deps.redis,
     fetch: deps.fetch,
     restrictions: deps.restrictions ?? enforcement,
+    now: deps.now,
   });
   for (const warning of sessionWarnings(config)) logger.warn(`SESSION GATE WARNING: ${warning}`);
   // Socket.IO exists only after the HTTP app, which needs billing: late-bound.
@@ -171,6 +174,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     },
   });
   if (config.nodeEnv === "production" && !config.metricsToken) logger.warn("METRICS_TOKEN is unset: GET /metrics answers 404");
+  for (const warning of adminWarnings(config)) logger.warn(`ADMIN API WARNING: ${warning}`);
   const httpServer = createHttpServer({ connectionsCheckingInterval: HTTP_CONNECTIONS_CHECK_INTERVAL_MS }, app);
   // Node's defaults (requestTimeout 300 s, unlimited requests per socket) let
   // one slow client hold a socket for minutes; see http/constants.ts.
@@ -238,6 +242,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     logger,
     metrics,
     handshake: config.requireSession ? session.handshake : undefined,
+    now: deps.now,
   });
   const stopBroadcast = session.startBroadcast(io);
   // listen() waits for this, so no client connects before the first heartbeat.

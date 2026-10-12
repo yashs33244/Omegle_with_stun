@@ -4,9 +4,9 @@ import { readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { ReportInput } from "../../src/enforcement/EnforcementService";
 import { parseEvidenceFrame } from "../../src/enforcement/evidence";
-import { ADMIN_LIST_LIMIT, APPEALS_PER_IP_PER_HOUR, AUTO_PAUSE_MS, DAY, MINUTE, YEAR } from "../../src/enforcement/constants";
+import { ADMIN_LIST_LIMIT, APPEALS_PER_IP_PER_HOUR, AUTO_PAUSE_MS, DAY, MINUTE, NETWORK_BAN_TTL_MS, YEAR } from "../../src/enforcement/constants";
 import type { StoredReport, StoredRestriction } from "../../src/enforcement/types";
-import { RESTRICTION_DURATIONS_MS, type ReportReason } from "../../src/protocol";
+import { RESTRICTION_DURATIONS_MS, type AdminReportAction, type ReportReason } from "../../src/protocol";
 import { harness, jpegDataUrl, type Harness } from "../enforcementFixtures";
 
 let h: Harness;
@@ -444,6 +444,50 @@ describe("restrictions, fingerprints and appeals", () => {
     expect(found).not.toBeNull();
     expect(await h.service.restrictionView(found!.id, fresh)).not.toBeNull();
     expect(await h.service.activeForDevice(randomUUID())).toBeNull();
+  });
+
+  test("a ban, never a pause or a warning, is carried to the device's address (IPv4 /32, IPv6 /64) for NETWORK_BAN_TTL_MS", async () => {
+    h = harness();
+    const act = async (device: string, o: Partial<AdminReportAction> = {}) => {
+      const res = await h.service.actOnReport((await report(device, "spam")).reportId, { action: "restrict", ...o }, actor);
+      if (!res.ok) throw new Error("restrict failed");
+      return res.value.restriction!;
+    };
+    // Warnings and pauses stay on the device.
+    const paused = randomUUID();
+    await h.service.noteDeviceNetwork(paused, "203.0.113.30", null);
+    await h.service.actOnReport((await report(paused, "spam")).reportId, { action: "warn" }, actor);
+    expect((await act(paused, { durationMs: RESTRICTION_DURATIONS_MS[0] })).kind).toBe("pause");
+    expect(await h.service.activeForNetwork("203.0.113.30")).toBeNull();
+
+    const banned = randomUUID();
+    await h.service.noteDeviceNetwork(banned, "2001:db8:5:6:aaaa::1", "IN");
+    const ban = await act(banned, { durationMs: RESTRICTION_DURATIONS_MS[2] });
+    expect(ban.kind).toBe("ban");
+    // Same /64, another host: refused, with a view that is not the stranger's to appeal.
+    expect(await h.service.activeForNetwork("2001:db8:5:6:bbbb::2")).toEqual({
+      ...ban,
+      until: h.clock.now + NETWORK_BAN_TTL_MS,
+      evidenceAvailable: false,
+      appealable: false,
+    });
+    expect(await h.service.activeForNetwork("2001:db8:5:7::1")).toBeNull();
+    // Only a salted hash of the /64 is stored.
+    expect(await h.store.getValue(`ban-net:${h.service.network("2001:db8:5:6::9")}`)).toMatchObject({ restrictionId: ban.id });
+    h.clock.now += NETWORK_BAN_TTL_MS;
+    expect(await h.service.activeForNetwork("2001:db8:5:6:bbbb::2")).toBeNull();
+    expect((await h.service.activeForDevice(banned))!.id).toBe(ban.id); // the device ban itself goes on
+
+    // An overturned ban stops counting for the address at once.
+    const other = randomUUID();
+    await h.service.noteDeviceNetwork(other, "198.51.100.40", null);
+    const permanent = await act(other, { durationMs: null });
+    expect((await h.service.activeForNetwork("198.51.100.40"))!.id).toBe(permanent.id);
+    expect(await h.service.activeForNetwork("198.51.100.41")).toBeNull(); // IPv4 is per address, not per /24
+    const appeal = await h.service.submitAppeal({ restrictionId: permanent.id, deviceId: other, text: "please review this" }, null);
+    if (!appeal.ok) throw new Error(appeal.error);
+    expect((await h.service.decideAppeal(appeal.appealId, "overturn", undefined, actor)).ok).toBe(true);
+    expect(await h.service.activeForNetwork("198.51.100.40")).toBeNull();
   });
 
   test("one appeal per restriction; overturning lifts it", async () => {

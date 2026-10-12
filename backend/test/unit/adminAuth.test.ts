@@ -11,7 +11,8 @@ import pino from "pino";
 import type { BillingService } from "../../src/billing/BillingService";
 import type { EnforcementService } from "../../src/enforcement/EnforcementService";
 import type { FlagsReader } from "../../src/flags/flags";
-import { adminApiRouter, type AdminApiDeps } from "../../src/http/admin";
+import { adminAllowList, adminApiRouter, adminWarnings, type AdminApiDeps } from "../../src/http/admin";
+import { ADMIN_GLOBAL_FAILURE_WINDOW_MS, ADMIN_MAX_AUTH_FAILURES_GLOBAL } from "../../src/http/constants";
 
 const TOKEN = "admin-token-0123456789-abcdefghij";
 
@@ -147,16 +148,6 @@ describe("admin router auth", () => {
     expect((await fetch(`${base}/queue`, { headers: { authorization: `Bearer ${TOKEN}` } })).status).toBe(500);
   });
 
-  test("a full failure map evicts other addresses before a locked-out one", async () => {
-    const base = await listen(build({ proxyIpHeader: "x-real-ip", maxFailureKeys: 3 }));
-    const from = (ip: string, token = "nope") => ({ authorization: `Bearer ${token}`, "x-real-ip": ip });
-    for (let i = 0; i < 10; i++) await fetch(`${base}/queue`, { headers: from("203.0.113.1") });
-    for (let i = 2; i < 20; i++) {
-      expect((await fetch(`${base}/queue`, { headers: from(`203.0.113.${i}`) })).status).toBe(401);
-    }
-    expect((await fetch(`${base}/queue`, { headers: from("203.0.113.1", TOKEN) })).status).toBe(429);
-  });
-
   test("a lockout covers the whole IPv6 /64, not the next /64", async () => {
     const base = await listen(build({ proxyIpHeader: "x-real-ip" }));
     for (let i = 0; i < 10; i++) {
@@ -165,5 +156,65 @@ describe("admin router auth", () => {
     const ok = { authorization: `Bearer ${TOKEN}` };
     expect((await fetch(`${base}/queue`, { headers: { ...ok, "x-real-ip": "2001:db8:0:1:ffff::9" } })).status).toBe(429);
     expect((await fetch(`${base}/queue`, { headers: { ...ok, "x-real-ip": "2001:db8:0:2::1" } })).status).toBe(500);
+  });
+
+  test("once the instance-wide budget is spent, one bad token locks an address out; the owner on a clean address still gets in", async () => {
+    let now = 1_000_000;
+    const lines: { level: number; event?: string }[] = [];
+    const logger = pino({ level: "info" }, { write: (l: string) => lines.push(JSON.parse(l) as { level: number; event?: string }) });
+    const flags = { store: { get: async () => ({ banner_message: "" }) } } as unknown as FlagsReader;
+    const base = await listen(build({ clock: () => now, proxyIpHeader: "x-real-ip", logger, flags }));
+    const get = (ip: string, token: string) => fetch(`${base}/flags`, { headers: { "x-real-ip": ip, authorization: `Bearer ${token}` } });
+    const from = (n: number) => `10.${Math.floor(n / 250)}.${n % 250}.1`;
+    // One failure per address: no per-address lockout (10) is ever reached.
+    for (let n = 0; n < ADMIN_MAX_AUTH_FAILURES_GLOBAL; n++) expect((await get(from(n), "nope")).status).toBe(401);
+    const exhausted = lines.filter((l) => l.event === "admin_auth_budget_exhausted");
+    expect(exhausted).toHaveLength(1);
+    expect(exhausted[0]!.level).toBe(50); // pino error
+    now += 60_000;
+
+    // The owner, from an address with no failure, is judged by the token alone.
+    expect((await get("203.0.113.50", TOKEN)).status).toBe(200);
+    // Any address with a failure in this window is locked out, right token included.
+    const locked = await get(from(7), TOKEN);
+    expect(locked.status).toBe(429);
+    expect(Number(locked.headers.get("retry-after"))).toBe((ADMIN_GLOBAL_FAILURE_WINDOW_MS - 60_000) / 1000);
+    // A fresh address gets one guess, then it is locked out too (the threshold is now 1, not 10).
+    expect((await get("198.51.100.9", "nope")).status).toBe(401);
+    expect((await get("198.51.100.9", TOKEN)).status).toBe(429);
+    // Addresses are subscribers: another host of a failed IPv6 /64 is the same address.
+    expect((await get("2001:db8:7:7::1", "nope")).status).toBe(401);
+    expect((await get("2001:db8:7:7::2", TOKEN)).status).toBe(429);
+    expect((await get("2001:db8:7:8::1", TOKEN)).status).toBe(200);
+    expect(lines.filter((l) => l.event === "admin_auth_budget_exhausted")).toHaveLength(1);
+
+    // The window started at the first failure; after it every address is judged afresh.
+    now += ADMIN_GLOBAL_FAILURE_WINDOW_MS;
+    expect((await get(from(7), TOKEN)).status).toBe(200);
+    expect((await get("198.51.100.9", "nope")).status).toBe(401);
+    expect((await get("198.51.100.9", TOKEN)).status).toBe(200);
+  });
+
+  test("ADMIN_ALLOWED_IPS takes addresses and CIDR blocks, IPv4 and IPv6", async () => {
+    const base = await listen(
+      build({ proxyIpHeader: "x-real-ip", adminAllowedIps: ["203.0.113.0/24", "2001:db8:1::/48", "198.51.100.7"] }),
+    );
+    const status = async (ip: string) =>
+      (await fetch(`${base}/queue`, { headers: { "x-real-ip": ip, authorization: `Bearer ${TOKEN}` } })).status;
+    // 500: the right token from a listed address reaches the tripwire route body.
+    expect(await status("203.0.113.99")).toBe(500);
+    expect(await status("203.0.114.1")).toBe(403);
+    expect(await status("2001:db8:1:ffff::1")).toBe(500);
+    expect(await status("2001:db8:2::1")).toBe(403);
+    expect(await status("198.51.100.7")).toBe(500);
+    expect(await status("198.51.100.8")).toBe(403);
+    expect(() => adminAllowList(["203.0.113.0/33"])).toThrow("ADMIN_ALLOWED_IPS");
+    expect(adminAllowList([])).toBeNull();
+  });
+
+  test("production without ADMIN_ALLOWED_IPS warns at startup", () => {
+    expect(adminWarnings({ nodeEnv: "production", adminAllowedIps: [] })).toEqual([expect.stringContaining("ADMIN_ALLOWED_IPS is empty")]);
+    expect(adminWarnings({ nodeEnv: "production", adminAllowedIps: ["203.0.113.0/24"] })).toEqual([]);
+    expect(adminWarnings({ nodeEnv: "development", adminAllowedIps: [] })).toEqual([]);
   });
 });
