@@ -260,6 +260,7 @@ Each socket has one bucket per class; an empty bucket answers
 | Appeals | 5 per device per day, 1 per restriction, 48 h target | `enforcement/constants.ts:111-113,67` | `rate_limited` / `already_appealed` | code |
 | Takedowns | 5 per IP per hour; description 20 to 2,000 chars | `enforcement/constants.ts:115`, `protocol.ts:556-563` | `rate_limited` | code |
 | Report log (memory store) | newest 10,000 | `store/constants.ts:14` | oldest dropped | code |
+| Reporter index (who reported a device) | kept 30 days after the device's last report (`REPORTS_AGAINST_TTL_MS`): a Redis TTL, and the memory store prunes every 1,000 report writes | `store/constants.ts:41`, `store/MemoryStore.ts` `addReport` | older reporters no longer count toward the auto-pause threshold | code |
 | Retention | records and evidence deleted 1 year after they stop mattering; CSAM evidence frozen at least 1 year; hourly check | `enforcement/constants.ts:121-125` | n/a | code |
 | Admin lists | 500 most recent (`ADMIN_LIST_LIMIT`); audit `limit` 1 to 500, default 100 | `enforcement/constants.ts:118`, `http/admin.ts:67` | truncated | code |
 | Admin wallet adjust | delta -1,000,000 to 1,000,000, non-zero; note 1 to 500 chars | `protocol.ts:802-805` | 400 | code |
@@ -293,8 +294,10 @@ Each socket has one bucket per class; an empty bucket answers
 
 | Limit | Value | Source | When exceeded | Change |
 |---|---|---|---|---|
-| Redis lock | lease 3 s, wait 10 s, backoff 4 to 50 ms | `store/constants.ts:28-33` | error log when a section overruns; callers fail `internal` after 10 s | code |
-| Redis timeouts | connect 5 s, command 5 s, 2 retries | `store/constants.ts:21-25` | `/readyz` 503; handlers fail | code |
+| Redis lock | lease 3 s, renewed every 1 s by the holder while its section runs (`LOCK_RENEW_SHARE`) for at most 30 s (`LOCK_HOLD_MAX_MS`, so a hung section lapses instead of freezing every replica), wait 10 s, backoff 4 to 50 ms; renewal and release are token-fenced Lua scripts loaded once | `store/constants.ts:27-41`, `store/RedisStore.ts` | error log when a lease is lost (a stall longer than 3 s, Redis unreachable, a section over 30 s) because another replica may have entered; callers fail `internal` after 10 s | code |
+| Redis timeouts | connect 5 s, command 5 s (also while queued during an outage), 2 retries; one option set for the store, adapter and feature-store clients | `store/constants.ts:21-25`, `store/RedisStore.ts` `REDIS_CLIENT_OPTIONS` | `/readyz` 503; handlers fail | code |
+| Redis key parts | ids embedded in match-store keys must match `[A-Za-z0-9_.-]{1,128}` (UUIDs, Socket.IO ids, instance ids) | `store/RedisStore.ts` `KEY_PART_RE` | the call rejects (`internal`) before anything reaches Redis | code |
+| Matching status (staffed hours) | computed at most once per minute per flag set; outside the window the search for the next opening scans up to 1,440 minutes (about 2 ms with the cached formatter, 60 ms before) | `flags/flags.ts` `FlagsReader.status` | n/a | code |
 | Shutdown grace | `SHUTDOWN_GRACE_MS` 10,000; compose `stop_grace_period: 15s` | `config.ts:46`, `docker-compose.yml` | process killed | env |
 | Keep-alive | every 10 min to `KEEPALIVE_URL` (default `RENDER_EXTERNAL_URL/healthz`), 10 s request timeout | `keepalive.ts:14-15`, `config.ts:337` | warning logged | env |
 | Container logs | json-file 10 MB x 3 | `docker-compose.yml` `x-logging` | oldest rotated out | config |

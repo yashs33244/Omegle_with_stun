@@ -11,7 +11,7 @@ import { connectRedisAdapter, type RedisAdapterHandle } from "./realtime/redisAd
 import { createServer } from "./server";
 import { MemoryStore } from "./store/MemoryStore";
 import type { MatchStore } from "./store/MatchStore";
-import { RedisStore } from "./store/RedisStore";
+import { REDIS_CLIENT_OPTIONS, RedisStore } from "./store/RedisStore";
 
 function readConfig(): Config {
   try {
@@ -38,7 +38,7 @@ async function main(): Promise<void> {
     store = await RedisStore.connect(config.redisUrl, { logger });
     adapter = await connectRedisAdapter(config.redisUrl, logger);
     // Shared client for feature stores (flags, session, enforcement).
-    appRedis = new Redis(config.redisUrl, { lazyConnect: true, maxRetriesPerRequest: 2, commandTimeout: 5_000 });
+    appRedis = new Redis(config.redisUrl, REDIS_CLIENT_OPTIONS);
     appRedis.on("error", (err) => logger.warn({ err }, "app redis connection error"));
     await appRedis.connect();
     logger.info("using Redis store and Socket.IO Redis adapter");
