@@ -42,12 +42,13 @@ export class TokenBucket {
     this.last = now;
   }
 
-  take(now: number): boolean {
+  /** Takes `cost` tokens (default 1; a byte count for byte budgets); false when the bucket holds fewer. */
+  take(now: number, cost = 1): boolean {
     const elapsedSec = Math.max(0, now - this.last) / MS_PER_SECOND;
     this.tokens = Math.min(this.spec.capacity, this.tokens + elapsedSec * this.spec.refillPerSec);
     this.last = now;
-    if (this.tokens < 1) return false;
-    this.tokens -= 1;
+    if (this.tokens < cost) return false;
+    this.tokens -= cost;
     return true;
   }
 

@@ -12,6 +12,8 @@ export interface StoredReport {
   roomId: string;
   reason: ReportReason;
   reporterDevice: string;
+  /** Salted hash of the reporter's address bucket (never the IP), or null when unknown; reporters on one address count once. */
+  reporterNetwork: string | null;
   reportedDevice: string;
   /** Reporter weight at report time (0..1). */
   reporterWeight: number;

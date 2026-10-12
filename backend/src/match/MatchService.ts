@@ -413,11 +413,11 @@ export class MatchService implements RestrictionSink {
 
   /**
    * report:submit. Allowed while the room exists or within reportAfterEndMs after
-   * it ended, once per room per reporter, and rate limited per device (see
-   * EnforcementService.admitReport). A live call ends; the pair is blocked.
-   * The evidence and any automatic action are handled outside the match lock.
+   * it ended, once per room per reporter, and rate limited per device and per
+   * client IP (see EnforcementService.admitReport). A live call ends; the pair is
+   * blocked. The evidence and any automatic action are handled outside the match lock.
    */
-  async report(socketId: string, payload: ReportPayload, reply: Reply<ReportAck>): Promise<void> {
+  async report(socketId: string, payload: ReportPayload, reply: Reply<ReportAck>, ip: string | null = null): Promise<void> {
     const session = await this.store.getSession(socketId);
     if (!session) return reply({ ok: false, error: "bad_state", message: "send session:hello first" });
     let frame: EvidenceFrame | null = null;
@@ -428,7 +428,7 @@ export class MatchService implements RestrictionSink {
     const target = await this.reportTarget(session, payload.roomId);
     if (!target) return reply({ ok: false, error: "not_in_room" });
     if (this.enforcement) {
-      const admitted = await this.enforcement.admitReport(session.deviceId, payload.roomId);
+      const admitted = await this.enforcement.admitReport(session.deviceId, payload.roomId, ip);
       if (admitted === "rate_limited") return reply({ ok: false, error: "rate_limited" });
       if (admitted === "duplicate") return reply({ ok: false, error: "bad_state", message: "already reported" });
     }
@@ -453,6 +453,7 @@ export class MatchService implements RestrictionSink {
     const { reportId } = await this.enforcement.submitReport({
       roomId: payload.roomId,
       reporterDevice: session.deviceId,
+      reporterIp: ip,
       reportedDevice: target.reportedDevice,
       reason: payload.reason,
       details: payload.details,

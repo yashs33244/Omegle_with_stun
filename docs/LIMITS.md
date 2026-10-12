@@ -288,14 +288,16 @@ prepend to them.
 | SDP / ICE candidate | 20,000 / 2,000 chars | `protocol.ts:58-59` | `invalid_payload` | code |
 | Report details | 500 chars; evidence frame data URL 120,000 chars; up to 20 chat lines | `protocol.ts:57,61-62` | `invalid_payload` | code |
 | Evidence decoded size | 4 B to 96 KiB JPEG (`EVIDENCE_MAX_BYTES = 96 * 1024`), must start with the JPEG magic | `enforcement/constants.ts:194-196`, `safety/evidence.ts:41-42` | frame silently dropped from the report | code |
-| Reports per reporter | 5 per hour (`REPORTS_PER_HOUR`), one per room per reporter (claim kept 1 day) | `enforcement/constants.ts:34`, `EnforcementService.ts:248-251` | `rate_limited`, duplicate ignored | code |
+| Reports per reporter | 5 per hour per device (`REPORTS_PER_HOUR`), 30 per hour per client IP across devices (`REPORTS_PER_IP_PER_HOUR`, wide because of CGNAT), one per room per reporter (claim kept 1 day) | `enforcement/constants.ts:34-40`, `EnforcementService.ts:admitReport` | `rate_limited`, duplicate ignored | code |
 | Report after the call | allowed for 60 s after the room ended (`reportAfterEndMs: 60_000`) plus 5 s skew grace | `config.ts:380`, `enforcement/constants.ts:102` | `not_in_room` | code |
-| Automatic action | a 10 min pause when weighted reports in 24 h reach the threshold; everything else is human (ladder: warning, 10 min, 24 h, 7 d, permanent) | `enforcement/constants.ts:28-37` | `banned` / restriction page | code |
-| Appeals | 5 per device per day, 1 per restriction, 48 h target | `enforcement/constants.ts:111-113,67` | `rate_limited` / `already_appealed` | code |
+| Automatic action | a 10 min pause when the weights of distinct reporters in 24 h reach `AUTO_PAUSE_THRESHOLD` 1.6 (a reporter weighs 0.05 to 1: fresh device about 0.23, halved for calls under 2 s, so at least 2 established or 8 fresh reporters); reporters on one address (IPv4 address or IPv6 /64, stored as a salted hash) count once at their highest weight; everything else is human (ladder: warning, 10 min, 24 h, 7 d, permanent) | `enforcement/constants.ts:28-45`, `EnforcementService.ts:autoAction` | `banned` / restriction page | code |
+| Admin restriction duration | only `RESTRICTION_DURATIONS_MS` 10 min, 24 h, 7 d, or `null` (permanent); omitted takes the next ladder rung | `protocol.ts:RESTRICTION_DURATIONS_MS`, `adminReportActionSchema` | 400 `invalid` | code |
+| Appeals | 5 per device per day (charged only for the device's own restrictions), 10 per IP per hour, 1 per restriction, 48 h target | `enforcement/constants.ts:APPEALS_*`, `EnforcementService.ts:submitAppeal` | `rate_limited` / `already_appealed` | code |
 | Takedowns | 5 per IP per hour; description 20 to 2,000 chars | `enforcement/constants.ts:115`, `protocol.ts:556-563` | `rate_limited` | code |
 | Report log (memory store) | newest 10,000 | `store/constants.ts:14` | oldest dropped | code |
 | Retention | records and evidence deleted 1 year after they stop mattering; CSAM evidence frozen at least 1 year; hourly check | `enforcement/constants.ts:121-125` | n/a | code |
-| Admin lists | 500 most recent (`ADMIN_LIST_LIMIT`); audit `limit` 1 to 500, default 100 | `enforcement/constants.ts:118`, `http/admin.ts:67` | truncated | code |
+| Admin lists | 500 most recent (`ADMIN_LIST_LIMIT`), including the open-report queue (oldest 500 by creation, then sorted by severity and due clock); audit `limit` 1 to 500, default 100 | `enforcement/constants.ts:118`, `EnforcementService.ts:queue`, `http/admin.ts:67` | truncated | code |
+| Enforcement memory store | expiring entries (room grace values, report claims, counters, device stats) are swept every 1,000 writes (`SWEEP_EVERY_WRITES`) once expired | `enforcement/MemoryEnforcementStore.ts` | n/a (bounded) | code |
 | Admin wallet adjust | delta -1,000,000 to 1,000,000, non-zero; note 1 to 500 chars | `protocol.ts:802-805` | 400 | code |
 | Admin notes | 2,000 chars | `protocol.ts:766,772,775` | 400 | code |
 
@@ -316,7 +318,7 @@ prepend to them.
 |---|---|---|---|---|
 | Spark cooldown | 10 s per room (`SPARK.cooldownMs`), shared by both sides; card shown 12 s; last 20 prompt ids not repeated | `protocol.ts:68-75` | ack `rate_limited` | code |
 | Spark state | per room, in memory on the instance that served it; forgotten after 1 h idle | `spark/SparkService.ts:10-12,41` | with several instances a pair may see two cooldown clocks | code |
-| Caption segment | 1,024 UTF-8 bytes; 10 per second per socket; interim every 250 ms | `protocol.ts:78-85` | `invalid_payload`; over rate silently dropped (no ack, no error) | code |
+| Caption segment | 1,024 UTF-8 bytes; 10 per second per socket and 2,048 relayed bytes per second per socket (`CAPTIONS.maxBytesPerSec`, burst 4,096), so captions carry no more than chat; links, handles and phone numbers hidden for the first `chatGuardMs` 2 min of a call like chat; interim every 250 ms | `protocol.ts:CAPTIONS`, `captions/CaptionRelay.ts` | `invalid_payload`; over either budget silently dropped (no ack, no error); redactions counted in `chizzy_captions_redacted_total` | code |
 | Caption support | SpeechRecognition: Chrome and Android Chrome, Safari 14.1+; not Firefox. Translation: Chrome 138+ Translator API | `captions/speech.ts:6-7`, `captions/translator.ts:2-3` | toggle disabled | n/a |
 | Billing REST | per IP: reads 30 burst / 0.5 per s, writes (orders, unlock) 10 / 0.1 per s, webhook 60 / 1 per s; per device: orders 5 / 1 per 5 min, verify 20 / 1 per s; JSON body 8 KB, webhook 64 KB | `http/billing.ts:47-53` | 429 `rate_limited` | code |
 | Order records | unpaid orders live `UNPAID_ORDER_TTL_MS` 24 h (Redis TTL; the memory store sweeps them and, past `ORDERS_MAX` 2,000, drops the oldest unpaid first); paid orders and the per-order credit claim are kept for good | `billing/WalletStore.ts:29-38` | `order_unknown` after a day for a Checkout nobody paid | code |

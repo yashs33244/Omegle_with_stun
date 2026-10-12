@@ -5,7 +5,7 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { randomUUID } from "node:crypto";
 import Redis from "ioredis";
 import type { EnforcementStore } from "../../src/enforcement/EnforcementStore";
-import { MemoryEnforcementStore } from "../../src/enforcement/MemoryEnforcementStore";
+import { MemoryEnforcementStore, SWEEP_EVERY_WRITES } from "../../src/enforcement/MemoryEnforcementStore";
 import { RedisEnforcementStore } from "../../src/enforcement/RedisEnforcementStore";
 import { delay } from "../helpers";
 
@@ -94,6 +94,25 @@ function contract(name: string, make: () => EnforcementStore) {
 }
 
 contract("MemoryEnforcementStore", () => new MemoryEnforcementStore());
+
+describe("MemoryEnforcementStore eviction", () => {
+  test("expired entries that nobody reads again are swept, so the store stays bounded", async () => {
+    const s = new MemoryEnforcementStore();
+    const ttl = 200;
+    for (let i = 0; i < SWEEP_EVERY_WRITES; i++) {
+      await s.setValue(`lastroom:${i}`, { i }, ttl);
+      await s.claim(`room-report:${i}`, ttl);
+      await s.hit(`report-rate:${i}`, ttl);
+      await s.incrField(`dev:${i}`, "completedCalls", 1, ttl);
+    }
+    expect(s.expiringEntries).toBe(4 * SWEEP_EVERY_WRITES);
+    await delay(ttl + 20);
+    // Each write after the TTLs passed is one step toward the next sweep; the sweep drops everything expired.
+    for (let i = 0; i < SWEEP_EVERY_WRITES; i++) await s.setValue("live", { i }, 60_000);
+    expect(s.expiringEntries).toBe(1);
+    expect(await s.getValue<{ i: number }>("live")).toEqual({ i: SWEEP_EVERY_WRITES - 1 });
+  });
+});
 
 const url = process.env.REDIS_URL;
 const clients: Redis[] = [];

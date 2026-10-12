@@ -223,9 +223,9 @@ describe("restrictions", () => {
     expect(actions).toEqual(expect.arrayContaining(["report.restrict", "appeal.overturn"]));
   });
 
-  test("weighted reports from established devices pause the reported device for 10 min", async () => {
+  test("weighted reports from established devices on distinct addresses pause the reported device for 10 min", async () => {
     const store = seedableStore();
-    ts = await boot({}, { store });
+    ts = await boot({ proxyIpHeader: "x-real-ip" }, { store });
     const established = async () => {
       const h = hello();
       await store.setFieldIfAbsent(`dev:${h.deviceId}`, "firstSeen", Date.now() - 4 * DAY, YEAR);
@@ -238,7 +238,7 @@ describe("restrictions", () => {
     const restricted = next(ct, "session:restricted", 10_000);
 
     for (let i = 0; i < 2; i++) {
-      const r = await ts.connect();
+      const r = await ts.connect({ headers: { "x-real-ip": `198.51.100.${10 + i}` } });
       const foundT = next(ct, "match:found");
       const foundR = next(r, "match:found");
       await sendHello(r, await established());

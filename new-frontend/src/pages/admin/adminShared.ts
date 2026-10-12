@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useState } from "rea
 import type { AdminApi } from "@/lib/adminApi";
 import { AdminApiError } from "@/lib/adminApi";
 import i18n from "@/lib/i18n";
-import type { AdminReport, ReportReason, RestrictionReason, Severity } from "@/lib/protocol";
+import { RESTRICTION_DURATIONS_MS, type AdminReport, type ReportReason, type RestrictionDurationMs, type RestrictionReason, type Severity } from "@/lib/protocol";
 
 export interface AdminContextValue {
   api: AdminApi;
@@ -117,12 +117,13 @@ export function formatTime(ts: number): string {
   return new Date(ts).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
 }
 
+/** The ladder's timed rungs (the only durations the admin API accepts), then permanent. */
 export const DURATION_PRESETS = [
-  { key: "durations.tenMin", ms: 10 * MIN },
-  { key: "durations.day", ms: DAY },
-  { key: "durations.week", ms: 7 * DAY },
+  { key: "durations.tenMin", ms: RESTRICTION_DURATIONS_MS[0] },
+  { key: "durations.day", ms: RESTRICTION_DURATIONS_MS[1] },
+  { key: "durations.week", ms: RESTRICTION_DURATIONS_MS[2] },
   { key: "durations.permanent", ms: null },
-] as const satisfies ReadonlyArray<{ key: string; ms: number | null }>;
+] as const satisfies ReadonlyArray<{ key: string; ms: RestrictionDurationMs | null }>;
 
 export function downloadJson(filename: string, data: unknown): void {
   const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }));

@@ -3,9 +3,9 @@ import { createHash, randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import type { ReportInput } from "../../src/enforcement/EnforcementService";
 import { parseEvidenceFrame } from "../../src/enforcement/evidence";
-import { APPEALS_PER_IP_PER_HOUR, AUTO_PAUSE_MS, DAY, MINUTE, YEAR } from "../../src/enforcement/constants";
+import { ADMIN_LIST_LIMIT, APPEALS_PER_IP_PER_HOUR, AUTO_PAUSE_MS, DAY, MINUTE, YEAR } from "../../src/enforcement/constants";
 import type { StoredReport, StoredRestriction } from "../../src/enforcement/types";
-import type { ReportReason } from "../../src/protocol";
+import { RESTRICTION_DURATIONS_MS, type ReportReason } from "../../src/protocol";
 import { harness, jpegDataUrl, type Harness } from "../enforcementFixtures";
 
 let h: Harness;
@@ -25,6 +25,7 @@ function input(reportedDevice: string, o: Partial<ReportInput> = {}): ReportInpu
   return {
     roomId: randomUUID(),
     reporterDevice: randomUUID(),
+    reporterIp: null,
     reportedDevice,
     reason: "harassment",
     frame: null,
@@ -39,15 +40,20 @@ async function report(reported: string, reason: ReportReason, o: Partial<ReportI
 }
 
 describe("matchmaking hooks", () => {
-  test("admitReport: one report per room per reporter, 5 per hour per device", async () => {
+  test("admitReport: one report per room per reporter, 5 per hour per device, 30 per hour per IP", async () => {
     h = harness();
     const dev = randomUUID();
     const room = randomUUID();
-    expect(await h.service.admitReport(dev, room)).toBe("ok");
-    expect(await h.service.admitReport(dev, room)).toBe("duplicate");
-    for (let i = 0; i < 3; i++) expect(await h.service.admitReport(dev, randomUUID())).toBe("ok");
-    expect(await h.service.admitReport(dev, randomUUID())).toBe("rate_limited");
-    expect(await h.service.admitReport(randomUUID(), room)).toBe("ok");
+    expect(await h.service.admitReport(dev, room, null)).toBe("ok");
+    expect(await h.service.admitReport(dev, room, null)).toBe("duplicate");
+    for (let i = 0; i < 3; i++) expect(await h.service.admitReport(dev, randomUUID(), null)).toBe("ok");
+    expect(await h.service.admitReport(dev, randomUUID(), null)).toBe("rate_limited");
+    expect(await h.service.admitReport(randomUUID(), room, null)).toBe("ok");
+    // Fresh device ids on one address share the per-IP budget; another address is unaffected.
+    const ip = "203.0.113.7";
+    for (let i = 0; i < 30; i++) expect(await h.service.admitReport(randomUUID(), randomUUID(), ip)).toBe("ok");
+    expect(await h.service.admitReport(randomUUID(), randomUUID(), ip)).toBe("rate_limited");
+    expect(await h.service.admitReport(randomUUID(), randomUUID(), "203.0.113.8")).toBe("ok");
   });
 
   test("roomEnded keeps the room for late reports and counts completed calls", async () => {
@@ -106,6 +112,31 @@ describe("weighted reports", () => {
     expect(await h.service.activeForDevice(target)).toBeNull();
     expect((await report(target, "spam", { reporterDevice: await establishedDevice() })).restriction).toBeNull();
   });
+
+  test("fresh device ids on one address count as one reporter; the same ids on distinct addresses pause", async () => {
+    h = harness();
+    const sybil = randomUUID();
+    // Enough fresh devices to cross the threshold if each counted (about 0.23 each, threshold 1.6).
+    for (let i = 0; i < 12; i++) {
+      expect((await report(sybil, "harassment", { reporterIp: "203.0.113.20" })).restriction).toBeNull();
+    }
+    expect(await h.service.activeForDevice(sybil)).toBeNull();
+    // The same addresses of one IPv6 /64 are one subscriber too.
+    for (let i = 0; i < 12; i++) {
+      expect((await report(sybil, "harassment", { reporterIp: `2001:db8:1:2::${i + 1}` })).restriction).toBeNull();
+    }
+    expect(await h.service.activeForDevice(sybil)).toBeNull();
+    const stored = await h.store.get<StoredReport>("report", (await report(sybil, "spam", { reporterIp: "203.0.113.20" })).reportId);
+    expect(stored!.reporterNetwork).toMatch(/^[0-9a-f]{16}$/);
+    expect(JSON.stringify(stored)).not.toContain("203.0.113.20");
+
+    const target = randomUUID();
+    let paused = false;
+    for (let i = 0; i < 12 && !paused; i++) {
+      paused = (await report(target, "harassment", { reporterIp: `203.0.113.${30 + i}` })).restriction !== null;
+    }
+    expect(paused).toBe(true);
+  });
 });
 
 describe("underage reports", () => {
@@ -135,6 +166,14 @@ describe("underage reports", () => {
     const reporter = randomUUID();
     await report(target, "underage", { reporterDevice: reporter });
     expect((await report(target, "underage", { reporterDevice: reporter })).restriction).toBeNull();
+  });
+
+  test("a second device on the same address does not corroborate", async () => {
+    h = harness();
+    const target = randomUUID();
+    await report(target, "underage", { reporterIp: "203.0.113.40" });
+    expect((await report(target, "underage", { reporterIp: "203.0.113.40" })).restriction).toBeNull();
+    expect((await report(target, "underage", { reporterIp: "203.0.113.41" })).restriction).not.toBeNull();
   });
 
   test("a high-weight reporter or a prior minor flag corroborates", async () => {
@@ -253,6 +292,19 @@ describe("admin review", () => {
     expect(JSON.stringify(queue)).not.toContain(target);
   });
 
+  test("the open queue is capped at ADMIN_LIST_LIMIT, oldest first", async () => {
+    h = harness();
+    const first = await report(randomUUID(), "spam");
+    for (let i = 0; i < ADMIN_LIST_LIMIT; i++) {
+      h.clock.now += 1;
+      await report(randomUUID(), "spam");
+    }
+    const queue = await h.service.queue();
+    expect(queue).toHaveLength(ADMIN_LIST_LIMIT);
+    expect(queue[0]!.id).toBe(first.reportId);
+    expect((await h.service.queue("all")).length).toBe(ADMIN_LIST_LIMIT);
+  });
+
   test("evidence access is audited and marks the report as viewed; restricted access is refused and audited", async () => {
     h = harness();
     const res = await report(randomUUID(), "harassment", { frame: parseEvidenceFrame(jpegDataUrl()) });
@@ -293,7 +345,7 @@ describe("admin review", () => {
     expect(res.ok && res.value.restriction!.until! - res.value.restriction!.createdAt).toBe(10 * MINUTE);
     const custom = await h.service.actOnReport(
       (await report(target, "spam")).reportId,
-      { action: "restrict", durationMs: 3 * DAY, reason: "fake-video" },
+      { action: "restrict", durationMs: RESTRICTION_DURATIONS_MS[2], reason: "fake-video" },
       actor,
     );
     expect(custom.ok && custom.value.restriction).toMatchObject({ kind: "ban", reason: "fake-video" });
@@ -358,7 +410,7 @@ describe("restrictions, fingerprints and appeals", () => {
     const device = randomUUID();
     expect(await h.service.activeForDevice(device, fp)).toBeNull(); // links device and fingerprint
     const res = await report(device, "spam");
-    await h.service.actOnReport(res.reportId, { action: "restrict", durationMs: DAY }, actor);
+    await h.service.actOnReport(res.reportId, { action: "restrict", durationMs: RESTRICTION_DURATIONS_MS[1] }, actor);
     const fresh = randomUUID();
     const found = await h.service.activeForDevice(fresh, fp);
     expect(found).not.toBeNull();
@@ -393,16 +445,29 @@ describe("restrictions, fingerprints and appeals", () => {
     expect((await h.service.listAudit(1))[0]!.action).toBe("appeal.overturn");
   });
 
-  test("upholding keeps the restriction; appeals are rate limited per device", async () => {
+  test("upholding keeps the restriction; the per-device appeal quota counts only the device's own restrictions", async () => {
     h = harness();
     const { device, restriction } = await restricted("spam", false);
     const text = "Please take another look at this.";
+    // Guessed restriction ids (anyone can send a victim's deviceId) must not burn the victim's quota.
+    for (let i = 0; i < 5; i++) {
+      expect(await h.service.submitAppeal({ restrictionId: randomUUID(), deviceId: device, text }, null)).toEqual({ ok: false, error: "not_found" });
+    }
     const appeal = await h.service.submitAppeal({ restrictionId: restriction.id, deviceId: device, text }, null);
     if (!appeal.ok) throw new Error("appeal failed");
     await h.service.decideAppeal(appeal.appealId, "uphold", undefined, actor);
     expect(await h.service.activeForDevice(device)).not.toBeNull();
-    for (let i = 0; i < 4; i++) await h.service.submitAppeal({ restrictionId: randomUUID(), deviceId: device, text }, null);
-    expect(await h.service.submitAppeal({ restrictionId: randomUUID(), deviceId: device, text }, null)).toEqual({
+    // Further restrictions on the same device: the quota holds for its own appeals.
+    for (let i = 0; i < 4; i++) {
+      const res = await report(device, "spam");
+      const act = await h.service.actOnReport(res.reportId, { action: "restrict" }, actor);
+      if (!act.ok) throw new Error("restrict failed");
+      expect((await h.service.submitAppeal({ restrictionId: act.value.restriction!.id, deviceId: device, text }, null)).ok).toBe(true);
+    }
+    const res = await report(device, "spam");
+    const act = await h.service.actOnReport(res.reportId, { action: "restrict" }, actor);
+    if (!act.ok) throw new Error("restrict failed");
+    expect(await h.service.submitAppeal({ restrictionId: act.value.restriction!.id, deviceId: device, text }, null)).toEqual({
       ok: false,
       error: "rate_limited",
     });

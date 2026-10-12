@@ -204,7 +204,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     gate: session.gate,
   });
   const spark = new SparkService({ store, emitter, registry: metrics.registry });
-  const captions = new CaptionRelay({ store, emitter, metrics });
+  const captions = new CaptionRelay({ store, emitter, metrics, chatGuardMs: config.chatGuardMs });
   const handlers = attachHandlers(io, {
     config,
     service,
