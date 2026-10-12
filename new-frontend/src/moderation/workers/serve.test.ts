@@ -5,12 +5,17 @@ class FakeImageData {}
 
 function setup() {
   const posted: { type: string }[] = [];
-  const scope = { onmessage: null as ((e: MessageEvent) => void) | null, postMessage: (m: { type: string }) => posted.push(m) };
+  const scope = {
+    onmessage: null as ((e: MessageEvent) => void) | null,
+    postMessage: (m: { type: string }) => posted.push(m),
+    location: { origin: "https://chizzy.test" },
+  };
   vi.stubGlobal("self", scope);
   vi.stubGlobal("ImageData", FakeImageData);
   const run = vi.fn(() => "ok");
   serveWorker({ load: async () => "cpu", run });
-  const send = (data: unknown) => scope.onmessage!({ data } as MessageEvent);
+  // Messages from the creating page reach a dedicated worker with an empty origin.
+  const send = (data: unknown, origin = "") => scope.onmessage!({ data, origin } as MessageEvent);
   return { posted, run, send };
 }
 
@@ -25,6 +30,7 @@ describe("serveWorker", () => {
       send(bad);
     }
     const image = new FakeImageData();
+    send({ type: "run", id: 6, image }, "https://evil.example");
     send({ type: "run", id: 7, image });
     await vi.waitFor(() => expect(posted).toContainEqual({ type: "result", id: 7, result: "ok" }));
     expect(run).toHaveBeenCalledTimes(1);

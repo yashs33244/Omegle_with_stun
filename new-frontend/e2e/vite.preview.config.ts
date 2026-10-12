@@ -33,9 +33,10 @@ function allowTurnstile(csp: string): string {
     .map((d) => d.trim())
     .filter(Boolean);
   const hasFrameSrc = directives.some((d) => d.startsWith("frame-src "));
-  const patched = directives.map((d) =>
-    (d.startsWith("script-src ") || d.startsWith("frame-src ")) && !d.split(/\s+/).includes(origin) ? `${d} ${origin}` : d,
-  );
+  const patched = directives.map((d) => {
+    const sources = new Set(d.split(/\s+/));
+    return (d.startsWith("script-src ") || d.startsWith("frame-src ")) && !sources.has(origin) ? `${d} ${origin}` : d;
+  });
   if (!hasFrameSrc) patched.push(`frame-src ${origin}`);
   return patched.join("; ");
 }

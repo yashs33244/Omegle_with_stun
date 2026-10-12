@@ -34,6 +34,9 @@ export function serveWorker<R>(task: WorkerTask<R>): void {
   };
 
   scope.onmessage = (e: MessageEvent<unknown>) => {
+    // A dedicated worker only hears its creating page: such messages carry an
+    // empty origin (or the page's own). Anything else is not ours.
+    if (e.origin !== "" && e.origin !== scope.location.origin) return;
     const msg = e.data;
     if (typeof msg !== "object" || msg === null || !("type" in msg)) return;
     if (msg.type === "load") {
