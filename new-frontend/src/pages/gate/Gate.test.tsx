@@ -128,7 +128,10 @@ describe("Gate", () => {
     });
     expect(requests[0]).not.toHaveProperty("turnstileToken");
     expect(getSessionToken()).toBe("session-1");
-    expect(JSON.stringify(localStorage)).not.toContain("1999");
+    // The date of birth is never stored. The device id is a random UUID that can contain "1999" by chance.
+    expect(JSON.stringify(localStorage)).not.toContain("1999-03-07");
+    const stored = Object.entries(localStorage).filter(([key]) => key !== "chizzy:deviceId");
+    expect(JSON.stringify(stored)).not.toContain("1999");
   });
 
   it("lets a returning device with a valid session straight through", async () => {
