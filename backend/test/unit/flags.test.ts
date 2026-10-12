@@ -70,6 +70,32 @@ describe("staffed hours", () => {
     const status = matchingStatus(flags({ matching_enabled: false, banner_message: "Back soon" }), NINE_PM_IST);
     expect(status).toEqual({ open: false, reopensAt: null, message: "Back soon" });
   });
+
+  test("the reader computes a closed status once per minute, not once per call", async () => {
+    const reader = new FlagsReader(new MemoryFlagsStore());
+    await reader.set({ staffed_hours: "20:00-24:00 Asia/Kolkata" });
+    const sixPm = NINE_PM_IST - 3 * 3600_000;
+    const first = reader.status(sixPm);
+    expect(first.open).toBe(false);
+    // Same minute: the memoized answer comes back; a background refresh that
+    // changed nothing must not throw it away.
+    await reader.refresh();
+    expect(reader.status(sixPm + 59_000)).toBe(first);
+    // Next minute or a changed flag set: recomputed.
+    expect(reader.status(sixPm + 60_000)).not.toBe(first);
+    await reader.set({ staffed_hours: "" });
+    expect(reader.status(sixPm)).toEqual({ open: true, reopensAt: null, message: null });
+  });
+
+  test("a closed status costs well under a millisecond once the formatter is cached", () => {
+    const f = flags({ staffed_hours: "03:00-03:01 Asia/Kolkata" });
+    matchingStatus(f, NINE_PM_IST); // warms the per-time-zone formatter
+    const started = performance.now();
+    for (let i = 0; i < 20; i++) matchingStatus(f, NINE_PM_IST + i);
+    // Before the formatter cache each call built up to 1 440 Intl.DateTimeFormat
+    // instances and took about 60 ms under Node.
+    expect((performance.now() - started) / 20).toBeLessThan(20);
+  });
 });
 
 describe.skipIf(!process.env.REDIS_URL)("RedisFlagsStore", () => {
