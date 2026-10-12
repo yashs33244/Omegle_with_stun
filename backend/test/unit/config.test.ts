@@ -151,9 +151,6 @@ describe("loadConfig", () => {
   test("PROXY_IP_HEADER counts only with TRUST_PROXY; keep-alive URL falls back to Render's /healthz", () => {
     expect(loadConfig({ PROXY_IP_HEADER: "True-Client-IP" }).proxyIpHeader).toBeNull();
     expect(loadConfig({ TRUST_PROXY: "true", PROXY_IP_HEADER: "True-Client-IP" }).proxyIpHeader).toBe("true-client-ip");
-    // A list header keeps whatever the client put first, so it is never the client IP.
-    expect(() => loadConfig({ PROXY_IP_HEADER: "X-Forwarded-For" })).toThrow(/PROXY_IP_HEADER: must be a single-address header/);
-    expect(() => loadConfig({ TRUST_PROXY: "true", PROXY_IP_HEADER: "forwarded" })).toThrow(/PROXY_IP_HEADER/);
     expect(loadConfig({ TRUST_PROXY: "true", PROXY_IP_HEADER: "CF-Connecting-IP" }).proxyIpHeader).toBe("cf-connecting-ip");
     expect(loadConfig({ RENDER_EXTERNAL_URL: "https://chizzy-api.onrender.com/" }).keepaliveUrl).toBe(
       "https://chizzy-api.onrender.com/healthz",

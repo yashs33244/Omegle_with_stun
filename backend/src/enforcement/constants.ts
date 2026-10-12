@@ -161,14 +161,15 @@ export const KEY = {
   network: (deviceId: string) => `net:${deviceId}`,
   lastRoom: (roomId: string) => `lastroom:${roomId}`,
   fingerprint: (deviceId: string) => `fp:${deviceId}`,
-  reportIpRate: (ip: string) => `report-ip:${ip}`,
+  /** `network` is the salted hash of the client's address bucket (EnforcementService.network), never the address. */
+  reportIpRate: (network: string) => `report-ip:${network}`,
   lastAutoPause: (deviceId: string) => `lastauto:${deviceId}`,
   reportRate: (deviceId: string) => `report-rate:${deviceId}`,
   roomReport: (roomId: string, reporterDevice: string) => `room-report:${roomId}:${reporterDevice}`,
-  appealIpRate: (ip: string) => `appeal-ip:${ip}`,
+  appealIpRate: (network: string) => `appeal-ip:${network}`,
   appealDeviceRate: (deviceId: string) => `appeal-dev:${deviceId}`,
   appealClaim: (restrictionId: string) => `appeal:${restrictionId}`,
-  takedownIpRate: (ip: string) => `takedown-ip:${ip}`,
+  takedownIpRate: (network: string) => `takedown-ip:${network}`,
   retentionClaim: (day: number) => `retention:${day}`,
   /** Reports against a device, scored by creation time. */
   reportsAgainst: (deviceId: string) => `against:${deviceId}`,

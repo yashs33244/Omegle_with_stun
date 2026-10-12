@@ -29,10 +29,13 @@ export const HTTP_MAX_HEADERS_COUNT = 100;
 /** Requests served on one keep-alive socket before it is closed (bounds parser state reuse). */
 export const HTTP_MAX_REQUESTS_PER_SOCKET = 1_000;
 
-/** JSON body caps per router, in bytes (a session request is a few hundred bytes; admin flags are the largest). */
+/** Body caps per router, in bytes (a session request is a few hundred bytes; admin flags are the largest). */
 export const SESSION_BODY_LIMIT_BYTES = 8 * 1024;
 export const ENFORCEMENT_BODY_LIMIT_BYTES = 16 * 1024;
 export const ADMIN_BODY_LIMIT_BYTES = 16 * 1024;
+export const BILLING_BODY_LIMIT_BYTES = 8 * 1024;
+/** A Razorpay payment.captured event is a few KB; the raw body is kept for the HMAC check. */
+export const WEBHOOK_BODY_LIMIT_BYTES = 64 * 1024;
 /**
  * The per-instance burst bucket in front of POST /api/session holds this many
  * minutes of SESSION_RATE_PER_IP_PER_MIN and refills at that rate, so the

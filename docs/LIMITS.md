@@ -219,7 +219,7 @@ where the knob is: `env` (variable in `backend/.env.example`), `flag`
 | Hello deadline | `helloTimeoutMs` 30 s from connect to a well-formed `session:hello`; a malformed hello does not count | `config.ts:219,349`, `realtime/socket.ts:238-251` | socket disconnected, `chizzy_rate_limited_total{event="hello_timeout"}` (`socketLimits.test.ts` "never says hello") | code |
 | Ping | `pingInterval` 20 s, `pingTimeout` 20 s, `connectTimeout` 10 s | `realtime/socket.ts:133-135` | socket dropped, client reconnects | code |
 | Protocol version | `PROTOCOL_VERSION = 3` | `protocol.ts:14` | `unsupported_version` on hello | code |
-| Gateway websocket idle | `proxy_read_timeout 1h` | `deploy/nginx/gateway.conf:143` | nginx closes the socket | config |
+| Gateway websocket idle | `proxy_read_timeout 5m` | `deploy/nginx/gateway.conf:181` | nginx closes the socket | config |
 | Gateway REST body | 64k default, 1m on the larger routes | `deploy/nginx/gateway.conf:114,134` | 413 | config |
 
 ### Per-event rate classes (token bucket per socket)
@@ -261,10 +261,11 @@ per-connection packet budget above bounds them.
 
 ### REST (`backend/src/http`)
 
-Every JSON route parses through `http/body.ts`: the cap is checked against
-`Content-Length` first (413 and `Connection: close` before a byte of body is
-read), then `express.json` enforces it on chunked bodies, and `inflate` is off
-(415 for `Content-Encoding`). The client IP for every per-IP bucket is the
+Every JSON route and the raw webhook route parse through `http/body.ts`
+(`jsonBody`, `rawBody`): the cap is checked against `Content-Length` first
+(413 and `Connection: close` before a byte of body is read), then
+`express.json`/`express.raw` enforce it on chunked bodies, and `inflate` is
+off (415 for `Content-Encoding`). The client IP for every per-IP bucket is the
 TCP peer, or `PROXY_IP_HEADER` only with `TRUST_PROXY=true`; the header must
 be single-valued (`x-real-ip`, `true-client-ip`, `cf-connecting-ip`), list
 headers such as `X-Forwarded-For` are refused at startup because a client can
@@ -342,7 +343,7 @@ prepend to them.
 | Spark state | per room, in memory on the instance that served it; forgotten after 1 h idle | `spark/SparkService.ts:10-12,41` | with several instances a pair may see two cooldown clocks | code |
 | Caption segment | 1,024 UTF-8 bytes; 10 per second per socket and 2,048 relayed bytes per second per socket (`CAPTIONS.maxBytesPerSec`, burst 4,096), so captions carry no more than chat; links, handles and phone numbers hidden for the first `chatGuardMs` 2 min of a call like chat; interim every 250 ms | `protocol.ts:CAPTIONS`, `captions/CaptionRelay.ts` | `invalid_payload`; over either budget silently dropped (no ack, no error); redactions counted in `chizzy_captions_redacted_total` | code |
 | Caption support | SpeechRecognition: Chrome and Android Chrome, Safari 14.1+; not Firefox. Translation: Chrome 138+ Translator API | `captions/speech.ts:6-7`, `captions/translator.ts:2-3` | toggle disabled | n/a |
-| Billing REST | per IP: reads 30 burst / 0.5 per s, writes (orders, unlock) 10 / 0.1 per s, webhook 60 / 1 per s; per device: orders 5 / 1 per 5 min, verify 20 / 1 per s; JSON body 8 KB, webhook 64 KB | `http/billing.ts:47-53` | 429 `rate_limited` | code |
+| Billing REST | per IP: reads 30 burst / 0.5 per s, writes (orders, unlock) 10 / 0.1 per s, webhook 60 / 1 per s; per device: orders 5 / 1 per 5 min, verify 20 / 1 per s; JSON body `BILLING_BODY_LIMIT_BYTES` 8 KiB, webhook `WEBHOOK_BODY_LIMIT_BYTES` 64 KiB through `http/body.ts` (the webhook body is never inflated, so the MAC covers what was sent) | `http/billing.ts:47-55,117`, `http/constants.ts` | 429 `rate_limited`, 413 / 415 | code |
 | Order records | unpaid orders live `UNPAID_ORDER_TTL_MS` 24 h (Redis TTL; the memory store sweeps them and, past `ORDERS_MAX` 2,000, drops the oldest unpaid first); paid orders and the per-order credit claim are kept for good | `billing/WalletStore.ts:29-38` | `order_unknown` after a day for a Checkout nobody paid | code |
 | Coin packs | 1 to 10 packs; each 1 to 1,000,000 coins, 1 to 100,000 INR; flag string 2,000 chars | `protocol.ts:581-586,700-702` | flag rejected | flag `coin_packs` |
 | Gender filter | `gender_filter_coins_per_day` 100 x 1 / 7 / 30 days; starting balance `initialCoins` 0, so a fresh device id never unlocks for free (raise it only together with a price above it) | `protocol.ts:577,680`, `config.ts:380` | 402 `insufficient_coins` | flag / code |
@@ -384,6 +385,7 @@ prepend to them.
 | Payments need a durable store | Wallets, unlocks and Razorpay order records live in `WalletStore`; the memory variant vanishes on restart, so the backend refuses orders without Redis | Redis with AOF (already the compose default) plus the nightly S3 snapshot (`README.md` "Scaling notes") |
 | TURN cost | Relayed calls are metered egress; the poller degrades features at 35 / 50 / 70 GB per day and never restores them by itself | Raise `TURN_SPEND_DAILY_GB`, or keep Hide my IP behind coins |
 | Connect backlog on reconnect storms | Run B in capacity.md: 330 failed handshakes when four generators started at once on a saturated host (`kern.ipc.somaxconn` 128 on macOS) | Linux `net.core.somaxconn` 4096 (default on current kernels); stagger deploys; watch connection errors during a deploy |
+| In-memory per-IP buckets key on the full IPv6 address | `ConnectionGate` (`realtime/socket.ts`), `IpBuckets` (`http/public.ts`) and the gateway `limit_req` zones (`deploy/nginx/gateway.conf:121-130`) see each IPv6 address as a new client, so one /64 subscriber can rotate addresses around the connect, REST and admin burst limits; the store-backed session rate, match caps and enforcement per-IP counters already bucket per /64 (`session/geo.ts` `ipBuckets`) | Key those buckets on `ipBuckets(ip).ip` and the nginx zones on a `/64` map of `$chizzy_limit_key`, at the cost of sharing a bucket across one household or carrier prefix |
 | Deploy drops calls | Compose and Render both restart the replicas on deploy; clients reconnect and are re-queued, not reunited | Rolling restart one replica at a time (sessions of the stopped replica are re-queued on the other via `shutdown()`), or room reattachment by device id (not implemented) |
 
 ## 5. Data loss matrix

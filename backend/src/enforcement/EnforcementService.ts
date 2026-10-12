@@ -215,6 +215,14 @@ export class EnforcementService {
     return createHmac("sha256", this.salt).update(deviceId).digest("hex").slice(0, PSEUDONYM_HEX_CHARS);
   }
 
+  /**
+   * Salted hash of the address's bucket (the /64 for IPv6): the key for every
+   * per-IP counter and the stored reporterNetwork, so no raw address is kept.
+   */
+  network(ip: string): string {
+    return this.pseudonym(ipBuckets(ip).ip);
+  }
+
   /* ---------------------------------------------------------------- */
   /* Matchmaking hooks                                                 */
   /* ---------------------------------------------------------------- */
@@ -255,11 +263,11 @@ export class EnforcementService {
 
   /**
    * Rate limits (REPORTS_PER_HOUR per device, REPORTS_PER_IP_PER_HOUR per client
-   * IP when known) and one report per room per reporter.
+   * network when known) and one report per room per reporter.
    */
   async admitReport(reporterDevice: string, roomId: string, ip: string | null): Promise<AdmitResult> {
     if ((await this.store.hit(KEY.reportRate(reporterDevice), HOUR)) > REPORTS_PER_HOUR) return "rate_limited";
-    if (ip && (await this.store.hit(KEY.reportIpRate(ip), HOUR)) > REPORTS_PER_IP_PER_HOUR) return "rate_limited";
+    if (ip && (await this.store.hit(KEY.reportIpRate(this.network(ip)), HOUR)) > REPORTS_PER_IP_PER_HOUR) return "rate_limited";
     if (!(await this.store.claim(KEY.roomReport(roomId, reporterDevice), DAY))) return "duplicate";
     return "ok";
   }
@@ -313,7 +321,7 @@ export class EnforcementService {
     const weight = reporterWeight(reporterStats, now);
     const scores = input.frame ? await this.classify(input.frame) : null;
     // Reporters on one address count once toward automatic action; only a salted hash of the address is kept.
-    const reporterNetwork = input.reporterIp ? this.pseudonym(ipBuckets(input.reporterIp).ip) : null;
+    const reporterNetwork = input.reporterIp ? this.network(input.reporterIp) : null;
     const otherUnderageReporters = await this.underageReporters(input.reportedDevice, reporterNetwork ?? input.reporterDevice, now);
     const minorSignal = reportedStats.minorFlag || otherUnderageReporters > 0;
     const restricted = routeRestricted({ reason: input.reason, scores, minorSignal });
@@ -514,7 +522,7 @@ export class EnforcementService {
   }
 
   async submitAppeal(req: AppealRequest, ip: string | null): Promise<AppealResponse> {
-    if (ip && (await this.store.hit(KEY.appealIpRate(ip), HOUR)) > APPEALS_PER_IP_PER_HOUR) {
+    if (ip && (await this.store.hit(KEY.appealIpRate(this.network(ip)), HOUR)) > APPEALS_PER_IP_PER_HOUR) {
       return { ok: false, error: "rate_limited" };
     }
     const r = await this.store.get<StoredRestriction>("restriction", req.restrictionId);
@@ -547,7 +555,7 @@ export class EnforcementService {
   }
 
   async submitTakedown(req: TakedownRequest, ip: string | null): Promise<TakedownResponse> {
-    if (ip && (await this.store.hit(KEY.takedownIpRate(ip), HOUR)) > TAKEDOWNS_PER_IP_PER_HOUR) {
+    if (ip && (await this.store.hit(KEY.takedownIpRate(this.network(ip)), HOUR)) > TAKEDOWNS_PER_IP_PER_HOUR) {
       return { ok: false, error: "rate_limited" };
     }
     if (!(await this.turnstile(req.turnstileToken, ip))) return { ok: false, error: "turnstile_failed" };

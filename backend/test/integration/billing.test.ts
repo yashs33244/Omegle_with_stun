@@ -3,10 +3,12 @@
  * (RAZORPAY_FAKE) and the real REST, socket and admin surfaces.
  */
 import { afterEach, describe, expect, test } from "bun:test";
+import { connect } from "node:net";
 import { FAKE_SIGNATURE } from "../../src/billing";
 import { webhookSignature } from "../../src/billing/razorpay";
 import { MemoryWalletStore } from "../../src/billing/WalletStore";
 import type { Config } from "../../src/config";
+import { BILLING_BODY_LIMIT_BYTES, WEBHOOK_BODY_LIMIT_BYTES } from "../../src/http/constants";
 import type { BillingOrder, BillingResponse, WalletView } from "../../src/protocol";
 import { MemoryStore } from "../../src/store/MemoryStore";
 import { connectWithSession, hello, next, prefs, profile, record, sendHello, startServer, type TestServer } from "../helpers";
@@ -50,6 +52,23 @@ async function admin(path: string, init: RequestInit = {}) {
     headers: { authorization: `Bearer ${ADMIN}`, "content-type": "application/json", ...init.headers },
   });
   return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+}
+
+/** Writes `head` on a fresh TCP connection and resolves with what the server sent before closing (or after 3 s). */
+function rawRequest(head: string): Promise<{ response: string; closed: boolean }> {
+  const { hostname, port } = new URL(ts.url);
+  const { promise, resolve } = Promise.withResolvers<{ response: string; closed: boolean }>();
+  let response = "";
+  const socket = connect(Number(port), hostname, () => socket.write(head));
+  socket.on("data", (chunk) => (response += chunk.toString()));
+  socket.on("close", () => resolve({ response, closed: true }));
+  // Guard for the failure mode under test (a server that holds the socket until requestTimeout); the pass path resolves on close.
+  setTimeout(() => {
+    if (socket.destroyed) return;
+    socket.destroy();
+    resolve({ response, closed: false });
+  }, 3_000).unref();
+  return promise;
 }
 
 /** Buys the week pack through the fake gateway. */
@@ -251,5 +270,42 @@ describe("billing REST", () => {
     expect((await post("/orders", sessionToken, { packId: "week" })).status).toBe(503);
     const hook = await fetch(`${ts.url}/api/billing/webhook`, { method: "POST", body: "{}" });
     expect(hook.status).toBe(503);
+  });
+
+  test("an over-cap Content-Length on /orders or /webhook is refused before the body is read and the socket closed", async () => {
+    ts = await boot();
+    const { sessionToken } = await connectWithSession(ts);
+    // body-parser alone would wait for the declared bytes (or the request timeout); nothing follows the headers here.
+    const orders = await rawRequest(
+      `POST /api/billing/orders HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer ${sessionToken}\r\nContent-Type: application/json\r\nContent-Length: ${BILLING_BODY_LIMIT_BYTES + 1}\r\n\r\n`,
+    );
+    expect(orders.response).toStartWith("HTTP/1.1 413 ");
+    expect(orders.response).toContain("\r\nConnection: close\r\n");
+    expect(orders.closed).toBe(true);
+    const webhook = await rawRequest(
+      `POST /api/billing/webhook HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nX-Razorpay-Signature: 00\r\nContent-Length: ${WEBHOOK_BODY_LIMIT_BYTES + 1}\r\n\r\n`,
+    );
+    expect(webhook.response).toStartWith("HTTP/1.1 413 ");
+    expect(webhook.response).toContain("\r\nConnection: close\r\n");
+    expect(webhook.closed).toBe(true);
+  });
+
+  test("a compressed webhook body is refused before the signature is checked; a plain one still works", async () => {
+    ts = await boot();
+    const event = Buffer.from(JSON.stringify({ event: "payment.captured", payload: { payment: { entity: { id: "pay_x", order_id: "order_x", amount: 1, currency: "INR", notes: {} } } } }));
+    // A bad signature would be a 403 if the body were inflated and verified; the encoding is refused first.
+    const gz = await fetch(`${ts.url}/api/billing/webhook`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "content-encoding": "gzip", "x-razorpay-signature": "00" },
+      body: Bun.gzipSync(event.toString()),
+    });
+    expect(gz.status).toBe(415);
+    const plain = await fetch(`${ts.url}/api/billing/webhook`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-razorpay-signature": webhookSignature(WEBHOOK_SECRET, event) },
+      body: event,
+    });
+    expect(plain.status).toBe(404);
+    expect(await plain.json()).toEqual({ ok: false, error: "order_unknown" });
   });
 });

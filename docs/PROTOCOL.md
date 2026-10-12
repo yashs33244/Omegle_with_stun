@@ -373,7 +373,7 @@ Sources: `backend/src/http/billing.ts`, `backend/src/billing/BillingService.ts`,
 
 ## 4. REST API
 
-All routes live on the backend origin (same as the socket). `backend/src/http/app.ts` mounts health/metrics first, then the session router (which adds CORS for `/api/*`: `Access-Control-Allow-Origin` for allowed origins, `Access-Control-Max-Age: 600`), then the public, billing and admin routers (`backend/src/server.ts`), then a JSON 404. Bodies are JSON unless stated; the session, public and admin routers parse through `backend/src/http/body.ts`, which refuses an over-cap `Content-Length` before reading the body (413 with `Connection: close`) and any `Content-Encoding` (415). "Per-instance" buckets are `IpBuckets` in `backend/src/http/public.ts` (cleared when they exceed 50 000 keys). Client IP comes from `PROXY_IP_HEADER` when `TRUST_PROXY=true` and it holds one IP literal, else the TCP peer (section 1, step 2; `X-Forwarded-For` is refused by `config.ts`). The http server runs with the deadlines in `backend/src/http/constants.ts` (headers 15 s, whole request 30 s, idle keep-alive 65 s, 100 headers, 1 000 requests per socket).
+All routes live on the backend origin (same as the socket). `backend/src/http/app.ts` mounts health/metrics first, then the session router (which adds CORS for `/api/*`: `Access-Control-Allow-Origin` for allowed origins, `Access-Control-Max-Age: 600`), then the public, billing and admin routers (`backend/src/server.ts`), then a JSON 404. Bodies are JSON unless stated; every router (session, public, billing, admin) parses through `backend/src/http/body.ts` (`jsonBody`, and `rawBody` for the billing webhook), which refuses an over-cap `Content-Length` before reading the body (413 with `Connection: close`) and any `Content-Encoding` (415). "Per-instance" buckets are `IpBuckets` in `backend/src/http/public.ts` (cleared when they exceed 50 000 keys). Client IP comes from `PROXY_IP_HEADER` when `TRUST_PROXY=true` and it holds one IP literal, else the TCP peer (section 1, step 2; `X-Forwarded-For` is refused by `config.ts`). The http server runs with the deadlines in `backend/src/http/constants.ts` (headers 15 s, whole request 30 s, idle keep-alive 65 s, 100 headers, 1 000 requests per socket).
 
 ### 4.1 Health and metrics (`backend/src/http/app.ts`)
 
@@ -444,7 +444,7 @@ Guard, in order: 503 `admin_disabled` when `ADMIN_TOKEN` is unset (required in p
 ```mermaid
 flowchart LR
     subgraph gateway["deploy/nginx/gateway.conf (least_conn)"]
-        G1["/socket.io/ (ws, 1 h timeouts)"]
+        G1["/socket.io/ (ws, 5 m timeouts)"]
         G2["/api/ (30 s)"]
         G3["/admin/api/"]
         G4["/metrics → 404"]

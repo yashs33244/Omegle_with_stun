@@ -56,6 +56,33 @@ describe("matchmaking hooks", () => {
     expect(await h.service.admitReport(randomUUID(), randomUUID(), "203.0.113.8")).toBe("ok");
   });
 
+  test("per-IP report, appeal and takedown buckets are keyed on a salted hash of the /64, never the address", async () => {
+    h = harness();
+    const keys: string[] = [];
+    const hit = h.store.hit.bind(h.store);
+    h.store.hit = (key, ttl) => {
+      keys.push(key);
+      return hit(key, ttl);
+    };
+    const a = "2001:db8:1:2:aaaa::1";
+    const b = "2001:db8:1:2:bbbb::2";
+    for (let i = 0; i < 30; i++) expect(await h.service.admitReport(randomUUID(), randomUUID(), i % 2 ? a : b)).toBe("ok");
+    expect(await h.service.admitReport(randomUUID(), randomUUID(), a)).toBe("rate_limited");
+    expect(await h.service.admitReport(randomUUID(), randomUUID(), "2001:db8:1:3::1")).toBe("ok");
+    await h.service.submitAppeal({ restrictionId: randomUUID(), deviceId: randomUUID(), text: "please review this" }, a);
+    await h.service.submitTakedown(
+      { kind: "other", contactEmail: "a@example.com", description: "x".repeat(30), isAffectedPerson: false, goodFaithStatement: true },
+      b,
+    );
+    const ipKeys = keys.filter((k) => /^(report|appeal|takedown)-ip:/.test(k));
+    expect(ipKeys.length).toBeGreaterThan(30);
+    for (const k of ipKeys) expect(k).toMatch(/^(report|appeal|takedown)-ip:[0-9a-f]{16}$/);
+    expect(new Set(ipKeys.filter((k) => k.startsWith("report-ip:"))).size).toBe(2);
+    expect(ipKeys.find((k) => k.startsWith("appeal-ip:"))).toBe(`appeal-ip:${h.service.network(a)}`);
+    expect(ipKeys.find((k) => k.startsWith("takedown-ip:"))).toBe(`takedown-ip:${h.service.network(b)}`);
+    expect(h.service.network(a)).toBe(h.service.network(b));
+  });
+
   test("roomEnded keeps the room for late reports and counts completed calls", async () => {
     h = harness();
     const [a, b] = [randomUUID(), randomUUID()];

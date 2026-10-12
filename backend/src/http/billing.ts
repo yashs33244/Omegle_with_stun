@@ -8,7 +8,7 @@
  *   POST /unlock   {feature, days}                     (session) spends coins
  *   POST /webhook  Razorpay payment.captured, raw body + X-Razorpay-Signature
  * "session" routes need `Authorization: Bearer <sessionToken>` from POST /api/session.
- * Bodies are capped at 8 KB (64 KB for the webhook) and validated with the protocol schemas.
+ * Bodies are capped at 8 KiB (64 KiB for the webhook, see http/constants.ts) and validated with the protocol schemas.
  */
 import express, { type Request, type RequestHandler, type Response, type Router } from "express";
 import { BILLING_STATUS, type BillingService } from "../billing/BillingService";
@@ -21,6 +21,8 @@ import {
   type BillingResponse,
 } from "../protocol";
 import type { TokenSigner } from "../session/tokens";
+import { jsonBody, rawBody } from "./body";
+import { BILLING_BODY_LIMIT_BYTES, WEBHOOK_BODY_LIMIT_BYTES } from "./constants";
 import { IpBuckets, jsonErrors, requestIp } from "./public";
 
 export interface BillingApiDeps {
@@ -42,7 +44,7 @@ function send<T>(res: Response, result: BillingResponse<T>): void {
 
 export function billingApiRouter(deps: BillingApiDeps): Router {
   const router = express.Router();
-  const json = express.json({ limit: "8kb" });
+  const json = jsonBody(BILLING_BODY_LIMIT_BYTES);
   const clock = deps.clock ?? Date.now;
   const reads = new IpBuckets({ capacity: 30, refillPerSec: 0.5 }, clock);
   const writes = new IpBuckets({ capacity: 10, refillPerSec: 0.1 }, clock);
@@ -112,7 +114,7 @@ export function billingApiRouter(deps: BillingApiDeps): Router {
   });
 
   // Razorpay posts JSON; the MAC covers the raw bytes, so no JSON parser may run first.
-  router.post("/webhook", noStore, limited(webhooks), express.raw({ type: () => true, limit: "64kb" }), async (req, res) => {
+  router.post("/webhook", noStore, limited(webhooks), rawBody(WEBHOOK_BODY_LIMIT_BYTES), async (req, res) => {
     if (!deps.billing.webhookEnabled) return sendError(res, "billing_disabled");
     const raw = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
     const outcome = await deps.billing.handleWebhook(raw, req.get("x-razorpay-signature"));
