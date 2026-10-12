@@ -10,6 +10,15 @@ export const SESSION_STATES = ["idle", "waiting", "pending", "active"] as const;
 /** A room is pending until both accepted, then active until it ends. */
 export const ROOM_STATES = ["pending", "active"] as const;
 
+/**
+ * Profile photo bytes (data URL characters, up to LIMITS.photoMaxChars each)
+ * one instance stores for its sockets (match/MatchService.ts hello). Past it a
+ * hello is stored without the photo and the ack says photoDropped. 64 MB is
+ * about 440 sockets at the largest photo: the biggest per-socket cost with
+ * the memory store on a 512 MB instance.
+ */
+export const PHOTO_BUDGET_BYTES = 64 * 1024 * 1024;
+
 /** Max entries kept in the report log (newest win). */
 export const REPORT_LOG_MAX = 10_000;
 /** The memory store drops expired pair blocks after this many block writes. */

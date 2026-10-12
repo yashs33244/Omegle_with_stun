@@ -60,6 +60,8 @@ export interface ServerDeps {
   enforcement?: EnforcementOptions;
   /** Billing overrides for tests: a fake gateway (null = disabled) or a prepared wallet store. */
   billing?: { gateway?: RazorpayGateway | null; walletStore?: WalletStore };
+  /** Instance photo budget in bytes for tests (defaults to PHOTO_BUDGET_BYTES). */
+  photoBudgetBytes?: number;
 }
 
 export interface ChizzyServer {
@@ -202,6 +204,7 @@ export function createServer(config: Config, deps: ServerDeps): ChizzyServer {
     billing,
     emitter,
     gate: session.gate,
+    photoBudgetBytes: deps.photoBudgetBytes,
   });
   const spark = new SparkService({ store, emitter, registry: metrics.registry });
   const captions = new CaptionRelay({ store, emitter, metrics, chatGuardMs: config.chatGuardMs });

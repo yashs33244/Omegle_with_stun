@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import {
   activePair,
   arrives,
+  delay,
   hello,
   matchedPair,
   next,
@@ -179,6 +180,32 @@ describe("hello and matching", () => {
     const a = await ts.connect();
     const ack = await a.timeout(1000).emitWithAck("session:preferences", { preferences: prefs() });
     expect(ack).toMatchObject({ ok: false, error: "bad_state" });
+  });
+});
+
+describe("photo budget", () => {
+  const photo = `data:image/jpeg;base64,${"A".repeat(1_000)}`;
+  const withPhoto = () => hello({ profile: profile({ photo }), preferences: prefs({ genderFilter: "all" }) });
+
+  test("photos past the instance budget are dropped with a reason; a disconnect gives the space back", async () => {
+    ts = await startServer({}, undefined, { photoBudgetBytes: 2 * photo.length });
+    const [a, b, c] = [await ts.connect(), await ts.connect(), await ts.connect()];
+    expect(await sendHello(a, withPhoto())).not.toHaveProperty("photoDropped");
+    expect(await sendHello(b, withPhoto())).not.toHaveProperty("photoDropped");
+    // A re-hello replaces the socket's photo instead of counting it twice.
+    expect(await sendHello(b, withPhoto())).not.toHaveProperty("photoDropped");
+    const dropped = await sendHello(c, withPhoto());
+    expect(dropped).toMatchObject({ ok: true, photoDropped: "busy" });
+    expect(await ts.store.getPhoto(c.id!)).toBeNull();
+    expect(await ts.store.getPhoto(a.id!)).toBe(photo);
+
+    const aId = a.id!;
+    a.disconnect();
+    await delay(150);
+    expect(await ts.store.getPhoto(aId)).toBeNull();
+    const d = await ts.connect();
+    expect(await sendHello(d, withPhoto())).not.toHaveProperty("photoDropped");
+    expect(await ts.store.getPhoto(d.id!)).toBe(photo);
   });
 });
 

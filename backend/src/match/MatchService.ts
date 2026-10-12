@@ -38,6 +38,7 @@ import type {
   SimpleAck,
   UpdatePreferencesPayload,
 } from "../protocol";
+import { PHOTO_BUDGET_BYTES } from "../store/constants";
 import type { MatchStore, Room, Session, SessionProfile } from "../store/MatchStore";
 import { guardChat, guardName } from "../safety/guard";
 import { NUDGE_RISK, type SafetySignals } from "../safety/signals";
@@ -85,6 +86,8 @@ export interface MatchServiceDeps {
   billing: Pick<BillingService, "balance" | "earn" | "mayUseGenderFilter" | "walletView">;
   /** Injectable clock for tests. */
   now?: () => number;
+  /** Photo bytes this instance holds at most (PHOTO_BUDGET_BYTES); a test seam. */
+  photoBudgetBytes?: number;
 }
 
 /** Per-socket bookkeeping for sockets owned by this instance. */
@@ -131,6 +134,13 @@ export class MatchService implements RestrictionSink {
   private readonly now: () => number;
   private readonly local = new Map<string, LocalSocket>();
   /**
+   * Photo bytes stored for this instance's sockets, and their sum. A hello
+   * whose photo would take the sum past photoBudget is stored without it.
+   */
+  private readonly photoBytes = new Map<string, number>();
+  private photoTotal = 0;
+  private readonly photoBudget: number;
+  /**
    * Relaxation ladder progress of sessions THIS instance queued: the sweeper
    * marks a session dirty when its step goes up (so the incremental pass
    * retries it) and tells it with queue:waiting. Entries leave at the last step.
@@ -169,6 +179,7 @@ export class MatchService implements RestrictionSink {
     this.now = deps.now ?? Date.now;
     this.enforcement = deps.enforcement;
     this.billing = deps.billing;
+    this.photoBudget = deps.photoBudgetBytes ?? PHOTO_BUDGET_BYTES;
     this.enforcement?.setSink(this);
   }
 
@@ -311,11 +322,24 @@ export class MatchService implements RestrictionSink {
         session.mode = payload.mode;
       }
       await this.store.putSession(session);
-      await this.store.setPhoto(socketId, photo ?? null);
+      this.releasePhoto(socketId);
+      const photoFits = photo !== undefined && this.photoTotal + photo.length <= this.photoBudget;
+      if (photoFits) {
+        this.photoBytes.set(socketId, photo.length);
+        this.photoTotal += photo.length;
+      }
+      await this.store.setPhoto(socketId, photoFits ? photo : null);
       this.local.set(socketId, this.local.get(socketId) ?? { deviceId });
 
       const coins = await this.billing.balance(deviceId);
-      reply({ ok: true, coins, iceServers: this.turn.stunServers(), mode: this.effectiveMode(payload.mode), genderFilter: preferences.genderFilter });
+      reply({
+        ok: true,
+        coins,
+        iceServers: this.turn.stunServers(),
+        mode: this.effectiveMode(payload.mode),
+        genderFilter: preferences.genderFilter,
+        ...(photo !== undefined && !photoFits && { photoDropped: "busy" as const }),
+      });
       this.emitter.emit(socketId, "wallet:update", await this.billing.walletView(deviceId));
 
       if (session.state === "idle" || session.state === "waiting") {
@@ -656,6 +680,7 @@ export class MatchService implements RestrictionSink {
 
   async disconnect(socketId: string): Promise<void> {
     this.local.delete(socketId);
+    this.releasePhoto(socketId);
     await this.store.withLock(async () => {
       // Again under the lock: a hello that held the lock may have re-added it.
       this.local.delete(socketId);
@@ -799,6 +824,7 @@ export class MatchService implements RestrictionSink {
           continue;
         }
         this.local.delete(socketId);
+        this.releasePhoto(socketId);
         this.log.warn({ socketId }, "local socket lost its session; disconnecting it");
         this.emitter.emit(socketId, "server:shutdown");
         this.emitter.disconnect(socketId);
@@ -1038,7 +1064,14 @@ export class MatchService implements RestrictionSink {
     await this.store.removeWaiting(session.socketId);
     this.relaxing.delete(session.socketId);
     await this.store.deleteSession(session.socketId);
+    this.releasePhoto(session.socketId);
     await this.store.clearDeviceSocket(session.deviceId, session.socketId);
+  }
+
+  /** Gives back the photo bytes counted for a socket (deleteSession drops the photo itself). */
+  private releasePhoto(socketId: string): void {
+    this.photoTotal -= this.photoBytes.get(socketId) ?? 0;
+    this.photoBytes.delete(socketId);
   }
 
   /** The device connected again elsewhere: retire the old socket. */

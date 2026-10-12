@@ -347,6 +347,8 @@ export type HelloAck = Ack<{
   mode: MatchMode;
   /** The gender filter in effect: "all" when the one sent needs an unlock the device does not have. */
   genderFilter: GenderFilter;
+  /** Set when the photo sent was not stored because the server is out of photo space; hello still succeeded. */
+  photoDropped?: "busy";
 }>;
 export type ChatAck = Ack<{ id: string; ts: number; redacted: boolean }>;
 export type ReportAck = Ack<{ reportId: string }>;
