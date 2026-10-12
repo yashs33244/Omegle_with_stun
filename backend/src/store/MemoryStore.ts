@@ -23,6 +23,8 @@ export class MemoryStore implements MatchStore {
   private readonly waiting: { socketId: string; since: number }[] = [];
   private readonly waitingSince = new Map<string, number>();
   private readonly rooms = new Map<string, Room>();
+  /** roomId -> expiresAt of every pending room, so the sweep's expiry scan skips active rooms. */
+  private readonly pendingRooms = new Map<string, number>();
   private readonly coins = new Map<string, number>();
   private readonly friends = new Set<string>();
   private readonly blocks = new Map<string, { block: PairBlock; retainUntil: number }>();
@@ -143,17 +145,20 @@ export class MemoryStore implements MatchStore {
 
   async putRoom(room: Room): Promise<void> {
     this.rooms.set(room.id, copy(room));
+    if (room.state === "pending") this.pendingRooms.set(room.id, room.expiresAt);
+    else this.pendingRooms.delete(room.id);
   }
 
   async deleteRoom(roomId: string): Promise<void> {
     this.rooms.delete(roomId);
+    this.pendingRooms.delete(roomId);
   }
 
+  /** O(pending rooms) per sweep: at most half the waiting sessions, each only for the accept window. */
   async listExpiredPendingRooms(cutoff: number): Promise<string[]> {
-    return [...this.rooms.values()]
-      .filter((r) => r.state === "pending" && r.expiresAt <= cutoff)
-      .sort((a, b) => a.expiresAt - b.expiresAt)
-      .map((r) => r.id);
+    const expired: [string, number][] = [];
+    for (const [id, expiresAt] of this.pendingRooms) if (expiresAt <= cutoff) expired.push([id, expiresAt]);
+    return expired.sort((a, b) => a[1] - b[1]).map(([id]) => id);
   }
 
   async getCoins(deviceId: string): Promise<number | null> {
@@ -249,6 +254,11 @@ export class MemoryStore implements MatchStore {
     return [...this.instances].filter(([, expiry]) => expiry <= now).map(([id]) => id);
   }
 
+  /**
+   * O(sessions). The memory store is single-instance, so every session is
+   * this instance's and the answer is the whole map; an index would not
+   * shrink the sweep's work (removeGhostSessionsLocked visits each one).
+   */
   async listInstanceSessions(instanceId: string): Promise<string[]> {
     return [...this.sessions.values()].filter((s) => s.instanceId === instanceId).map((s) => s.socketId);
   }

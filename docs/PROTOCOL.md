@@ -83,7 +83,7 @@ Types below are the zod schemas / TypeScript interfaces in `backend/src/protocol
 
 | Event | Payload | Ack | Class | Who | Handler |
 |---|---|---|---|---|---|
-| `session:hello` | `{ protocolVersion: 3, deviceId: uuid, profile: Profile, preferences: Preferences, mode: "instant" \| "preview" }` | `HelloAck`: `{ ok: true, coins: number, iceServers: IceServer[] (STUN only), mode: MatchMode, genderFilter: GenderFilter }` or error (`banned` carries `restriction`) | hello | any connected socket | `MatchService.hello` (gate: `session/queueGate.ts`) |
+| `session:hello` | `{ protocolVersion: 3, deviceId: uuid, profile: Profile, preferences: Preferences, mode: "instant" \| "preview" }` | `HelloAck`: `{ ok: true, coins: number, iceServers: IceServer[] (STUN only), mode: MatchMode, genderFilter: GenderFilter, photoDropped?: "busy" }` (`photoDropped`: the instance is out of photo space, `PHOTO_BUDGET_BYTES`; hello succeeded without the photo) or error (`banned` carries `restriction`) | hello | any connected socket | `MatchService.hello` (gate: `session/queueGate.ts`) |
 | `session:preferences` | `{ preferences: Preferences }` | `SimpleAck`; `premium_required` when `genderFilter != "all"` without an active unlock; `bad_state` before hello | preferences | after hello | `MatchService.updatePreferences` |
 | `match:accept` | `{ roomId }` | none | control | member of a `pending` room; after `expiresAt + matchAcceptGraceMs (750 ms)` answers `server:error not_in_room` "the match expired" | `MatchService.accept` |
 | `match:decline` | `{ roomId }` | none | control | member of a pending room | `MatchService.decline` (pair blocked `declineBlockMs = 30_000`) |
