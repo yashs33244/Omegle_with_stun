@@ -34,6 +34,22 @@ describe("api client", () => {
     ).resolves.toEqual({ ok: false, error: "region_blocked" });
   });
 
+  it("passes a busy server's Retry-After along with the refusal", async () => {
+    const req = { deviceId: "x", fingerprint: "y", age: { ageToken: "t", tosVersion: "v" } };
+    const busy = createApi(
+      async () =>
+        new Response(JSON.stringify({ ok: false, error: "closed" }), {
+          status: 503,
+          headers: { "Content-Type": "application/json", "Retry-After": "7" },
+        }),
+      "",
+    );
+    await expect(busy.createSession(req)).resolves.toEqual({ ok: false, error: "closed", retryAfterMs: 7_000 });
+    // The kill switch sends no Retry-After: nothing to wait for.
+    const paused = createApi(async () => jsonResponse(503, { ok: false, error: "closed" }), "");
+    await expect(paused.createSession(req)).resolves.toEqual({ ok: false, error: "closed" });
+  });
+
   it("maps a bare 429 to rate_limited", async () => {
     const api = createApi(async () => new Response("Too Many Requests", { status: 429 }), "");
     await expect(api.submitAppeal({ restrictionId: "r", deviceId: "d", text: "0123456789" })).resolves.toEqual({

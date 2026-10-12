@@ -2,6 +2,7 @@ import { useCallback, useEffect, useReducer, useRef } from "react";
 import { io, type Socket } from "socket.io-client";
 import { API_URL } from "@/lib/config";
 import { getDeviceId } from "@/lib/device";
+import { BUSY_AFTER_FAILURES, Backoff } from "@/lib/backoff";
 import { getSessionToken, invalidateSession, waitForSession } from "@/lib/session";
 import i18n from "@/lib/i18n";
 import {
@@ -91,6 +92,11 @@ export interface SignalingState {
   relaxStep: number;
   /** People online, when the server shares the real count. */
   online: number | null;
+  /**
+   * Local time of the next connection attempt while the server keeps refusing
+   * us (several failures in a row, e.g. an overloaded instance); null otherwise.
+   */
+  busyRetryAt: number | null;
 }
 
 export const initialSignalingState: SignalingState = {
@@ -115,11 +121,14 @@ export const initialSignalingState: SignalingState = {
   genderFilter: null,
   relaxStep: 0,
   online: null,
+  busyRetryAt: null,
 };
 
 export type SignalingEvent =
+  | { type: "socket-connected" }
   | { type: "socket-disconnected" }
   | { type: "connect-failed" }
+  | { type: "retry-scheduled"; retryAt: number; busy: boolean }
   | { type: "hello-ok"; coins: number; iceServers: IceServer[]; genderFilter: GenderFilter }
   | { type: "hello-failed"; error: ErrorCode | "timeout"; message?: string }
   | { type: "queue-waiting"; relaxStep?: number; online?: number | null }
@@ -191,10 +200,17 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
       // The WebRTC call is torn down with the room; the next hello re-queues us.
       return { ...clearRoom(state), status: "connecting", reconnecting: true };
 
+    case "socket-connected":
+      return state.busyRetryAt === null ? state : { ...state, busyRetryAt: null };
+
     case "connect-failed":
-      // socket.io keeps retrying on its own; tell the user why nothing happens.
+      // The next attempt is scheduled; tell the user why nothing happens.
       if (state.status !== "connecting") return state;
       return { ...state, error: i18n.t("room:signaling.cannotReach") };
+
+    case "retry-scheduled":
+      if (state.status !== "connecting") return state;
+      return { ...state, busyRetryAt: event.busy ? event.retryAt : null };
 
     case "hello-ok": {
       const busy = state.status !== "connecting" && state.status !== "error" && state.status !== "idle";
@@ -202,6 +218,7 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
         ...state,
         status: busy ? state.status : "waiting",
         reconnecting: false,
+        busyRetryAt: null,
         error: null,
         coins: event.coins,
         iceServers: event.iceServers,
@@ -215,6 +232,7 @@ export function signalingReducer(state: SignalingState, event: SignalingEvent): 
         ...clearRoom(state),
         status: "error",
         reconnecting: false,
+        busyRetryAt: null,
         error: event.message ?? event.error,
       };
 
@@ -420,6 +438,8 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
   const socketRef = useRef<AppSocket | null>(null);
   /** Sends session:hello on the live socket; set by the socket effect. */
   const helloRef = useRef<(() => void) | null>(null);
+  /** Drops the socket and connects again through the backoff; set by the socket effect. */
+  const reconnectRef = useRef<(() => void) | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
 
@@ -442,9 +462,8 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
     const socket: AppSocket = io(API_URL, {
       transports: ["websocket"],
       autoConnect: false,
-      reconnection: true,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 10000,
+      // Retries go through `backoff` below (jittered, capped per minute), never socket.io's own loop.
+      reconnection: false,
       // Read at every (re)connect, so a refreshed session token is picked up.
       auth: (cb) => cb({ sessionToken: getSessionToken() ?? "" }),
     });
@@ -455,9 +474,56 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
     let connectionSeq = 0;
     // Set on unmount, ban or replacement: never reconnect after that.
     let stopped = false;
+    const backoff = new Backoff();
+    let retryTimer: number | null = null;
+    // The gate is minting a new session token; the next attempt waits for it.
+    let awaitingSession = false;
     const stop = () => {
       stopped = true;
+      window.clearTimeout(retryTimer ?? undefined);
       socket.disconnect();
+    };
+
+    /**
+     * Connects again after a jittered delay, so a server restart does not
+     * bring every client back in the same instant. A refusal of the WebSocket
+     * upgrade (HTTP 503 overloaded or server_full, Retry-After included)
+     * reaches the browser only as "websocket error", so it lands here too.
+     */
+    const reconnectLater = () => {
+      if (stopped || awaitingSession || retryTimer !== null) return;
+      const at = backoff.nextAttemptAt();
+      dispatch({
+        type: "retry-scheduled",
+        retryAt: at,
+        busy: backoff.failures >= BUSY_AFTER_FAILURES && navigator.onLine !== false,
+      });
+      retryTimer = window.setTimeout(() => {
+        retryTimer = null;
+        if (!stopped && !socket.connected) socket.connect();
+      }, at - Date.now());
+    };
+
+    /**
+     * The session token is refused or expired: the gate mints a new one
+     * (silently when it can, else by asking), then we connect again. The hook
+     * stays mounted, so the profile and preferences in the next hello are the
+     * ones in use now.
+     */
+    const renewSession = (reason: string) => {
+      if (awaitingSession) return;
+      awaitingSession = true;
+      window.clearTimeout(retryTimer ?? undefined);
+      retryTimer = null;
+      void waitForSession().then(() => {
+        awaitingSession = false;
+        reconnectLater();
+      });
+      invalidateSession(reason);
+    };
+    reconnectRef.current = () => {
+      socket.disconnect();
+      reconnectLater();
     };
 
     const sayHello = () => {
@@ -483,6 +549,7 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
           // An older server may not say which filter it applied; assume ours.
           const genderFilter = res.genderFilter ?? preferencesRef.current.genderFilter;
           if (genderFilter !== preferencesRef.current.genderFilter) preferencesRef.current = { ...preferencesRef.current, genderFilter };
+          backoff.reset();
           dispatch({ type: "hello-ok", coins: res.coins, iceServers: res.iceServers, genderFilter });
         } else {
           dispatch({ type: "hello-failed", error: res.error, message: res.message });
@@ -491,28 +558,26 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
       });
     };
     helloRef.current = sayHello;
-    socket.on("connect", sayHello);
+    socket.on("connect", () => {
+      dispatch({ type: "socket-connected" });
+      sayHello();
+    });
 
     socket.on("disconnect", (reason) => {
       pendingSignals.current = [];
       if (stopped) return;
       dispatch({ type: "socket-disconnected" });
-      // A server-initiated disconnect (deploy, shutdown) is not retried by socket.io itself.
-      if (reason === "io server disconnect") socket.connect();
+      // Our own disconnect() (retry) schedules its reconnect itself.
+      if (reason !== "io client disconnect") reconnectLater();
     });
 
     socket.on("connect_error", (err: Error & { data?: { code?: string } }) => {
       if (stopped) return;
       dispatch({ type: "connect-failed" });
-      // The handshake refused the session: socket.io does not retry that by itself.
-      // The gate asks for a new session; connect again once it is saved.
+      // The handshake refused the session: the gate asks for a new one.
       const code = err.data?.code;
-      if (code === "session_required" || code === "region_blocked") {
-        invalidateSession(code);
-        void waitForSession().then(() => {
-          if (!stopped) socket.connect();
-        });
-      }
+      if (code === "session_required" || code === "region_blocked") renewSession(code);
+      else reconnectLater();
     });
 
     socket.on("queue:waiting", (p) => dispatch({ type: "queue-waiting", relaxStep: p?.relaxStep ?? 0, online: p?.online ?? null }));
@@ -558,21 +623,28 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
       stop();
     });
     socket.on("server:error", (p) => {
+      // The token ran out on this live socket; the server disconnects us next.
+      // (Widened to string: older protocol copies do not list session_expired.)
+      const code: string = p.code;
+      if (code === "session_expired") return renewSession(code);
       dispatch({ type: "server-error", code: p.code, message: p.message });
       if (p.code === "banned") stop();
     });
     socket.on("server:shutdown", () => {
-      // The server closes the socket next; the disconnect handler reconnects.
+      // The server closes the socket next; the disconnect handler reconnects after a jittered delay.
     });
 
+    backoff.noteAttempt();
     socket.connect();
 
     return () => {
       stopped = true;
+      window.clearTimeout(retryTimer ?? undefined);
       socket.removeAllListeners();
       socket.disconnect();
       socketRef.current = null;
       helloRef.current = null;
+      reconnectRef.current = null;
       if (typingIdleTimer.current) clearTimeout(typingIdleTimer.current);
     };
   }, []);
@@ -770,10 +842,8 @@ export function useSignaling(profile: Profile, preferences: Preferences, options
   }, []);
 
   const retry = useCallback(() => {
-    const socket = socketRef.current;
-    if (!socket || TERMINAL.includes(stateRef.current.status)) return;
-    socket.disconnect();
-    socket.connect();
+    if (TERMINAL.includes(stateRef.current.status)) return;
+    reconnectRef.current?.();
   }, []);
 
   const search = useCallback(() => {

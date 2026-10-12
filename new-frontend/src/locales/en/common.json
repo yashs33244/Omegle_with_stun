@@ -34,5 +34,10 @@
     "good": "Good",
     "fair": "Fair",
     "poor": "Poor"
+  },
+  "serverBusy": {
+    "title": "Chizzy is busy right now. Retrying automatically.",
+    "retryIn": "Next try in {{seconds}} s",
+    "retrying": "Trying again..."
   }
 }
