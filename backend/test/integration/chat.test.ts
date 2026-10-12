@@ -68,8 +68,8 @@ describe("coins and friends", () => {
     const { ca, cb, a, b } = await connectedPair(ts);
     const coinsA = next(ca, "coins:update", 1500);
     const coinsB = next(cb, "coins:update", 1500);
-    expect(await coinsA).toEqual({ balance: 105, delta: 5 });
-    expect(await coinsB).toEqual({ balance: 105, delta: 5 });
+    expect(await coinsA).toEqual({ balance: 5, delta: 5 });
+    expect(await coinsB).toEqual({ balance: 5, delta: 5 });
     const friendsA = next(ca, "friends:new", 1500);
     const friendsB = next(cb, "friends:new", 1500);
     await Promise.all([friendsA, friendsB]);
@@ -81,7 +81,7 @@ describe("coins and friends", () => {
     const found = next(cb, "match:found");
     const ack = await sendHello(again, a);
     if (!ack.ok) throw new Error("hello failed");
-    expect(ack.coins).toBeGreaterThanOrEqual(105);
+    expect(ack.coins).toBeGreaterThanOrEqual(5);
     // The friends set is reflected in the next match.
     expect((await found).isFriend).toBe(true);
     void b;
@@ -99,7 +99,7 @@ describe("coins and friends", () => {
 
     const coins = next(ca, "coins:update", 1000);
     cb.emit("call:connected", { roomId });
-    expect(await coins).toEqual({ balance: 105, delta: 5 });
+    expect(await coins).toEqual({ balance: 5, delta: 5 });
   });
 
   test("coins stop when the call ends", async () => {

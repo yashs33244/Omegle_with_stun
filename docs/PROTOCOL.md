@@ -353,7 +353,7 @@ sequenceDiagram
         API->>BS: handleWebhook → credit()
         API-->>RZ: {ok, outcome: credited | ignored}
     end
-    Note over BS: credit(): claimOnce("payment:<id>") so the pack is credited exactly once,<br/>ledger entry reason "purchase", order marked paid
+    Note over BS: credit(): atomic claimOnce("order:<orderId>") so the pack is credited exactly once per order<br/>(the claim is released only if no coins moved), ledger entry reason "purchase", order marked paid
     BS-->>WS: notify(deviceId) → wallet:update {coins, unlocks}
     C->>API: POST /api/billing/unlock {feature: gender_filter, days: 1|7|30}
     Note over BS: cost = gender_filter_coins_per_day (flag, default 100) x days.<br/>insufficient_coins if balance < cost, then extendUnlock and ledger "unlock"
@@ -405,12 +405,12 @@ Store-backed per-device limits are applied again inside `EnforcementService`.
 |---|---|---|---|---|
 | `GET /api/billing/packs` | public | — | `BillingPacksResponse`: `{ enabled, premiumFiltersEnabled, keyId, costPerDay, packs: CoinPack[], unlockDays: [1,7,30] }`; `max-age=30` | reads 30 / 0.5 per s per IP |
 | `GET /api/billing/wallet` | session | — | `{ ok: true, coins, unlocks }` | reads |
-| `POST /api/billing/orders` | session | `{ packId }` | `BillingOrder`: `{ ok: true, orderId, amount (paise), currency: "INR", keyId, packId, coins }` | writes 10 / 0.1 per s per IP; body `8kb` |
+| `POST /api/billing/orders` | session | `{ packId }` | `BillingOrder`: `{ ok: true, orderId, amount (paise), currency: "INR", keyId, packId, coins }`; the record of an unpaid order is kept 24 h (`UNPAID_ORDER_TTL_MS`), a paid one for good | writes 10 / 0.1 per s per IP **and** 5 / 1 per 5 min per device; body `8kb` |
 | `POST /api/billing/verify` | session | `{ orderId<=64, paymentId<=64, signature<=256 }` | `{ ok: true, coins }` | 20 / 1 per s **per device** (carrier NAT) |
 | `POST /api/billing/unlock` | session | `{ feature: "gender_filter", days: 1 \| 7 \| 30 }` | `{ ok: true, coins, expiresAt }` | writes |
 | `POST /api/billing/webhook` | Razorpay HMAC over the raw body (`X-Razorpay-Signature`, `RAZORPAY_WEBHOOK_SECRET`) | raw, `64kb` | `{ ok: true, outcome: "credited" \| "ignored" }` or 403 `bad_signature`, 400 `invalid`, 404 `order_unknown`, 409 `payment_mismatch`, 503 `billing_disabled` | 60 / 1 per s per IP |
 
-Packs and the per-day price come from the flags `coin_packs` (default `[{"id":"week","coins":700,"inr":99},{"id":"month","coins":3000,"inr":299}]`) and `gender_filter_coins_per_day` (default `100`); `premium_filters_enabled: false` makes the filter free. New devices start with `initialCoins = 100` (`config.ts`).
+Packs and the per-day price come from the flags `coin_packs` (default `[{"id":"week","coins":700,"inr":99},{"id":"month","coins":3000,"inr":299}]`) and `gender_filter_coins_per_day` (default `100`); `premium_filters_enabled: false` makes the filter free. New devices start with `initialCoins = 0` (`config.ts`): device ids are client-chosen, so a starting balance that reaches the daily price would hand every fresh device a free unlock (the backend warns when the two values cross). A credit is decided once per order: a second captured payment for the same order (a Razorpay duplicate, refunded from the dashboard) is not credited again. An unlock is checked when preferences are set and again on every (re)queue; a filter that lapses while the device is already waiting or in a call keeps applying until that queue entry ends.
 
 ### 4.5 Admin (`backend/src/http/admin.ts`, mounted at `/admin/api`)
 

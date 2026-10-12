@@ -3,8 +3,8 @@
  *
  * One balance per device (earned in calls, bought as coin packs, adjusted by
  * admins) and timed unlocks bought with it. Every movement writes a ledger
- * entry. Purchases are credited exactly once per Razorpay payment id whether
- * the credit comes from the Checkout success handler (POST /verify, which
+ * entry. A purchase is credited exactly once per Razorpay order whether the
+ * credit comes from the Checkout success handler (POST /verify, which
  * confirms the payment is captured with Razorpay first) or the
  * payment.captured webhook, whichever arrives first.
  *
@@ -306,11 +306,12 @@ export class BillingService {
   /* ---------------------------------------------------------------- */
 
   /**
-   * Credits the order's pack once per payment id. `fresh` is false for a
-   * replay. The decision rests on durable state: an order already marked
-   * paid is never credited again, and the per-payment claim never expires.
-   * If the credit fails after the claim was taken the claim is given back,
-   * so a webhook retry or a client retry can still credit.
+   * Credits the order's pack once. `fresh` is false for a replay. The
+   * decision rests on durable state: an atomic per-order claim that never
+   * expires (an order already marked paid is short-circuited before it).
+   * The claim is given back only when nothing was credited; once the coins
+   * are on the balance it stays taken whatever happens next, so a retry can
+   * never credit twice.
    */
   private async credit(
     order: BillingOrderRecord,
@@ -321,18 +322,23 @@ export class BillingService {
       return { ok: false, error: "payment_mismatch" };
     }
     if (order.status === "paid") return { ok: true, coins: await this.balance(order.deviceId), fresh: false };
-    const claim = `payment:${payment.paymentId}`;
+    const claim = `order:${order.orderId}`;
     const fresh = await this.store.claimOnce(claim);
     if (!fresh) return { ok: true, coins: await this.balance(order.deviceId), fresh: false };
     let coins: number;
     try {
       coins = await this.store.addBalance(order.deviceId, order.coins, this.initialCoins);
-      await this.record(order.deviceId, order.coins, "purchase", payment.paymentId);
-      await this.store.putOrder({ ...order, status: "paid", paymentId: payment.paymentId, paidAt: this.now() });
     } catch (err) {
-      this.log.error({ err, orderId: order.orderId, paymentId: payment.paymentId }, "credit failed after the payment was claimed; claim released");
+      this.log.error({ err, orderId: order.orderId, paymentId: payment.paymentId }, "credit failed before any coins moved; claim released");
       await this.store.releaseClaim(claim);
       throw err;
+    }
+    try {
+      await this.store.putOrder({ ...order, status: "paid", paymentId: payment.paymentId, paidAt: this.now() });
+      await this.record(order.deviceId, order.coins, "purchase", payment.paymentId);
+    } catch (err) {
+      // The coins are credited and the claim holds; only the records are behind. Admins fix those by hand.
+      this.log.error({ err, orderId: order.orderId, paymentId: payment.paymentId, coins: order.coins }, "coins credited but the order or ledger write failed");
     }
     this.log.info({ orderId: order.orderId, packId: order.packId, coins: order.coins }, "coins credited");
     await this.push(order.deviceId);

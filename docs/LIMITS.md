@@ -178,8 +178,12 @@ every 500 ms; once both `call:connected` have arrived, the caller earns
 connected time, with no upper bound (`backend/src/config.ts:373-374`,
 `MatchService.tickRewards`, `:756-815`). A 24 h call earns 7,200 coins per
 side, which is more than the 3,000-coin month pack (`FLAG_DEFAULTS.coin_packs`,
-`protocol.ts:682`). Coins start at `initialCoins` 100 (`config.ts:375`). After
-`friendAfterMs` (5 min, `config.ts:376`) the pair is marked as friends.
+`protocol.ts:682`). Coins start at `initialCoins` 0 (`config.ts:380`): device
+ids are client-chosen, so a starting balance at or above
+`gender_filter_coins_per_day` would give every fresh device (incognito window)
+a free day of the filter; the backend logs `BILLING WARNING` when the two
+values cross. After `friendAfterMs` (5 min, `config.ts:381`) the pair is
+marked as friends.
 
 ## 3. Limits by component
 
@@ -284,9 +288,11 @@ Each socket has one bucket per class; an empty bucket answers
 | Spark state | per room, in memory on the instance that served it; forgotten after 1 h idle | `spark/SparkService.ts:10-12,41` | with several instances a pair may see two cooldown clocks | code |
 | Caption segment | 1,024 UTF-8 bytes; 10 per second per socket; interim every 250 ms | `protocol.ts:78-85` | `invalid_payload`; over rate silently dropped (no ack, no error) | code |
 | Caption support | SpeechRecognition: Chrome and Android Chrome, Safari 14.1+; not Firefox. Translation: Chrome 138+ Translator API | `captions/speech.ts:6-7`, `captions/translator.ts:2-3` | toggle disabled | n/a |
-| Billing REST | per IP: reads 30 burst / 0.5 per s, order writes 10 / 0.1 per s, verify 20 / 1 per s, webhook 60 / 1 per s; JSON body 8 KB | `http/billing.ts:45-50` | 429 `rate_limited` | code |
+| Billing REST | per IP: reads 30 burst / 0.5 per s, writes (orders, unlock) 10 / 0.1 per s, webhook 60 / 1 per s; per device: orders 5 / 1 per 5 min, verify 20 / 1 per s; JSON body 8 KB, webhook 64 KB | `http/billing.ts:47-53` | 429 `rate_limited` | code |
+| Order records | unpaid orders live `UNPAID_ORDER_TTL_MS` 24 h (Redis TTL; the memory store sweeps them and, past `ORDERS_MAX` 2,000, drops the oldest unpaid first); paid orders and the per-order credit claim are kept for good | `billing/WalletStore.ts:29-38` | `order_unknown` after a day for a Checkout nobody paid | code |
 | Coin packs | 1 to 10 packs; each 1 to 1,000,000 coins, 1 to 100,000 INR; flag string 2,000 chars | `protocol.ts:581-586,700-702` | flag rejected | flag `coin_packs` |
-| Gender filter | `gender_filter_coins_per_day` 100 x 1 / 7 / 30 days | `protocol.ts:577,680` | 402 `insufficient_coins` | flag |
+| Gender filter | `gender_filter_coins_per_day` 100 x 1 / 7 / 30 days; starting balance `initialCoins` 0, so a fresh device id never unlocks for free (raise it only together with a price above it) | `protocol.ts:577,680`, `config.ts:380` | 402 `insufficient_coins` | flag / code |
+| Unlock lapse | checked on `session:preferences` and on every (re)queue, not mid-wait: a filter that expires while the device is waiting or in a call applies until that queue entry ends (one extra match at most) | `MatchService.ts:323,900` | `premium_required` on the next (re)queue | code |
 | Billing on the memory store | refused: `billing_disabled` and "BILLING DISABLED" at boot when Razorpay keys are set without `REDIS_URL` | `billing/index.ts:49`, `render.yaml` comment | orders off | attach Redis |
 
 ### Process and cluster

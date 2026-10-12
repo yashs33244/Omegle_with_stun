@@ -60,7 +60,7 @@ async function buyWeek(token: string): Promise<BillingOrder> {
   const paymentId = `pay_${Math.random().toString(16).slice(2)}`;
   const verify = await post("/verify", token, { orderId: order.body.orderId, paymentId, signature: FAKE_SIGNATURE });
   expect(verify.status).toBe(200);
-  expect(verify.body).toMatchObject({ ok: true, coins: 800 });
+  expect(verify.body).toMatchObject({ ok: true, coins: 700 });
   return order.body;
 }
 
@@ -70,18 +70,18 @@ describe("premium gender filter", () => {
     const { client, deviceId, sessionToken } = await connectWithSession(ts);
     const female = hello({ deviceId, profile: profile({ gender: "male" }), preferences: prefs({ genderFilter: "female" }) });
     const wallet = next(client, "wallet:update");
-    expect(await sendHello(client, female)).toMatchObject({ ok: true, coins: 100, genderFilter: "all" });
-    expect(await wallet).toEqual({ coins: 100, unlocks: [] });
+    expect(await sendHello(client, female)).toMatchObject({ ok: true, coins: 0, genderFilter: "all" });
+    expect(await wallet).toEqual({ coins: 0, unlocks: [] });
     const refused = await client.timeout(1000).emitWithAck("session:preferences", { preferences: prefs({ genderFilter: "female" }) });
     expect(refused).toMatchObject({ ok: false, error: "premium_required" });
 
-    // Support credits 600 coins; the device unlocks a week (700) and the filter saves.
-    const credit = await admin(`/wallets/${deviceId}/adjust`, { method: "POST", body: JSON.stringify({ delta: 600, note: "goodwill" }) });
+    // Support credits 700 coins; the device unlocks a week (700) and the filter saves.
+    const credit = await admin(`/wallets/${deviceId}/adjust`, { method: "POST", body: JSON.stringify({ delta: 700, note: "goodwill" }) });
     expect(credit.status).toBe(200);
-    expect(credit.body).toMatchObject({ deviceId, coins: 700, unlocks: [], ledger: [{ delta: 600, reason: "admin", ref: "goodwill" }] });
+    expect(credit.body).toMatchObject({ deviceId, coins: 700, unlocks: [], ledger: [{ delta: 700, reason: "admin", ref: "goodwill" }] });
 
     const audit = await admin("/audit");
-    expect(audit.body).toMatchObject([{ action: "wallet.adjust", target: deviceId, note: "+600: goodwill" }]);
+    expect(audit.body).toMatchObject([{ action: "wallet.adjust", target: deviceId, note: "+700: goodwill" }]);
 
     const pushed = next(client, "wallet:update");
     const unlock = await post("/unlock", sessionToken, { feature: "gender_filter", days: 7 });
@@ -121,7 +121,7 @@ describe("premium gender filter", () => {
     const requeued = next(a.client, "queue:waiting");
     a.client.emit("match:decline", { roomId });
     await requeued;
-    expect(await wallet).toEqual({ coins: 100, unlocks: [] });
+    expect(await wallet).toEqual({ coins: 0, unlocks: [] });
     expect(errors).toEqual([{ code: "premium_required", message: expect.any(String) }]);
     const socketId = await ts.store.getDeviceSocket(a.deviceId);
     expect((await ts.store.getSession(socketId!))?.preferences.genderFilter).toBe("all");
@@ -159,7 +159,7 @@ describe("billing REST", () => {
     const order = await buyWeek(sessionToken);
     expect(order).toMatchObject({ amount: 9900, currency: "INR", keyId: "rzp_test_fake", packId: "week", coins: 700 });
     const wallet = await api<WalletView>("/wallet", { token: sessionToken });
-    expect(wallet.body).toMatchObject({ coins: 800, unlocks: [] });
+    expect(wallet.body).toMatchObject({ coins: 700, unlocks: [] });
 
     const orders = await admin("/billing/orders");
     const paid = (orders.body as unknown as Array<Record<string, unknown>>)[0]!;
@@ -179,7 +179,7 @@ describe("billing REST", () => {
       });
     expect(await (await replay()).json()).toEqual({ ok: true, outcome: "ignored" });
     expect(await (await replay()).json()).toEqual({ ok: true, outcome: "ignored" });
-    expect((await api<WalletView>("/wallet", { token: sessionToken })).body.coins).toBe(800);
+    expect((await api<WalletView>("/wallet", { token: sessionToken })).body.coins).toBe(700);
 
     const forged = await fetch(`${ts.url}/api/billing/webhook`, {
       method: "POST",
@@ -204,8 +204,8 @@ describe("billing REST", () => {
     });
     expect(await first.json()).toEqual({ ok: true, outcome: "credited" });
     const verify = await post("/verify", sessionToken, { orderId: second.body.orderId, paymentId: "pay_first", signature: FAKE_SIGNATURE });
-    expect(verify.body).toEqual({ ok: true, coins: 3800 });
-    expect(pushed.map((p) => p.coins)).toEqual([100, 800, 3800]);
+    expect(verify.body).toEqual({ ok: true, coins: 3700 });
+    expect(pushed.map((p) => p.coins)).toEqual([0, 700, 3700]);
   });
 
   test("bad input and unknown packs are refused; unlock needs enough coins", async () => {
@@ -216,11 +216,32 @@ describe("billing REST", () => {
     expect((await post("/verify", sessionToken, { orderId: "order_x", paymentId: "pay_x", signature: "zzz" })).status).toBe(403);
     expect((await post("/verify", sessionToken, { orderId: "order_x", paymentId: "pay_x", signature: FAKE_SIGNATURE })).status).toBe(404);
     expect((await post("/unlock", sessionToken, { feature: "gender_filter", days: 2 })).status).toBe(400);
-    const poor = await post("/unlock", sessionToken, { feature: "gender_filter", days: 30 });
+    const poor = await post("/unlock", sessionToken, { feature: "gender_filter", days: 1 });
     expect(poor.status).toBe(402);
     expect(poor.body).toEqual({ ok: false, error: "insufficient_coins" });
+    await buyWeek(sessionToken);
     const day = await post("/unlock", sessionToken, { feature: "gender_filter", days: 1 });
-    expect(day.body).toMatchObject({ ok: true, coins: 0 });
+    expect(day.body).toMatchObject({ ok: true, coins: 600 });
+  });
+
+  test("a fresh device id starts with nothing: churning devices earns no unlock", async () => {
+    ts = await boot();
+    for (let i = 0; i < 3; i++) {
+      const { sessionToken } = await connectWithSession(ts);
+      expect((await api<WalletView>("/wallet", { token: sessionToken })).body).toMatchObject({ coins: 0, unlocks: [] });
+      expect((await post("/unlock", sessionToken, { feature: "gender_filter", days: 1 })).status).toBe(402);
+    }
+  });
+
+  test("order creation is capped per device, not only per IP", async () => {
+    ts = await boot();
+    const a = await connectWithSession(ts);
+    const b = await connectWithSession(ts);
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i++) statuses.push((await post("/orders", a.sessionToken, { packId: "week" })).status);
+    expect(statuses).toEqual([200, 200, 200, 200, 200, 429]);
+    // Another device behind the same address still gets its orders.
+    expect((await post("/orders", b.sessionToken, { packId: "week" })).status).toBe(200);
   });
 
   test("without Razorpay keys the shop answers billing_disabled and the webhook 503", async () => {

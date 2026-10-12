@@ -59,15 +59,15 @@ test("picking a gender opens the unlock sheet; buying a pack and unlocking a wee
   const sheet = a.page.getByTestId("unlock-sheet");
   await expect(sheet).toBeVisible();
   await expect(a.page.locator("#settings-gender"), "nothing was saved").toHaveText("Everyone");
-  await expect(a.page.getByTestId("wallet-coins")).toHaveText("100 coins");
+  await expect(a.page.getByTestId("wallet-coins")).toHaveText("0 coins");
   await expect(a.page.getByTestId("unlock-7"), "a week costs 700").toBeDisabled();
 
   await a.page.getByTestId("buy-week").click();
-  await expect(a.page.getByTestId("wallet-coins")).toHaveText("800 coins");
+  await expect(a.page.getByTestId("wallet-coins")).toHaveText("700 coins");
   await expect(a.page.getByTestId("premium-feedback")).toHaveText("Coins added to your wallet.");
 
   await a.page.getByTestId("unlock-7").click();
-  await expect(a.page.getByTestId("wallet-coins")).toHaveText("100 coins");
+  await expect(a.page.getByTestId("wallet-coins")).toHaveText("0 coins");
   await expect(a.page.getByTestId("unlock-status")).toContainText("Gender filter on until");
   await a.page.getByTestId("unlock-close").click();
   await expect(sheet).toBeHidden();

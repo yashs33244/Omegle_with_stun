@@ -487,7 +487,7 @@ every replica within about 2 s; no deploy or restart is needed:
 | `blocked_countries` | country blocklist (comma separated ISO codes) |
 | `online_count_threshold` | show the real online count only above this |
 | `premium_filters_enabled` | on (default): the gender filter needs an unlock bought with coins; off: free for everyone (no lock in the app) |
-| `gender_filter_coins_per_day` | 100 by default; an unlock costs this x 1, 7 or 30 days |
+| `gender_filter_coins_per_day` | 100 by default; an unlock costs this x 1, 7 or 30 days. New devices start with `initialCoins` 0 (`backend/src/config.ts`, not an env var): device ids are client-chosen, so a starting balance at or above this price would give every fresh device (incognito window) a free day of the filter. Raise `initialCoins` as a trial only together with a price above it; the backend logs `BILLING WARNING: initialCoins covers a day of gender_filter` at boot and on every flag change where the two cross |
 | `coin_packs` | JSON array of `{"id","coins","inr"}` sold through Razorpay; default `[{"id":"week","coins":700,"inr":99},{"id":"month","coins":3000,"inr":299}]` (99 INR ≈ a week, 299 INR ≈ a month). Prices are whole rupees; Razorpay is charged `inr x 100` paise |
 
 What to change when is in the runbooks: docs/runbooks/abuse-wave.md,
