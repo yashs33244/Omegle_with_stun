@@ -6,7 +6,7 @@
 # The bun version must read the committed text lockfile (bun.lock). Image tags
 # are literal (not ARGs) so dependabot can bump them.
 
-FROM oven/bun:1.4.2-alpine AS base
+FROM oven/bun:1.4.3-alpine AS base
 WORKDIR /app
 COPY package.json bun.lock ./
 
