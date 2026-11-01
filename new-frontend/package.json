@@ -35,7 +35,7 @@
     "react-router-dom": "^7.18.4",
     "socket.io-client": "^4.8.4",
     "tailwind-merge": "^3.7.0",
-    "zod": "^3.25.76"
+    "zod": "^4.6.6"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
