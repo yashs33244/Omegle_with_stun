@@ -37,7 +37,7 @@ x-hardening: &hardening
 services:
   redis:
     <<: *hardening
-    image: redis:7.4.11-alpine
+    image: redis:7.4.12-alpine
     # The image only drops root itself when the command is redis-server; this
     # command goes through sh, so set the user here (it owns /data).
     user: redis
